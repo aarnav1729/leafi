@@ -162,7 +162,6 @@ const quoteISchema = new mongoose.Schema(
     timestamps: true,
   }
 );
-const QuoteI = mongoose.model("QuoteI", quoteISchema);
 
 // 4) Inbound User Schema/Model
 const userISchema = new mongoose.Schema(
@@ -837,15 +836,13 @@ app.get("/api/rfqsi/:id", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// NEW ENDPOINT: Finalize Inbound RFQ Allocation
-//--------------------------------------------------
+
+// finalize Inbound RFQ Allocation
 app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
   try {
     const { id } = req.params;
     const { homeAllocation, moowrAllocation, finalizeReason } = req.body;
 
-    // Fetch the inbound RFQ
     const rfq = await RFQI.findById(id);
     if (!rfq) {
       return res.status(404).json({ error: "RFQ not found." });
@@ -854,7 +851,6 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
       return res.status(400).json({ error: "RFQ has already been finalized." });
     }
 
-    // Compare home and moowr allocations (by vendor name and containersAllotted)
     const homeData = homeAllocation.map((alloc) => ({
       vendorName: alloc.vendorName,
       containersAllotted: alloc.containersAllotted,
@@ -865,31 +861,26 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
     }));
     const allocationsMatch = JSON.stringify(homeData) === JSON.stringify(moowrData);
 
-    // If allocations differ and no finalize reason is provided, return error.
     if (!allocationsMatch && (!finalizeReason || finalizeReason.trim() === "")) {
       return res.status(400).json({ error: "Please provide a reason for the difference in allocation." });
     }
 
-    // Update all QuoteI documents associated with this RFQ based on homeAllocation
     for (const alloc of homeAllocation) {
       await QuoteI.findOneAndUpdate(
         { rfqId: id, vendorName: alloc.vendorName },
         {
           price: alloc.price,
-          containerAllotted: alloc.containersAllotted,
+          containersAllotted: alloc.containersAllotted, 
           label: alloc.label,
         }
       );
-    }
+    }    
 
-    // Update RFQ status and save finalize reason if provided
     rfq.status = "closed";
     if (finalizeReason) {
       rfq.finalizeReason = finalizeReason;
     }
     await rfq.save();
-
-    // (Optionally, send emails to vendors here using your email-sending helper)
 
     res.status(200).json({ message: "Allocation finalized and notifications sent." });
   } catch (error) {
@@ -898,10 +889,7 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// (Remaining outbound endpoints remain unchanged)
-//--------------------------------------------------
-
+// start the server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);

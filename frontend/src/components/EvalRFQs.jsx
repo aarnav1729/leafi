@@ -1,5 +1,4 @@
 // EvalRFQs.jsx
-
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { useNavigate, useParams } from "react-router-dom";
@@ -8,13 +7,20 @@ import moment from "moment";
 const EvalRFQs = ({ userRole }) => {
   const { rfqId } = useParams();
   const navigate = useNavigate();
+
   const [rfqDetails, setRfqDetails] = useState(null);
   const [quotes, setQuotes] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [rfqStatus, setRfqStatus] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+
+  // Editable (user) allocations – two separate tables
   const [homeAllocation, setHomeAllocation] = useState([]);
   const [moowrAllocation, setMoowrAllocation] = useState([]);
+
+  // Read-only Leafi allocation – stored as an object with two arrays: home and moowr
+  const [leafiAllocation, setLeafiAllocation] = useState({ home: [], moowr: [] });
+
   const [totalHomePrice, setTotalHomePrice] = useState(0);
   const [totalMoowrPrice, setTotalMoowrPrice] = useState(0);
   const [isFinalizeModalOpen, setIsFinalizeModalOpen] = useState(false);
@@ -22,11 +28,12 @@ const EvalRFQs = ({ userRole }) => {
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [evaluationPeriodEnded, setEvaluationPeriodEnded] = useState(false);
   const [enrichedQuotes, setEnrichedQuotes] = useState([]);
+  // Flag so that we compute allocations only once
+  const [allocationsComputed, setAllocationsComputed] = useState(false);
 
-  // conversion rate from USD to INR
   const conversionRate = 80;
 
-  // Use inbound endpoints on localhost
+  // --- Data fetching effects ---
   useEffect(() => {
     fetchRFQDetails();
     fetchQuotes();
@@ -41,9 +48,9 @@ const EvalRFQs = ({ userRole }) => {
     }
   }, [rfqDetails]);
 
-  // Enrich quotes with vendor companyName
+  // Enrich quotes with vendor info (defensively check that quotes and vendors are arrays)
   useEffect(() => {
-    if (quotes.length > 0 && vendors.length > 0) {
+    if (Array.isArray(quotes) && Array.isArray(vendors)) {
       const enriched = quotes.map((quote) => {
         const matchingVendor = vendors.find(
           (vendor) => vendor.vendorName === quote.vendorName
@@ -59,96 +66,89 @@ const EvalRFQs = ({ userRole }) => {
     }
   }, [quotes, vendors]);
 
-  // When enriched quotes update, compute allocations for Home and MOOWR
+  // Compute combined Leafi allocation and initialize user allocation only once.
   useEffect(() => {
-    if (rfqDetails && enrichedQuotes.length > 0) {
-      const homeAlloc = assignAllocation(enrichedQuotes, rfqDetails.numberOfContainers, "home");
-      setHomeAllocation(homeAlloc);
-      calculateTotalHomePrice(homeAlloc);
-
-      const moowrAlloc = assignAllocation(enrichedQuotes, rfqDetails.numberOfContainers, "moowr");
-      setMoowrAllocation(moowrAlloc);
-      calculateTotalMoowrPrice(moowrAlloc);
-    }
-  }, [rfqDetails, enrichedQuotes]);
-
-  // API calls
-  const fetchRFQDetails = async () => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/rfqsi/${rfqId}`);
-      setRfqDetails(response.data);
-      setRfqStatus(response.data.status);
-    } catch (error) {
-      console.error("Error fetching RFQ details:", error);
+      if (rfqDetails && enrichedQuotes.length > 0 && !allocationsComputed) {
+        const required = Number(rfqDetails.numberOfContainers) || 0;
+        const combined = assignCombinedLeafiAllocation(enrichedQuotes, required) || [];
+        // For display in Leafi section, split into two arrays:
+        const leafiHome = combined.map((q) => ({
+          ...q,
+          // If allocated type is "home", use allocatedContainers; otherwise, 0
+          containersAllotted: q.allocatedType === "home" ? (q.allocatedContainers || 0) : 0,
+          price: q.homeTotal || 0,
+        }));
+        const leafiMoowr = combined.map((q) => ({
+          ...q,
+          containersAllotted: q.allocatedType === "moowr" ? (q.allocatedContainers || 0) : 0,
+          price: q.moowrTotal || 0,
+        }));
+        setLeafiAllocation({ home: leafiHome, moowr: leafiMoowr });
+        // Initialize the editable (user) allocations with the same data:
+        setHomeAllocation(leafiHome.map((q) => ({ ...q })));
+        setMoowrAllocation(leafiMoowr.map((q) => ({ ...q })));
+        calculateTotalHomePrice(leafiHome);
+        calculateTotalMoowrPrice(leafiMoowr);
+        setAllocationsComputed(true);
+      }
+    } catch (err) {
+      console.error("Error computing allocations:", err);
     }
-  };
+  }, [rfqDetails, enrichedQuotes, allocationsComputed]);
 
-  const fetchQuotes = async () => {
-    try {
-      // NEW: Fetch all inbound quotes for this RFQ using the correct endpoint.
-      const response = await axios.get(`http://localhost:5000/api/quotesi/${rfqId}`);
-      setQuotes(response.data);
-    } catch (error) {
-      console.error("Error fetching quotes:", error);
-    }
-  };
+  // --- Helper Functions ---
 
-  const fetchVendors = async () => {
-    try {
-      const response = await axios.get("http://localhost:5000/api/vendors");
-      setVendors(response.data);
-    } catch (error) {
-      console.error("Error fetching vendors:", error);
-    }
-  };
-
-  // Compute totals for a given quote/allocation using the input values
+  // Compute total price for a quote (for a given type)
   const computeTotals = (quote, type = "home") => {
     const seaFreightINR = parseFloat(quote.seaFreightPerContainer)
       ? parseFloat(quote.seaFreightPerContainer) * conversionRate
       : 0;
     if (type === "home") {
-      const totalHome =
+      return (
         seaFreightINR +
         (parseFloat(quote.houseDO) || 0) +
         (parseFloat(quote.cfs) || 0) +
         (parseFloat(quote.chaChargesHome) || 0) +
-        (parseFloat(quote.transportation) || 0);
-      return totalHome;
+        (parseFloat(quote.transportation) || 0)
+      );
     } else {
-      const totalMoowr =
+      return (
         seaFreightINR +
         (parseFloat(quote.houseDO) || 0) +
         (parseFloat(quote.cfs) || 0) +
         (parseFloat(quote.chaChargesMOOWR) || 0) +
-        (parseFloat(quote.transportation) || 0);
-      return totalMoowr;
+        (parseFloat(quote.transportation) || 0)
+      );
     }
   };
 
-  // Allocation function (applies to both Home and MOOWR)
-  // It sorts quotes (ascending) based on the computed total and assigns labels and allotments.
-  const assignAllocation = (quotes, requiredContainers, type = "home") => {
-    if (!requiredContainers || requiredContainers <= 0) return quotes;
-    // Sort quotes based on total computed price (lower is better)
-    const sortedQuotes = [...quotes].sort((a, b) => {
-      const aTotal = computeTotals(a, type);
-      const bTotal = computeTotals(b, type);
-      return aTotal - bTotal;
+  // This function computes a combined allocation for Leafi.
+  // It adds computed totals (homeTotal and moowrTotal) and then allocates containers
+  // sequentially (using the lower price per quote) until the required number is reached.
+  const assignCombinedLeafiAllocation = (quotes = [], requiredContainers) => {
+    const quotesWithTotals = quotes.map((q) => {
+      const numContainers = Number(q.numberOfContainers) || 0;
+      const homeTotal = computeTotals(q, "home");
+      const moowrTotal = computeTotals(q, "moowr");
+      const bestPrice = Math.min(homeTotal, moowrTotal);
+      const allocatedType = homeTotal <= moowrTotal ? "home" : "moowr";
+      return { ...q, numberOfContainers: numContainers, homeTotal, moowrTotal, bestPrice, allocatedType };
     });
-    let totalAllotted = 0;
-    return sortedQuotes.map((quote, index) => {
-      if (totalAllotted < requiredContainers) {
-        // Allot as many containers as offered but do not exceed the requiredContainers
-        const allot = Math.min(quote.numberOfContainers, requiredContainers - totalAllotted);
-        totalAllotted += allot;
-        return { ...quote, label: `L${index + 1}`, containersAllotted: allot };
+    // Sort by bestPrice in ascending order
+    const sorted = [...quotesWithTotals].sort((a, b) => a.bestPrice - b.bestPrice);
+    let totalAllocated = 0;
+    return sorted.map((q) => {
+      let allocatedContainers = 0;
+      if (totalAllocated < requiredContainers) {
+        allocatedContainers = Math.min(q.numberOfContainers, requiredContainers - totalAllocated);
+        totalAllocated += allocatedContainers;
       }
-      return { ...quote, label: "-", containersAllotted: 0 };
+      return { ...q, allocatedContainers };
     });
   };
 
-  // Recalculate labels after manual update based on new totals
+  // Recalculate labels (for editable allocations)
   const recalcLabels = (allocation, type = "home") => {
     const sorted = [...allocation].sort((a, b) => {
       const aTotal = computeTotals(a, type);
@@ -157,11 +157,11 @@ const EvalRFQs = ({ userRole }) => {
     });
     return sorted.map((quote, index) => ({
       ...quote,
-      label: `L${index + 1}`
+      label: `L${index + 1}`,
     }));
   };
 
-  // Calculate total prices for Home and MOOWR allocations
+  // Calculate total prices for each allocation array
   const calculateTotalHomePrice = (allocations) => {
     const total = allocations.reduce(
       (sum, alloc) => sum + (alloc.price ? alloc.price * (alloc.containersAllotted || 0) : 0),
@@ -178,12 +178,10 @@ const EvalRFQs = ({ userRole }) => {
     setTotalMoowrPrice(total);
   };
 
-  // Handlers for manual changes in allocation inputs
   const handleHomeInputChange = (index, field, value) => {
     setHomeAllocation((prev) => {
       const updated = [...prev];
       updated[index][field] = field === "price" ? parseFloat(value) : parseInt(value);
-      // Recalculate labels based on new totals
       const recalculated = recalcLabels(updated, "home");
       calculateTotalHomePrice(recalculated);
       return recalculated;
@@ -200,34 +198,43 @@ const EvalRFQs = ({ userRole }) => {
     });
   };
 
-  // Finalize Allocation: Sends both home and moowr allocations to the backend
+  // Finalize allocation: the sum of user (editable) home + moowr allocations must equal required containers.
   const finalizeAllocation = async () => {
-    // Prepare payload
+    const userTotalAllocated =
+      homeAllocation.reduce((sum, a) => sum + (a.containersAllotted || 0), 0) +
+      moowrAllocation.reduce((sum, a) => sum + (a.containersAllotted || 0), 0);
+    if (userTotalAllocated !== Number(rfqDetails.numberOfContainers)) {
+      alert(
+        `Total containers allocated (${userTotalAllocated}) does not match required (${rfqDetails.numberOfContainers}).`
+      );
+      return;
+    }
     const payload = {
       homeAllocation,
       moowrAllocation,
-      finalizeReason: finalizeReason.trim()
+      finalizeReason: finalizeReason.trim(),
     };
-    // If allocations differ, require a reason
-    const homeData = homeAllocation.map((alloc) => ({
-      vendorName: alloc.vendorName,
-      containersAllotted: alloc.containersAllotted,
-    }));
-    const moowrData = moowrAllocation.map((alloc) => ({
-      vendorName: alloc.vendorName,
-      containersAllotted: alloc.containersAllotted,
-    }));
-    const isIdentical = JSON.stringify(homeData) === JSON.stringify(moowrData);
+    // Compare user allocation with computed Leafi allocation
+    const userSummary = homeAllocation
+      .concat(moowrAllocation)
+      .map((alloc) => ({
+        vendorName: alloc.vendorName,
+        containersAllotted: alloc.containersAllotted,
+      }));
+    const leafiSummary = leafiAllocation.home
+      .concat(leafiAllocation.moowr)
+      .map((alloc) => ({
+        vendorName: alloc.vendorName,
+        containersAllotted: alloc.containersAllotted,
+      }));
+    const isIdentical = JSON.stringify(userSummary) === JSON.stringify(leafiSummary);
     if (!isIdentical && finalizeReason.trim() === "") {
-      alert("Please provide a reason for the difference in allocation.");
+      alert("Please provide a reason for the difference between your allocation and the Leafi allocation.");
       return;
     }
     setIsFinalizing(true);
     try {
-      const response = await axios.post(
-        `http://localhost:5000/api/rfqsi/${rfqId}/finalize-allocation`,
-        payload
-      );
+      await axios.post(`http://localhost:5000/api/rfqsi/${rfqId}/finalize-allocation`, payload);
       setStatusMessage("Allocation finalized and emails sent to vendors.");
       setIsFinalizeModalOpen(false);
     } catch (error) {
@@ -238,19 +245,41 @@ const EvalRFQs = ({ userRole }) => {
     }
   };
 
-  // Check if the total allotted containers (in both tables) match the required number
-  const totalAllottedHome = homeAllocation.reduce(
-    (sum, alloc) => sum + (alloc.containersAllotted || 0),
-    0
-  );
-  const totalAllottedMoowr = moowrAllocation.reduce(
-    (sum, alloc) => sum + (alloc.containersAllotted || 0),
-    0
-  );
-  const allContainersAllotted =
-    totalAllottedHome === rfqDetails?.numberOfContainers &&
-    totalAllottedMoowr === rfqDetails?.numberOfContainers;
+  const userTotalAllocated =
+    homeAllocation.reduce((sum, a) => sum + (a.containersAllotted || 0), 0) +
+    moowrAllocation.reduce((sum, a) => sum + (a.containersAllotted || 0), 0);
+  const allContainersAllotted = userTotalAllocated === Number(rfqDetails?.numberOfContainers);
 
+  // --- API Call Functions ---
+  const fetchRFQDetails = async () => {
+    try {
+      const response = await axios.get(`http://localhost:5000/api/rfqsi/${rfqId}`);
+      setRfqDetails(response.data);
+      setRfqStatus(response.data.status);
+    } catch (error) {
+      console.error("Error fetching RFQ details:", error);
+    }
+  };
+
+  const fetchQuotes = async () => {
+    try {
+      const response = await axios.get(`http://localhost:5000/api/quotesi/${rfqId}`);
+      setQuotes(response.data);
+    } catch (error) {
+      console.error("Error fetching quotes:", error);
+    }
+  };
+
+  const fetchVendors = async () => {
+    try {
+      const response = await axios.get("http://localhost:5000/api/inbound-vendors");
+      setVendors(response.data);
+    } catch (error) {
+      console.error("Error fetching vendors:", error);
+    }
+  };
+
+  // --- Render JSX ---
   return (
     <div className="container mx-auto px-3 py-7 bg-white rounded-lg shadow-lg">
       <button
@@ -259,132 +288,195 @@ const EvalRFQs = ({ userRole }) => {
       >
         &larr; Back
       </button>
-
       {rfqDetails ? (
         <div>
           <h2 className="text-2xl font-bold mb-4">{rfqDetails.RFQNumber}</h2>
 
-          {/* Home Allocation Table */}
-          <div>
-            <h3 className="font-bold mb-2">Quotes with CHA – Home</h3>
-            <div className="overflow-x-auto rounded-lg">
-              <table className="min-w-full divide-y divide-black">
-                <thead className="bg-green-600">
-                  <tr>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Vendor Name</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Containers Offered</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Price</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Containers Allotted</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Label</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Total (INR)</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-black">
-                  {homeAllocation.map((quote, index) => (
-                    <tr key={quote._id} className="hover:bg-blue-200">
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        {quote.companyName || quote.vendorName}
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        {quote.numberOfContainers}
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        <input
-                          type="number"
-                          value={quote.price || ""}
-                          onChange={(e) =>
-                            handleHomeInputChange(index, "price", e.target.value)
-                          }
-                          className="p-1 border"
-                        />
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        <input
-                          type="number"
-                          value={quote.containersAllotted || ""}
-                          onChange={(e) =>
-                            handleHomeInputChange(index, "containersAllotted", e.target.value)
-                          }
-                          className="p-1 border"
-                        />
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        {quote.label}
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        {computeTotals(quote, "home")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-2">
-              <p className="text-right font-bold">
-                Total CHA – Home Price: {totalHomePrice}
-              </p>
+          {/* Leafi Allocation Section (read-only) */}
+          <div className="mb-8">
+            <h3 className="text-xl font-bold mb-4">Leafi Allocation</h3>
+            <div className="grid grid-cols-2 gap-4">
+              {/* Leafi Home */}
+              <div>
+                <h4 className="font-bold mb-2">CHA – Home (Leafi)</h4>
+                <div className="overflow-x-auto rounded-lg">
+                  <table className="min-w-full divide-y divide-black">
+                    <thead className="bg-green-600">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vendor Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Containers Offered</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Price</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Total (INR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-black">
+                      {(leafiAllocation.home || []).map((quote, index) => (
+                        <tr key={quote._id || index} className="hover:bg-blue-200">
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.companyName || quote.vendorName}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.numberOfContainers}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.price}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.containersAllotted}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.label}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.price * quote.containersAllotted}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              {/* Leafi MOOWR */}
+              <div>
+                <h4 className="font-bold mb-2">CHA – MOOWR (Leafi)</h4>
+                <div className="overflow-x-auto rounded-lg">
+                  <table className="min-w-full divide-y divide-black">
+                    <thead className="bg-blue-600">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vendor Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Containers Offered</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Price</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Total (INR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-black">
+                      {(leafiAllocation.moowr || []).map((alloc, index) => (
+                        <tr key={alloc._id || index} className="hover:bg-blue-200">
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.vendorName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.numberOfContainers}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.price}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.containersAllotted}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.label}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.price * alloc.containersAllotted}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* MOOWR Allocation Table */}
-          <div className="mt-8">
-            <h3 className="font-bold mb-2">Quotes with CHA – MOOWR</h3>
-            <div className="overflow-x-auto rounded-lg">
-              <table className="min-w-full divide-y divide-black">
-                <thead className="bg-blue-600">
-                  <tr>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Vendor Name</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Containers Offered</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Price</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Containers Allotted</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Label</th>
-                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Total (INR)</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-black">
-                  {moowrAllocation.map((alloc, index) => (
-                    <tr key={index} className="hover:bg-blue-200">
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        {alloc.vendorName}
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        {alloc.numberOfContainers}
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        <input
-                          type="number"
-                          value={alloc.price || ""}
-                          onChange={(e) =>
-                            handleMoowrInputChange(index, "price", e.target.value)
-                          }
-                          className="p-1 border"
-                        />
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        <input
-                          type="number"
-                          value={alloc.containersAllotted || ""}
-                          onChange={(e) =>
-                            handleMoowrInputChange(index, "containersAllotted", e.target.value)
-                          }
-                          className="p-1 border"
-                        />
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        {alloc.label}
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
-                        {computeTotals(alloc, "moowr")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-2">
-              <p className="text-right font-bold">
-                Total CHA – MOOWR Price: {totalMoowrPrice}
-              </p>
+          {/* User Allocation Section (editable) */}
+          <div className="mb-8">
+            <h3 className="text-xl font-bold mb-4">User Allocation</h3>
+            <div className="grid grid-cols-2 gap-4">
+              {/* User Home */}
+              <div>
+                <h4 className="font-bold mb-2">CHA – Home (User)</h4>
+                <div className="overflow-x-auto rounded-lg">
+                  <table className="min-w-full divide-y divide-black">
+                    <thead className="bg-green-600">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vendor Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Containers Offered</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Price</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Total (INR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-black">
+                      {homeAllocation.map((quote, index) => (
+                        <tr key={quote._id || index} className="hover:bg-blue-200">
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.companyName || quote.vendorName}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.numberOfContainers}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            <input
+                              type="number"
+                              value={quote.price || ""}
+                              onChange={(e) =>
+                                handleHomeInputChange(index, "price", e.target.value)
+                              }
+                              className="p-1 border"
+                            />
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            <input
+                              type="number"
+                              value={quote.containersAllotted || ""}
+                              onChange={(e) =>
+                                handleHomeInputChange(index, "containersAllotted", e.target.value)
+                              }
+                              className="p-1 border"
+                            />
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.label}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.price * quote.containersAllotted}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-2">
+                  <p className="text-right font-bold">Total CHA – Home Price: {totalHomePrice}</p>
+                </div>
+              </div>
+              {/* User MOOWR */}
+              <div>
+                <h4 className="font-bold mb-2">CHA – MOOWR (User)</h4>
+                <div className="overflow-x-auto rounded-lg">
+                  <table className="min-w-full divide-y divide-black">
+                    <thead className="bg-blue-600">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vendor Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Containers Offered</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Price</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Total (INR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-black">
+                      {moowrAllocation.map((alloc, index) => (
+                        <tr key={alloc._id || index} className="hover:bg-blue-200">
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.vendorName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.numberOfContainers}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            <input
+                              type="number"
+                              value={alloc.price || ""}
+                              onChange={(e) =>
+                                handleMoowrInputChange(index, "price", e.target.value)
+                              }
+                              className="p-1 border"
+                            />
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            <input
+                              type="number"
+                              value={alloc.containersAllotted || ""}
+                              onChange={(e) =>
+                                handleMoowrInputChange(index, "containersAllotted", e.target.value)
+                              }
+                              className="p-1 border"
+                            />
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.label}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.price * alloc.containersAllotted}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-2">
+                  <p className="text-right font-bold">Total CHA – MOOWR Price: {totalMoowrPrice}</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -404,11 +496,9 @@ const EvalRFQs = ({ userRole }) => {
             <div className="fixed z-50 inset-0 overflow-y-auto">
               <div className="flex items-center justify-center min-h-screen">
                 <div className="bg-white p-6 rounded-lg shadow-lg w-3/4">
-                  <h2 className="text-xl font-bold mb-4">
-                    Finalize Allocation
-                  </h2>
+                  <h2 className="text-xl font-bold mb-4">Finalize Allocation</h2>
                   <p className="mb-2">
-                    If the allocation between CHA – Home and CHA – MOOWR differs, please provide a reason:
+                    If your allocation differs from the Leafi (best pricing) allocation, please provide a reason:
                   </p>
                   <textarea
                     value={finalizeReason}
@@ -440,13 +530,7 @@ const EvalRFQs = ({ userRole }) => {
 
           {statusMessage && (
             <div className="mt-6 text-center">
-              <p
-                className={`text-lg ${
-                  statusMessage.includes("Error")
-                    ? "text-red-600 font-bold"
-                    : "text-green-800 font-bold"
-                }`}
-              >
+              <p className={`text-lg ${statusMessage.includes("Error") ? "text-red-600 font-bold" : "text-green-800 font-bold"}`}>
                 {statusMessage}
               </p>
             </div>
