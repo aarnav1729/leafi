@@ -24,7 +24,6 @@ import EvalRFQs from "./components/EvalRFQs";
 import TC from "./components/TC"; 
 import Contact from "./components/Contact";
 
-
 const App = () => {
   const [role, setRole] = useState(null);
   const [username, setUsername] = useState("");
@@ -73,6 +72,7 @@ const App = () => {
                 {role === "admin" && (
                   <>
                     <Route path="/rfq-list" element={<RFQList />} />
+                    <Route path="/new-rfq" element={<NewRFQForm />} />
                     <Route path="/vendor-list" element={<VendorList />} />
                     <Route
                       path="/active-auctions"
@@ -109,6 +109,8 @@ const App = () => {
 
                 {role === "factory" && (
                   <>
+                    
+                    
                     <Route path="/new-rfq" element={<NewRFQForm />} />
                     <Route
                       path="/factory-rfq-list"
@@ -130,6 +132,5 @@ const App = () => {
     </Router>
   );
 };
-
 
 export default App;

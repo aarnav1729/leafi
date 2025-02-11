@@ -14,6 +14,7 @@ const Header = ({ role, onLogout }) => {
           { to: "/rfq-list", label: "RFQ List" },
           { to: "/vendor-list", label: "Users" },
           { to: "/accounts", label: "Accounts" },
+          { to: "/new-rfq", label: "NR" },
         ]
       : role === "vendor"
       ? [
@@ -66,14 +67,14 @@ const Header = ({ role, onLogout }) => {
               <Link
                 to="/"
                 aria-label="logo"
-                className="flex items-center space-x-2"
+                className="flex items-center"
               >
                 <img
                   src={Logo}
                   alt="Logo"
                   className={`transition-all duration-300 ${
                     scrolled ? "h-12" : "h-10"
-                  } md:h-12`}
+                  } md:h-32`}
                 />
               </Link>
 

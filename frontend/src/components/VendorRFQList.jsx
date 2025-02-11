@@ -1,25 +1,22 @@
-// import required modules
+// VendorRFQList.jsx
+
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
-// create and export vendor rfq list component
+// Create and export vendor RFQ list component
 const VendorRFQList = ({ username }) => {
   const [rfqs, setRfqs] = useState([]);
   const [vendorQuotes, setVendorQuotes] = useState({});
   const navigate = useNavigate();
 
-  // fetch rfqs and vendor quotes from backend
+  // Fetch quotes submitted by the vendor using the new endpoint
   const fetchVendorQuotes = async () => {
-    
     try {
-      const response = await axios.get("https://leaf-tn20.onrender.com/api/quotes");
-      // filter quotes by vendor name
+      const response = await axios.get(`/api/quotesi/vendor/${username}`);
+      // Assuming response.data is an array of quotes
       const quotesByVendor = response.data.reduce((acc, quote) => {
-        // set vendor quotes
-        if (quote.vendorName === username) {
-          acc[quote.rfqId] = quote;
-        }
+        acc[quote.rfqId] = quote;
         return acc;
       }, {});
       setVendorQuotes(quotesByVendor);
@@ -28,12 +25,10 @@ const VendorRFQList = ({ username }) => {
     }
   };
 
-  // fetch RFQs the vendor was invited to and their respective quotes
+  // Fetch RFQs invited to the vendor using the new endpoint
   const fetchRFQs = async () => {
     try {
-      const response = await axios.get(
-        `https://leaf-tn20.onrender.com/api/rfqs/vendor/${username}`
-      );
+      const response = await axios.get(`/api/rfqsi/vendor/${username}`);
       setRfqs(response.data);
     } catch (error) {
       console.error("Error fetching RFQs for vendor:", error);
@@ -46,7 +41,7 @@ const VendorRFQList = ({ username }) => {
     fetchVendorQuotes();
   }, [username]);
 
-  // function to format dates to only show the date part
+  // Function to format dates to only show the date part
   const formatDate = (dateString) => {
     if (!dateString) return "";
     const date = new Date(dateString);
@@ -55,47 +50,50 @@ const VendorRFQList = ({ username }) => {
 
   return (
     <div className="container mx-auto mt-8 px-4 py-6 bg-white rounded-lg shadow-lg">
-      <h2 className="text-2xl font-bold text-center mb-6">
-        RFQ List
-      </h2>
+      <h2 className="text-2xl font-bold text-center mb-6">RFQ List</h2>
 
       {rfqs.length === 0 ? (
-        <p className="text-center text-black">
-          You have no RFQs at the moment.
-        </p>
+        <p className="text-center text-black">You have no RFQs at the moment.</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-white rounded-full">
-            <thead className="bg-green-600 rounded-full">
+          <table className="min-w-full divide-y divide-gray-200 rounded-lg">
+            <thead className="bg-green-600">
               <tr>
                 {[
                   "Actions",
                   "RFQ Number",
-                  "Short Name",
-                  "Company Type",
-                  "Item Type",
-                  "Origin Location",
-                  "Drop Location State",
-                  "Drop Location District",
-                  "Vehicle Type",
-                  "Additional Vehicle Details",
-                  "Number of Vehicles",
-                  "Weight",
-                  "Vehicle Placement Begin Date",
-                  "Vehicle Placement End Date",
+                  "Item Description",
+                  "Company Name",
+                  "PO Number",
+                  "Supplier Name",
+                  "Port of Loading",
+                  "Port of Destination",
+                  "Container Type",
+                  "Number of Containers",
+                  "Cargo Weight (kg)",
+                  "Cargo Readiness Date",
+                  "Initial Quote End Time",
+                  "Evaluation End Time",
+                  "RFQ Closing Date",
+                  "RFQ Closing Time",
+                  "Status",
                 ].map((header) => (
                   <th
                     key={header}
-                    className="px-6 py-3 text-left text-sm text-black font-bold uppercase tracking-wider"
+                    className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider text-white"
                   >
                     {header}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-black">
+            <tbody className="bg-white divide-y divide-gray-200">
               {rfqs.map((rfq) => (
-                <tr key={rfq._id} className="cursor-pointer hover:bg-blue-200">
+                <tr
+                  key={rfq._id}
+                  className="cursor-pointer hover:bg-blue-100"
+                >
+                  {/* Actions */}
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     {rfq.status !== "closed" ? (
                       <button
@@ -114,44 +112,84 @@ const VendorRFQList = ({ username }) => {
                     )}
                   </td>
 
+                  {/* RFQ Number */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.RFQNumber}
+                    {rfq.rfqNumber}
                   </td>
+
+                  {/* Item Description */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.shortName}
+                    {rfq.itemDescription}
                   </td>
+
+                  {/* Company Name */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.companyType}
+                    {rfq.companyName}
                   </td>
+
+                  {/* PO Number */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.itemType}
+                    {rfq.poNumber}
                   </td>
+
+                  {/* Supplier Name */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.originLocation}
+                    {rfq.supplierName}
                   </td>
+
+                  {/* Port of Loading */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.dropLocationState}
+                    {rfq.portOfLoading}
                   </td>
+
+                  {/* Port of Destination */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.dropLocationDistrict}
+                    {rfq.portOfDestination}
                   </td>
+
+                  {/* Container Type */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.vehicleType}
+                    {rfq.containerType}
                   </td>
+
+                  {/* Number of Containers */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.additionalVehicleDetails}
+                    {rfq.numberOfContainers}
                   </td>
+
+                  {/* Cargo Weight */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.numberOfVehicles}
+                    {rfq.cargoWeightInContainer}
                   </td>
+
+                  {/* Cargo Readiness Date */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {rfq.weight}
+                    {formatDate(rfq.cargoReadinessDate)}
                   </td>
+
+                  {/* Initial Quote End Time */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {formatDate(rfq.vehiclePlacementBeginDate)}
+                    {formatDate(rfq.initialQuoteEndTime)}
                   </td>
+
+                  {/* Evaluation End Time */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                    {formatDate(rfq.vehiclePlacementEndDate)}
+                    {formatDate(rfq.evaluationEndTime)}
+                  </td>
+
+                  {/* RFQ Closing Date */}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
+                    {formatDate(rfq.rfqClosingDate)}
+                  </td>
+
+                  {/* RFQ Closing Time */}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
+                    {rfq.rfqClosingTime}
+                  </td>
+
+                  {/* Status */}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
+                    {rfq.status.charAt(0).toUpperCase() + rfq.status.slice(1)}
                   </td>
                 </tr>
               ))}

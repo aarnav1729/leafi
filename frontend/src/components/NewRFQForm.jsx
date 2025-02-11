@@ -3,1065 +3,170 @@ import axios from "axios";
 
 const NewRFQForm = () => {
   const [formData, setFormData] = useState({
-    RFQNumber: "",
-    shortName: "",
-    companyType: "",
-    sapOrder: "",
-    itemType: "",
-    customItemType: "",
-    customerName: "",
-    originLocation: "",
-    dropLocationState: "",
-    dropLocationDistrict: "",
-    vehicleType: "",
-    customVehicleType: "",
-    additionalVehicleDetails: "",
-    numberOfVehicles: "",
-    weight: "",
-    budgetedPriceBySalesDept: "",
-    maxAllowablePrice: "",
-    vehiclePlacementBeginDate: "",
-    vehiclePlacementEndDate: "",
+    RFQNumber: "", // auto-generated
+    itemDescription: "",
+    companyName: "",
+    poNumber: "",
+    supplierName: "",
+    portOfLoading: "",
+    portOfDestination: "",
+    containerType: "",
+    numberOfContainers: "",
+    cargoWeightInContainer: "",
+    cargoReadinessDate: "",
+    eReverseToggle: false,
     eReverseDate: "",
     eReverseTime: "",
-    RFQClosingDate: "",
-    RFQClosingTime: "",
-    eReverseToggle: false,
-    rfqType: "D2D",
     initialQuoteEndTime: "",
     evaluationEndTime: "",
-    address: "",
-    pincode: "",
+    RFQClosingDate: "",
+    RFQClosingTime: "",
   });
 
   const [vendors, setVendors] = useState([]);
   const [selectedVendors, setSelectedVendors] = useState([]);
-  const [districtOptions, setDistrictOptions] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState({});
-  const stateToDistricts = {
-    "Andhra Pradesh": [
-      "Anantapur",
-      "Chittoor",
-      "East Godavari",
-      "Guntur",
-      "Krishna",
-      "Kurnool",
-      "Nellore",
-      "Prakasam",
-      "Srikakulam",
-      "Visakhapatnam",
-      "Vizianagaram",
-      "West Godavari",
-      "YSR Kadapa",
-    ],
-    "Arunachal Pradesh": [
-      "Anjaw",
-      "Changlang",
-      "Dibang Valley",
-      "East Kameng",
-      "East Siang",
-      "Kamle",
-      "Kra Daadi",
-      "Kurung Kumey",
-      "Lepa Rada",
-      "Lohit",
-      "Longding",
-      "Lower Dibang Valley",
-      "Lower Siang",
-      "Lower Subansiri",
-      "Namsai",
-      "Pakke Kessang",
-      "Papum Pare",
-      "Shi Yomi",
-      "Siang",
-      "Tawang",
-      "Tirap",
-      "Upper Siang",
-      "Upper Subansiri",
-      "West Kameng",
-      "West Siang",
-    ],
-    Assam: [
-      "Baksa",
-      "Barpeta",
-      "Biswanath",
-      "Bongaigaon",
-      "Cachar",
-      "Charaideo",
-      "Chirang",
-      "Darrang",
-      "Dhemaji",
-      "Dhubri",
-      "Dibrugarh",
-      "Dima Hasao",
-      "Goalpara",
-      "Golaghat",
-      "Hailakandi",
-      "Hojai",
-      "Jorhat",
-      "Kamrup Metropolitan",
-      "Kamrup",
-      "Karbi Anglong",
-      "Karimganj",
-      "Kokrajhar",
-      "Lakhimpur",
-      "Majuli",
-      "Morigaon",
-      "Nagaon",
-      "Nalbari",
-      "Sivasagar",
-      "Sonitpur",
-      "South Salmara-Mankachar",
-      "Tinsukia",
-      "Udalguri",
-      "West Karbi Anglong",
-    ],
-    "Delhi": [
-        "Central Delhi",
-        "East Delhi",
-        "New Delhi",
-        "North Delhi",
-        "North East Delhi",
-        "North West Delhi",
-        "Shahdara",
-        "South Delhi",
-        "South East Delhi",
-        "South West Delhi",
-        "West Delhi"
-    ],
-    "Jammu and Kashmir": [
-        "Anantnag",
-        "Bandipora",
-        "Baramulla",
-        "Budgam",
-        "Doda",
-        "Ganderbal",
-        "Jammu",
-        "Kathua",
-        "Kishtwar",
-        "Kulgam",
-        "Kupwara",
-        "Poonch",
-        "Pulwama",
-        "Rajouri",
-        "Ramban",
-        "Reasi",
-        "Samba",
-        "Shopian",
-        "Srinagar",
-        "Udhampur"
-    ],
-    "Ladakh": [
-        "Kargil",
-        "Leh"
-    ],
-    Bihar: [
-      "Araria",
-      "Arwal",
-      "Aurangabad",
-      "Banka",
-      "Begusarai",
-      "Bhagalpur",
-      "Bhojpur",
-      "Buxar",
-      "Darbhanga",
-      "East Champaran (Motihari)",
-      "Gaya",
-      "Gopalganj",
-      "Jamui",
-      "Jehanabad",
-      "Kaimur (Bhabua)",
-      "Katihar",
-      "Khagaria",
-      "Kishanganj",
-      "Lakhisarai",
-      "Madhepura",
-      "Madhubani",
-      "Munger (Monghyr)",
-      "Muzaffarpur",
-      "Nalanda",
-      "Nawada",
-      "Patna",
-      "Purnia (Purnea)",
-      "Rohtas",
-      "Saharsa",
-      "Samastipur",
-      "Saran",
-      "Sheikhpura",
-      "Sheohar",
-      "Sitamarhi",
-      "Siwan",
-      "Supaul",
-      "Vaishali",
-      "West Champaran",
-    ],
-    Chhattisgarh: [
-      "Balod",
-      "Baloda Bazar",
-      "Balrampur",
-      "Bastar",
-      "Bemetara",
-      "Bijapur",
-      "Bilaspur",
-      "Dantewada (South Bastar)",
-      "Dhamtari",
-      "Durg",
-      "Gariyaband",
-      "Gaurela Pendra Marwahi",
-      "Janjgir-Champa",
-      "Jashpur",
-      "Kabirdham (Kawardha)",
-      "Kanker (North Bastar)",
-      "Kondagaon",
-      "Korba",
-      "Koriya",
-      "Mahasamund",
-      "Mungeli",
-      "Narayanpur",
-      "Raigarh",
-      "Raipur",
-      "Rajnandgaon",
-      "Sukma",
-      "Surajpur",
-      "Surguja",
-    ],
-    Goa: ["North Goa", "South Goa"],
-    Gujarat: [
-      "Ahmedabad",
-      "Amreli",
-      "Anand",
-      "Aravalli",
-      "Banaskantha (Palanpur)",
-      "Bharuch",
-      "Bhavnagar",
-      "Botad",
-      "Chhota Udaipur",
-      "Dahod",
-      "Dang (Ahwa)",
-      "Devbhoomi Dwarka",
-      "Gandhinagar",
-      "Gir Somnath",
-      "Jamnagar",
-      "Junagadh",
-      "Kheda (Nadiad)",
-      "Kutch",
-      "Mahisagar",
-      "Mehsana",
-      "Morbi",
-      "Narmada (Rajpipla)",
-      "Navsari",
-      "Panchmahal (Godhra)",
-      "Patan",
-      "Porbandar",
-      "Rajkot",
-      "Sabarkantha (Himmatnagar)",
-      "Surat",
-      "Surendranagar",
-      "Tapi (Vyara)",
-      "Vadodara",
-      "Valsad",
-    ],
-    Haryana: [
-      "Ambala",
-      "Bhiwani",
-      "Charkhi Dadri",
-      "Faridabad",
-      "Fatehabad",
-      "Gurugram",
-      "Hisar",
-      "Jhajjar",
-      "Jind",
-      "Kaithal",
-      "Karnal",
-      "Kurukshetra",
-      "Mahendragarh",
-      "Nuh",
-      "Palwal",
-      "Panchkula",
-      "Panipat",
-      "Rewari",
-      "Rohtak",
-      "Sirsa",
-      "Sonipat",
-      "Yamunanagar",
-    ],
-    "Himachal Pradesh": [
-      "Bilaspur",
-      "Chamba",
-      "Hamirpur",
-      "Kangra",
-      "Kinnaur",
-      "Kullu",
-      "Lahaul & Spiti",
-      "Mandi",
-      "Shimla",
-      "Sirmaur (Sirmour)",
-      "Solan",
-      "Una",
-    ],
-    Jharkhand: [
-      "Bokaro",
-      "Chatra",
-      "Deoghar",
-      "Dhanbad",
-      "Dumka",
-      "East Singhbhum",
-      "Garhwa",
-      "Giridih",
-      "Godda",
-      "Gumla",
-      "Hazaribagh",
-      "Jamtara",
-      "Khunti",
-      "Koderma",
-      "Latehar",
-      "Lohardaga",
-      "Pakur",
-      "Palamu",
-      "Ramgarh",
-      "Ranchi",
-      "Sahebganj",
-      "Seraikela-Kharsawan",
-      "Simdega",
-      "West Singhbhum",
-    ],
-    Karnataka: [
-      "Bagalkot",
-      "Ballari (Bellary)",
-      "Belagavi (Belgaum)",
-      "Bengaluru (Bangalore) Rural",
-      "Bengaluru (Bangalore) Urban",
-      "Bidar",
-      "Chamarajanagar",
-      "Chikballapur",
-      "Chikkamagaluru (Chikmagalur)",
-      "Chitradurga",
-      "Dakshina Kannada",
-      "Davanagere",
-      "Dharwad",
-      "Gadag",
-      "Hassan",
-      "Haveri",
-      "Kalaburagi (Gulbarga)",
-      "Kodagu",
-      "Kolar",
-      "Koppal",
-      "Mandya",
-      "Mysuru (Mysore)",
-      "Raichur",
-      "Ramanagara",
-      "Shivamogga (Shimoga)",
-      "Tumakuru (Tumkur)",
-      "Udupi",
-      "Uttara Kannada (Karwar)",
-      "Vijayapura (Bijapur)",
-      "Yadgir",
-    ],
-    Kerala: [
-      "Alappuzha",
-      "Ernakulam",
-      "Idukki",
-      "Kannur",
-      "Kasaragod",
-      "Kollam",
-      "Kottayam",
-      "Kozhikode",
-      "Malappuram",
-      "Palakkad",
-      "Pathanamthitta",
-      "Thiruvananthapuram",
-      "Thrissur",
-      "Wayanad",
-    ],
-    "Madhya Pradesh": [
-      "Agar Malwa",
-      "Alirajpur",
-      "Anuppur",
-      "Ashoknagar",
-      "Balaghat",
-      "Barwani",
-      "Betul",
-      "Bhind",
-      "Bhopal",
-      "Burhanpur",
-      "Chhatarpur",
-      "Chhindwara",
-      "Damoh",
-      "Datia",
-      "Dewas",
-      "Dhar",
-      "Dindori",
-      "Guna",
-      "Gwalior",
-      "Harda",
-      "Hoshangabad",
-      "Indore",
-      "Jabalpur",
-      "Jhabua",
-      "Katni",
-      "Khandwa",
-      "Khargone",
-      "Mandla",
-      "Mandsaur",
-      "Morena",
-      "Narsinghpur",
-      "Neemuch",
-      "Panna",
-      "Raisen",
-      "Rajgarh",
-      "Ratlam",
-      "Rewa",
-      "Sagar",
-      "Satna",
-      "Sehore",
-      "Seoni",
-      "Shahdol",
-      "Shajapur",
-      "Sheopur",
-      "Shivpuri",
-      "Sidhi",
-      "Singrauli",
-      "Tikamgarh",
-      "Ujjain",
-      "Umaria",
-      "Vidisha",
-    ],
-    Maharashtra: [
-      "Ahmednagar",
-      "Akola",
-      "Amravati",
-      "Aurangabad",
-      "Beed",
-      "Bhandara",
-      "Buldhana",
-      "Chandrapur",
-      "Dhule",
-      "Gadchiroli",
-      "Gondia",
-      "Hingoli",
-      "Jalgaon",
-      "Jalna",
-      "Kolhapur",
-      "Latur",
-      "Mumbai City",
-      "Mumbai Suburban",
-      "Nagpur",
-      "Nanded",
-      "Nandurbar",
-      "Nashik",
-      "Osmanabad",
-      "Palghar",
-      "Parbhani",
-      "Pune",
-      "Raigad",
-      "Ratnagiri",
-      "Sangli",
-      "Satara",
-      "Sindhudurg",
-      "Solapur",
-      "Thane",
-      "Wardha",
-      "Washim",
-      "Yavatmal",
-    ],
-    Manipur: [
-      "Bishnupur",
-      "Chandel",
-      "Churachandpur",
-      "Imphal East",
-      "Imphal West",
-      "Jiribam",
-      "Kakching",
-      "Kamjong",
-      "Kangpokpi",
-      "Noney",
-      "Pherzawl",
-      "Senapati",
-      "Tamenglong",
-      "Tengnoupal",
-      "Thoubal",
-      "Ukhrul",
-    ],
-    Meghalaya: [
-      "East Garo Hills",
-      "East Jaintia Hills",
-      "East Khasi Hills",
-      "North Garo Hills",
-      "Ri Bhoi",
-      "South Garo Hills",
-      "South West Garo Hills",
-      "South West Khasi Hills",
-      "West Garo Hills",
-      "West Jaintia Hills",
-      "West Khasi Hills",
-    ],
-    Mizoram: [
-      "Aizawl",
-      "Champhai",
-      "Hnahthial",
-      "Khawzawl",
-      "Kolasib",
-      "Lawngtlai",
-      "Lunglei",
-      "Mamit",
-      "Saiha",
-      "Saitual",
-      "Serchhip",
-    ],
-    Nagaland: [
-      "Chumukedima",
-      "Dimapur",
-      "Kiphire",
-      "Kohima",
-      "Longleng",
-      "Mokokchung",
-      "Mon",
-      "Noklak",
-      "Peren",
-      "Phek",
-      "Tuensang",
-      "Wokha",
-      "Zunheboto",
-    ],
-    Odisha: [
-      "Angul",
-      "Balangir",
-      "Balasore (Baleswar)",
-      "Bargarh (Baragarh)",
-      "Bhadrak",
-      "Boudh (Bauda)",
-      "Cuttack",
-      "Debagarh (Deogarh)",
-      "Dhenkanal",
-      "Gajapati",
-      "Ganjam",
-      "Jagatsinghapur",
-      "Jajpur",
-      "Jharsuguda",
-      "Kalahandi",
-      "Kandhamal",
-      "Kendrapara",
-      "Kendujhar (Keonjhar)",
-      "Khordha",
-      "Koraput",
-      "Malkangiri",
-      "Mayurbhanj",
-      "Nabarangpur",
-      "Nayagarh",
-      "Nuapada",
-      "Puri",
-      "Rayagada",
-      "Sambalpur",
-      "Sonepur",
-      "Sundargarh",
-    ],
-    Punjab: [
-      "Amritsar",
-      "Barnala",
-      "Bathinda",
-      "Faridkot",
-      "Fatehgarh Sahib",
-      "Fazilka",
-      "Ferozepur",
-      "Gurdaspur",
-      "Hoshiarpur",
-      "Jalandhar",
-      "Kapurthala",
-      "Ludhiana",
-      "Mansa",
-      "Moga",
-      "Mohali (SAS Nagar)",
-      "Muktsar",
-      "Pathankot",
-      "Patiala",
-      "Rupnagar",
-      "Sangrur",
-      "Shaheed Bhagat Singh Nagar (Nawanshahr)",
-      "Tarn Taran",
-    ],
-    Rajasthan: [
-      "Ajmer",
-      "Alwar",
-      "Banswara",
-      "Baran",
-      "Barmer",
-      "Bharatpur",
-      "Bhilwara",
-      "Bikaner",
-      "Bundi",
-      "Chittorgarh",
-      "Churu",
-      "Dausa",
-      "Dholpur",
-      "Dungarpur",
-      "Hanumangarh",
-      "Jaipur",
-      "Jaisalmer",
-      "Jalore",
-      "Jhalawar",
-      "Jhunjhunu",
-      "Jodhpur",
-      "Karauli",
-      "Kota",
-      "Nagaur",
-      "Pali",
-      "Pratapgarh",
-      "Rajsamand",
-      "Sawai Madhopur",
-      "Sikar",
-      "Sirohi",
-      "Sri Ganganagar",
-      "Tonk",
-      "Udaipur",
-    ],
-    Sikkim: ["East Sikkim", "North Sikkim", "South Sikkim", "West Sikkim"],
-    "Tamil Nadu": [
-      "Ariyalur",
-      "Chengalpattu",
-      "Chennai",
-      "Coimbatore",
-      "Cuddalore",
-      "Dharmapuri",
-      "Dindigul",
-      "Erode",
-      "Kallakurichi",
-      "Kancheepuram",
-      "Karur",
-      "Krishnagiri",
-      "Madurai",
-      "Mayiladuthurai",
-      "Nagapattinam",
-      "Namakkal",
-      "Nilgiris",
-      "Perambalur",
-      "Pudukkottai",
-      "Ramanathapuram",
-      "Ranipet",
-      "Salem",
-      "Sivaganga",
-      "Tenkasi",
-      "Thanjavur",
-      "Theni",
-      "Thiruchirappalli",
-      "Thirupathur",
-      "Thiruvarur",
-      "Thoothukudi",
-      "Tirunelveli",
-      "Tiruppur",
-      "Tiruvallur",
-      "Tiruvannamalai",
-      "Vellore",
-      "Viluppuram",
-      "Virudhunagar",
-    ],
-    Telangana: [
-      "Adilabad",
-      "Bhadradri Kothagudem",
-      "Hyderabad",
-      "Jagtial",
-      "Jangaon",
-      "Jayashankar Bhupalpally",
-      "Jogulamba Gadwal",
-      "Kamareddy",
-      "Karimnagar",
-      "Khammam",
-      "Komaram Bheem Asifabad",
-      "Mahabubabad",
-      "Mahabubnagar",
-      "Mancherial",
-      "Medak",
-      "Medchal–Malkajgiri",
-      "Mulugu",
-      "Nagarkurnool",
-      "Nalgonda",
-      "Narayanpet",
-      "Nirmal",
-      "Nizamabad",
-      "Peddapalli",
-      "Rajanna Sircilla",
-      "Ranga Reddy",
-      "Sangareddy",
-      "Siddipet",
-      "Suryapet",
-      "Vikarabad",
-      "Wanaparthy",
-      "Warangal Rural",
-      "Warangal Urban",
-      "Yadadri Bhuvanagiri",
-    ],
-    Tripura: [
-      "Dhalai",
-      "Gomati",
-      "Khowai",
-      "North Tripura",
-      "Sepahijala",
-      "South Tripura",
-      "Unakoti",
-      "West Tripura",
-    ],
-    "Uttar Pradesh": [
-      "Agra",
-      "Aligarh",
-      "Ambedkar Nagar",
-      "Amethi (Chatrapati Sahuji Mahraj Nagar)",
-      "Amroha (J.P. Nagar)",
-      "Auraiya",
-      "Ayodhya (Faizabad)",
-      "Azamgarh",
-      "Baghpat",
-      "Bahraich",
-      "Ballia",
-      "Balrampur",
-      "Banda",
-      "Barabanki",
-      "Bareilly",
-      "Basti",
-      "Bhadohi",
-      "Bijnor",
-      "Budaun",
-      "Bulandshahr",
-      "Chandauli",
-      "Chitrakoot",
-      "Deoria",
-      "Etah",
-      "Etawah",
-      "Farrukhabad",
-      "Fatehpur",
-      "Firozabad",
-      "Gautam Buddha Nagar",
-      "Ghaziabad",
-      "Ghazipur",
-      "Gonda",
-      "Gorakhpur",
-      "Hamirpur",
-      "Hapur (Panchsheel Nagar)",
-      "Hardoi",
-      "Hathras",
-      "Jalaun",
-      "Jaunpur",
-      "Jhansi",
-      "Kannauj",
-      "Kanpur Dehat",
-      "Kanpur Nagar",
-      "Kasganj (Kanshiram Nagar)",
-      "Kaushambi",
-      "Kushinagar (Padrauna)",
-      "Lakhimpur - Kheri",
-      "Lalitpur",
-      "Lucknow",
-      "Maharajganj",
-      "Mahoba",
-      "Mainpuri",
-      "Mathura",
-      "Mau",
-      "Meerut",
-      "Mirzapur",
-      "Moradabad",
-      "Muzaffarnagar",
-      "Pilibhit",
-      "Pratapgarh",
-      "Prayagraj (Allahabad)",
-      "Raebareli",
-      "Rampur",
-      "Saharanpur",
-      "Sambhal (Bhim Nagar)",
-      "Sant Kabir Nagar",
-      "Shahjahanpur",
-      "Shamli",
-      "Shrawasti",
-      "Siddharth Nagar",
-      "Sitapur",
-      "Sonbhadra",
-      "Sultanpur",
-      "Unnao",
-      "Varanasi",
-    ],
-    Uttarakhand: [
-      "Almora",
-      "Bageshwar",
-      "Chamoli",
-      "Champawat",
-      "Dehradun",
-      "Haridwar",
-      "Nainital",
-      "Pauri Garhwal",
-      "Pithoragarh",
-      "Rudraprayag",
-      "Tehri Garhwal",
-      "Udham Singh Nagar",
-      "Uttarkashi",
-    ],
-    "West Bengal": [
-      "Alipurduar",
-      "Bankura",
-      "Birbhum",
-      "Cooch Behar",
-      "Dakshin Dinajpur (South Dinajpur)",
-      "Darjeeling",
-      "Hooghly",
-      "Howrah",
-      "Jalpaiguri",
-      "Jhargram",
-      "Kalimpong",
-      "Kolkata",
-      "Malda",
-      "Murshidabad",
-      "Nadia",
-      "North 24 Parganas",
-      "Paschim Bardhaman (West Bardhaman)",
-      "Paschim Medinipur (West Medinipur)",
-      "Purba Bardhaman (East Bardhaman)",
-      "Purba Medinipur (East Medinipur)",
-      "Purulia",
-      "South 24 Parganas",
-      "Uttar Dinajpur (North Dinajpur)",
-    ],
-  };
 
   useEffect(() => {
-    fetchNextRFQNumber();
-    fetchVendors();
+    fetchInboundNextRFQNumber();
+    fetchInboundVendors();
   }, []);
 
-  const fetchNextRFQNumber = async () => {
+  const fetchInboundNextRFQNumber = async () => {
     try {
-      setIsLoading(true);
-      const response = await axios.get(
-        "https://leaf-tn20.onrender.com/api/next-rfq-number"
-      );
-      setFormData((prevData) => ({
-        ...prevData,
-        RFQNumber: response.data.RFQNumber,
-      }));
+      const response = await axios.get("/api/inbound-next-rfq-number");
+      const inboundNum = response.data?.RFQNumber || "";
+      setFormData((prev) => ({ ...prev, RFQNumber: inboundNum }));
     } catch (error) {
-      console.error("Error fetching the next RFQ number:", error);
-      alert("Failed to fetch the next RFQ number. Please try again.");
-    } finally {
-      setIsLoading(false);
+      console.error("Error fetching inbound next RFQ number:", error);
     }
   };
 
-  const fetchVendors = async () => {
+  const fetchInboundVendors = async () => {
     try {
-      const response = await axios.get("https://leaf-tn20.onrender.com/api/vendors");
-      setVendors(response.data); // set vendor data
+      const response = await axios.get("/api/inbound-vendors");
+      console.log("Inbound Vendors Response:", response.data); // Add this line
+      setVendors(Array.isArray(response.data) ? response.data : []); // Ensure it's an array
     } catch (error) {
-      console.error("Error fetching vendors:", error);
-      alert("Failed to fetch vendors.");
+      console.error("Error fetching inbound vendors:", error);
     }
   };
 
+  // Handle vendor checkboxes
   const handleVendorSelection = (vendorId) => {
-    setSelectedVendors((prevSelected) => {
-      if (prevSelected.includes(vendorId)) {
-        return prevSelected.filter((id) => id !== vendorId); // deselect
-      } else {
-        return [...prevSelected, vendorId]; // select
-      }
+    setSelectedVendors((prev) => {
+      if (prev.includes(vendorId)) return prev.filter((id) => id !== vendorId);
+      return [...prev, vendorId];
     });
   };
 
+  // "Select all" or "deselect all"
   const handleSelectAllVendors = (e) => {
-    const isChecked = e.target.checked;
-    if (isChecked) {
-      // select all vendors
-      const allVendorIds = vendors.map((vendor) => vendor._id);
-      setSelectedVendors(allVendorIds);
+    if (e.target.checked) {
+      const allIds = vendors.map((v) => v._id);
+      setSelectedVendors(allIds);
     } else {
-      // deselect all vendors
       setSelectedVendors([]);
     }
   };
 
+  // Common change handler
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-
-    if (name === "dropLocationState") {
-      setFormData((prevData) => ({
-        ...prevData,
-        dropLocationState: value,
-        dropLocationDistrict: "",
-      }));
-      setDistrictOptions(stateToDistricts[value] || []);
-      return;
-    }
-
-    // Reset custom fields when dropdown changes
-    if (name === "itemType" && value !== "Others") {
-      setFormData((prevData) => ({
-        ...prevData,
-        itemType: value,
-        customItemType: "",
-      }));
-    } else if (name === "vehicleType" && value !== "Other") {
-      setFormData((prevData) => ({
-        ...prevData,
-        vehicleType: value,
-        customVehicleType: "",
-      }));
-    } else {
-      setFormData((prevData) => ({
-        ...prevData,
-        [name]: type === "checkbox" ? checked : value,
-      }));
-    }
-
     let error = "";
-    if (
-      [
-        "RFQNumber",
-        "weight",
-        "budgetedPriceBySalesDept",
-        "maxAllowablePrice",
-        "numberOfVehicles",
-      ].includes(name)
-    ) {
-      if (!/^\d*$/.test(value)) {
-        error = "This field must be a number.";
-      }
-    } else if (name === "sapOrder") {
-      if (!/^[a-zA-Z0-9]*$/.test(value)) {
-        error = "This field must be alphanumeric.";
-      }
-    } else if (name === "pincode") {
-      if (!/^\d{6}$/.test(value)) {
-        error = "Pincode must be exactly 6 digits and contain only numbers.";
-      }
-    }
 
-    // Add this validation block for 'weight'
-    if (name === "weight" && value !== "") {
-      const numericValue = parseInt(value, 10);
-      if (isNaN(numericValue) || numericValue < 1 || numericValue > 99) {
-        error = "Weight must be a number between 1 and 99.";
+    // Numeric validation
+    if (
+      ["numberOfContainers", "cargoWeightInContainer"].includes(name) &&
+      value !== ""
+    ) {
+      if (!/^\d+(\.\d+)?$/.test(value)) {
+        error = "Must be a valid number.";
       }
     }
 
     if (name === "eReverseToggle") {
-      setFormData((prevData) => ({
-        ...prevData,
+      // If toggling off eReverse, clear date/time
+      setFormData((prev) => ({
+        ...prev,
         eReverseToggle: checked,
-        eReverseDate: checked ? prevData.eReverseDate : "",
-        eReverseTime: checked ? prevData.eReverseTime : "",
+        eReverseDate: checked ? prev.eReverseDate : "",
+        eReverseTime: checked ? prev.eReverseTime : "",
       }));
+      setErrors((prevErrors) => ({ ...prevErrors, [name]: error }));
       return;
     }
 
-    setErrors((prevErrors) => ({ ...prevErrors, [name]: error }));
-    setFormData((prevData) => ({
-      ...prevData,
+    setFormData((prev) => ({
+      ...prev,
       [name]: type === "checkbox" ? checked : value,
     }));
+    setErrors((prevErrors) => ({ ...prevErrors, [name]: error }));
   };
 
+  // Submit form
   const handleSubmit = async (e) => {
     e.preventDefault();
-
-    if (formData.itemType === "Others" && !formData.customItemType.trim()) {
-      alert("Please specify the Item Type.");
-      return;
-    }
-    if (
-      formData.vehicleType === "Other" &&
-      !formData.customVehicleType.trim()
-    ) {
-      alert("Please specify the Vehicle Type.");
-      return;
-    }
-
-    if (Object.values(errors).some((error) => error)) {
-      alert(
-        "Please fix the following errors:\n" +
-          Object.entries(errors)
-            .filter(([_, error]) => error)
-            .map(
-              ([field, error]) =>
-                `${field.replace(/([A-Z])/g, " $1").trim()}: ${error}`
-            )
-            .join("\n")
-      );
+    // Check for any validation errors
+    const hasErrors = Object.values(errors).some((err) => err);
+    if (hasErrors) {
+      alert("Please fix errors before submitting.");
       return;
     }
 
     setIsLoading(true);
     try {
-      const eReverseDateTime = formData.eReverseToggle
-        ? new Date(`${formData.eReverseDate}T${formData.eReverseTime}`)
-        : null;
+      let eReverseDateTime = null;
+      if (
+        formData.eReverseToggle &&
+        formData.eReverseDate &&
+        formData.eReverseTime
+      ) {
+        eReverseDateTime = new Date(
+          `${formData.eReverseDate}T${formData.eReverseTime}`
+        );
+      }
 
       const dataToSend = {
         ...formData,
-        selectedVendors,
-        initialQuoteEndTime: formData.initialQuoteEndTime,
-        evaluationEndTime: formData.evaluationEndTime,
         eReverseDate: eReverseDateTime,
-        itemType:
-          formData.itemType === "Others"
-            ? formData.customItemType
-            : formData.itemType,
-        vehicleType:
-          formData.vehicleType === "Other"
-            ? formData.customVehicleType
-            : formData.vehicleType,
+        selectedVendors,
       };
 
-      delete dataToSend.customItemType;
-      delete dataToSend.customVehicleType;
-
-      const response = await axios.post(
-        "https://leaf-tn20.onrender.com/api/rfq",
-        dataToSend
-      );
-
-      if (
-        response.status === 201 &&
-        response.data.message === "RFQ created and email sent successfully"
-      ) {
-        alert("RFQ submitted successfully!");
+      // Post to your inbound create RFQ route, e.g. /api/rfqsi or /api/inbound-rfq
+      const response = await axios.post("/api/rfqsi", dataToSend);
+      if (response.status === 201 && response.data.success) {
+        alert("Inbound RFQ created successfully!");
+        // Reset
         setFormData({
           RFQNumber: "",
-          shortName: "",
-          companyType: "",
-          sapOrder: "",
-          itemType: "",
-          customItemType: "",
-          customerName: "",
-          originLocation: "",
-          dropLocationState: "",
-          dropLocationDistrict: "",
-          vehicleType: "",
-          customVehicleType: "",
-          additionalVehicleDetails: "",
-          numberOfVehicles: "",
-          weight: "",
-          budgetedPriceBySalesDept: "",
-          maxAllowablePrice: "",
-          vehiclePlacementBeginDate: "",
-          vehiclePlacementEndDate: "",
+          itemDescription: "",
+          companyName: "",
+          poNumber: "",
+          supplierName: "",
+          portOfLoading: "",
+          portOfDestination: "",
+          containerType: "",
+          numberOfContainers: "",
+          cargoWeightInContainer: "",
+          cargoReadinessDate: "",
+          eReverseToggle: false,
           eReverseDate: "",
           eReverseTime: "",
-          RFQClosingDate: "",
-          RFQClosingTime: "",
-          eReverseToggle: false,
-          rfqType: "D2D",
           initialQuoteEndTime: "",
           evaluationEndTime: "",
-          pincode: "",
-          address: "",
+          RFQClosingDate: "",
+          RFQClosingTime: "",
         });
-        fetchNextRFQNumber();
+        setSelectedVendors([]);
+        fetchInboundNextRFQNumber(); // get next # again
       } else {
-        console.error("Unexpected response from server:", response.data);
-        alert("Failed to submit RFQ. " + response.data.message);
+        alert("Failed to create inbound RFQ.");
       }
     } catch (error) {
-      console.error("Error submitting RFQ:", error);
-      alert(
-        `Failed to submit RFQ. ${
-          error.response?.data?.message || error.message
-        }`
-      );
+      console.error("Error creating inbound RFQ:", error);
+      alert("Error creating inbound RFQ.");
     } finally {
       setIsLoading(false);
     }
@@ -1069,513 +174,1122 @@ const NewRFQForm = () => {
 
   return (
     <div className="container mx-auto mt-8 px-4 py-6 bg-transparent text-black rounded-lg shadow-lg border border-black">
-      <h2 className="text-2xl font-bold mb-6 text-center">Create New RFQ</h2>
+      <h2 className="text-2xl font-bold mb-6 text-center">
+        Create New Inbound RFQ 
+      </h2>
+
       <form
         onSubmit={handleSubmit}
         className="grid grid-cols-1 md:grid-cols-3 gap-6"
       >
+        {/* 1. RFQNumber */}
         <div className="mb-4">
-          <label className="block text-xl text-black">RFQ Number</label>
+          <label className="block text-xl text-black">
+            RFQ Number
+          </label>
           <input
             type="text"
             name="RFQNumber"
-            value={formData.RFQNumber}
+            value={formData.RFQNumber || ""} // fallback
             readOnly
             placeholder={isLoading ? "Loading..." : "RFQ Number"}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border bg-gray-200 border-black rounded-md shadow-sm"
             required
           />
         </div>
 
+        {/* 2. Item Description */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            RFQ Type
+          <label className="block text-xl text-black">
+            Item Description 
           </label>
           <select
-            name="rfqType"
-            value={formData.rfqType}
+            name="itemDescription"
+            value={formData.itemDescription || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
             required
           >
-            <option value="D2D">D2D (Day to Day)</option>
-            <option value="Long Term">Long Term</option>
+            <option value="">Select an Item</option>
+            <option value="Ethylene vinyl acetate sheets (EVA)">
+              Ethylene vinyl acetate sheets (EVA)
+            </option>
+            <option value="Tinned Copper interconnect-Wire/Ribbon">
+              Tinned Copper interconnect-Wire/Ribbon
+            </option>
+            <option value="Tinned Copper interconnect-Bus Bar">
+              Tinned Copper interconnect-Bus Bar
+            </option>
+            <option value="Solar tempered glass or solar tempered (anti-reflective coated) glass">
+              Solar tempered glass or solar tempered (anti-reflective coated)
+              glass
+            </option>
+            <option value="Photovoltaic cells">Photovoltaic cells</option>
+            <option value="Back sheet for Solar Module (Supplier: Jolywood KFB-30PLUS(WHITE)">
+              Back sheet for Solar Module (Supplier: Jolywood KFB-30PLUS(WHITE)
+            </option>
+            <option value="Back sheet- Transparent-for Solar Module (JOLYWOOD FFC JW30PLUS (TRANSPARENT)">
+              Back sheet- Transparent-for Solar Module (JOLYWOOD FFC JW30PLUS
+              (TRANSPARENT)
+            </option>
+            <option value="PET Back sheet-for Solar Module">
+              PET Back sheet-for Solar Module
+            </option>
+            <option value="Aluminium Profile/Frames">
+              Aluminium Profile/Frames
+            </option>
+            <option value="Junction Box (used solar Photovoltaic Modules)">
+              Junction Box (used solar Photovoltaic Modules)
+            </option>
+            <option value="Silicone Sealants used in Manufacturing of solar Photovoltaic Modules">
+              Silicone Sealants used in Manufacturing of solar Photovoltaic
+              Modules
+            </option>
+            <option value="POE (polymers of Ehtylene) Film">
+              POE (polymers of Ehtylene) Film
+            </option>
+            <option value="EPE Film">EPE Film</option>
+            <option value="Membrane Sheet">Membrane Sheet</option>
+            <option value="Teflon sheet">Teflon sheet</option>
+            <option value="Silver Conductor Front side Metallic Paste &amp; Silver Conductor paste Rear Side">
+              Silver Conductor Front side Metallic Paste &amp; Silver Conductor
+              paste Rear Side
+            </option>
+            <option value="Undefused silicon wafers">
+              Undefused silicon wafers
+            </option>
+            <option value="Aluminium paste">Aluminium paste</option>
+            <option value="Print screen">Print screen</option>
+            <option value="Additives">Additives</option>
+            <option value="TMA (TRIMETHYLALUMINUM)">
+              TMA (TRIMETHYLALUMINUM)
+            </option>
+            <option value="APRON BLUE">APRON BLUE</option>
+            <option value="CAP">CAP</option>
+            <option value="NITRILE GLOVES">NITRILE GLOVES</option>
+            <option value="BEMCOT WIPERS">BEMCOT WIPERS</option>
+            <option value="GASES-SILANE">GASES-SILANE</option>
           </select>
         </div>
 
+        {/* 3. Company Name */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Short Name
-          </label>
-          <input
-            type="text"
-            name="shortName"
-            value={formData.shortName}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 hover:bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          />
-          {errors.shortName && (
-            <p className="text-red-600 font-bold mt-1">{errors.shortName}</p>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Company Type
-          </label>
-          <input
-            type="text"
-            name="companyType"
-            value={formData.companyType}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          />
-          {errors.companyType && (
-            <p className="text-red-600 font-bold mt-1">{errors.companyType}</p>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            SAP Order
-          </label>
-          <input
-            type="text"
-            name="sapOrder"
-            value={formData.sapOrder}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          />
-          {errors.sapOrder && (
-            <p className="text-red-600 font-bold mt-1">{errors.sapOrder}</p>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Item Type
+          <label className="block text-xl text-black">
+            Company Name 
           </label>
           <select
-            name="itemType"
-            value={formData.itemType}
+            name="companyName"
+            value={formData.companyName || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
             required
           >
-            <option value="">Select Item Type</option>
-            <option value="Module">Module</option>
-            <option value="Cell">Cell</option>
-            <option value="Others">Others</option>
-          </select>
+            <option value="">Select</option>
 
-          {/* Conditionally render custom Item Type input */}
-          {formData.itemType === "Others" && (
-            <div className="mt-2">
-              <label className="block text-xl font-medium text-black">
-                Please specify Item Type
-              </label>
-              <input
-                type="text"
-                name="customItemType"
-                value={formData.customItemType}
-                onChange={handleChange}
-                className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                required
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Customer Name
-          </label>
-          <input
-            type="text"
-            name="customerName"
-            value={formData.customerName}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          />
-          {errors.customerName && (
-            <p className="text-red-600 font-bold mt-1">{errors.customerName}</p>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Origin Location
-          </label>
-          <input
-            type="text"
-            name="originLocation"
-            value={formData.originLocation}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          />
-          {errors.originLocation && (
-            <p className="text-red-600 font-bold mt-1">
-              {errors.originLocation}
-            </p>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Drop Location State
-          </label>
-          <select
-            name="dropLocationState"
-            value={formData.dropLocationState}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          >
-            <option value="">Select State</option>
-            {Object.keys(stateToDistricts).map((state) => (
-              <option key={state} value={state}>
-                {state}
-              </option>
-            ))}
+            <option value="Premier Energies Limited SURVEY NO 53 ANNARAM VILLAGAE G P ANNARAM
+              JINNARAM Mandal MEDAK District, Telangana-502313 India. IEC :
+              0996000402 PAN : AABCP8800D GST :36AABCP8800D1ZP">
+              
+              Premier Energies Limited SURVEY NO 53 ANNARAM VILLAGAE G P ANNARAM
+              JINNARAM Mandal MEDAK District, Telangana-502313 India. IEC :
+              0996000402 PAN : AABCP8800D GST :36AABCP8800D1ZP
+            </option>
+            
+            <option value="Premier Energies Photovoltaic Private Limited Plot No. 8/B/1/ and
+              8/B/2 E-City, Raviryala Village, Maheshwaram Mandal, Ranga Reddy,
+              Telangana, 501359,India. IEC : AAXCS4996H PAN : AAXCS4996H GST :
+              36AAXCS4996H1ZB">
+              Premier Energies Photovoltaic Private Limited Plot No. 8/B/1/ and
+              8/B/2 E-City, Raviryala Village, Maheshwaram Mandal, Ranga Reddy,
+              Telangana, 501359,India. IEC : AAXCS4996H PAN : AAXCS4996H GST :
+              36AAXCS4996H1ZB
+            </option>
+            <option value="Premier Energies International Private Limited- Unit 1
+              Unit-I,Survey No 62 P 63P and 88 P Plot No 8/B/1 and 8/B/2,
+              Raviryala Srinagar Village, Maheshwaram Mandal, Ranga Reddy
+              TS,Srinagar Village, Pedda Golconda ,
+              Rangareddy,Telangana,501359,India IEC : AATCA8732D PAN: AATCA8732D
+              GST : 36AATCA8732D1ZF">
+            Premier Energies International Private Limited- Unit 1
+              Unit-I,Survey No 62 P 63P and 88 P Plot No 8/B/1 and 8/B/2,
+              Raviryala Srinagar Village, Maheshwaram Mandal, Ranga Reddy
+              TS,Srinagar Village, Pedda Golconda ,
+              Rangareddy,Telangana,501359,India IEC : AATCA8732D PAN: AATCA8732D
+              GST : 36AATCA8732D1ZF
+            </option>
+            <option value="Premier Energies International Private Limited- Unit 2
+              Unit-II,Plot No S-95 S-96 S-100 S-101 S-102 S-103 S-104, Raviryala
+              Srinagar Village Maheswaram, FAB City, Rangareddy, Telangana,
+              501359,India IEC : AATCA8732D PAN: AATCA8732D GST :
+              36AATCA8732D1ZF">
+            Premier Energies International Private Limited- Unit 2
+              Unit-II,Plot No S-95 S-96 S-100 S-101 S-102 S-103 S-104, Raviryala
+              Srinagar Village Maheswaram, FAB City, Rangareddy, Telangana,
+              501359,India IEC : AATCA8732D PAN: AATCA8732D GST :
+              36AATCA8732D1ZF
+            </option>
+            <option value="Premier energies Global Environment Private Limited Plot No S-95,
+              S-96, S-100, S-101, S-102, S-103, S-104, Raviryala, Srinagar
+              Village, Maheswaram, Raviryal Industrial Area, FAB City,
+              Rangareddy, Telangana – 501359,India. IEC : AALCP9141K PAN:
+              AALCP9141K GST : 36AALCP9141K1ZW">
+            Premier energies Global Environment Private Limited Plot No S-95,
+              S-96, S-100, S-101, S-102, S-103, S-104, Raviryala, Srinagar
+              Village, Maheswaram, Raviryal Industrial Area, FAB City,
+              Rangareddy, Telangana – 501359,India. IEC : AALCP9141K PAN:
+              AALCP9141K GST : 36AALCP9141K1ZW
+            </option>
+            <option value="Premier Energies Global Environment Private Limited- Unit 2 Sy No
+              303 304 305 and 306/2, EMC Maheswaram, Ranga Reddy Dist, ,
+              Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
+              36AALCP9141K1ZW">
+            Premier Energies Global Environment Private Limited- Unit 2 Sy No
+              303 304 305 and 306/2, EMC Maheswaram, Ranga Reddy Dist, ,
+              Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
+              36AALCP9141K1ZW
+            </option>
           </select>
         </div>
 
+        {/* 4. PO Number */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Drop Location District
-          </label>
-          <select
-            name="dropLocationDistrict"
-            value={formData.dropLocationDistrict}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          >
-            <option value="">Select District</option>
-            {districtOptions.map((district) => (
-              <option key={district} value={district}>
-                {district}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="mb-4 md:col-span-3">
-          <label className="block text-xl font-medium text-black">
-            Destination Address (NOT including customer name)
-          </label>
-          <textarea
-            name="address"
-            value={formData.address}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          ></textarea>
-          {errors.address && (
-            <p className="text-red-600 font-bold mt-1">{errors.address}</p>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Pincode
+          <label className="block text-xl text-black">
+            Material PO Number 
           </label>
           <input
             type="text"
-            name="pincode"
-            value={formData.pincode}
+            name="poNumber"
+            value={formData.poNumber || ""}
             onChange={handleChange}
-            maxLength="6"
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
             required
           />
-          {errors.pincode && (
-            <p className="text-red-600 font-bold mt-1">{errors.pincode}</p>
-          )}
-        </div> 
+        </div>
 
+        {/* 5. Supplier Name */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Vehicle Type
+          <label className="block text-xl text-black">
+            Supplier Name 
           </label>
           <select
-            name="vehicleType"
-            value={formData.vehicleType}
+            name="supplierName"
+            value={formData.supplierName || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
             required
           >
-            <option value="">Select Vehicle Type</option>
-            <option value="Container">Container</option>
-            <option value="Open Trailer">Open Trailer</option>
-            <option value="DCM">DCM</option>
-            <option value="Tractor">Tractor</option>
-            <option value="Pickup">Pickup</option>
+            <option value="">Select Supplier</option>
+            <option value="HORAD AUTOMATIC TECHNOLOG">
+              HORAD AUTOMATIC TECHNOLOG
+            </option>
+            <option value="CHANGZHOU GS ENERGYAND TECH CO., LTD">
+              CHANGZHOU GS ENERGYAND TECH CO., LTD
+            </option>
+            <option value="BUDASOL MFG.KFT">BUDASOL MFG.KFT</option>
+            <option value="CHANGZHOU SVECK PHOTOVOLTNEW MATERIAL CO., LTD">
+              CHANGZHOU SVECK PHOTOVOLTNEW MATERIAL CO., LTD
+            </option>
+            <option value="ZHEJIANG TWINSEL ELECTRONTECHNOLOGY CO., LTD.">
+              ZHEJIANG TWINSEL ELECTRONTECHNOLOGY CO., LTD.
+            </option>
+            <option value="ZHEJIANG ZHONGHUAN SUNTERPV TECHNOLOGY CO.,LTD">
+              ZHEJIANG ZHONGHUAN SUNTERPV TECHNOLOGY CO.,LTD
+            </option>
+            <option value="WUXI AUTOWELL SUPPLYCHAIN MANAGEMENT CO LTD">
+              WUXI AUTOWELL SUPPLYCHAIN MANAGEMENT CO LTD
+            </option>
+            <option value="JIANGYIN HAIHONG NEWENERGY TECHNOLOGY CO., LT">
+              JIANGYIN HAIHONG NEWENERGY TECHNOLOGY CO., LT
+            </option>
+            <option value="JIANGYIN NEW SULV TECHNOL">
+              JIANGYIN NEW SULV TECHNOL
+            </option>
+            <option value="COVEME SPA">COVEME SPA</option>
+            <option value="WUXI LEAD INTELLIGENTEQUIPMENT CO, LTD,">
+              WUXI LEAD INTELLIGENTEQUIPMENT CO, LTD,
+            </option>
+            <option value="JIANGSU HIGHSTAR BATTERYMANUFACTURING CO.,LTD">
+              JIANGSU HIGHSTAR BATTERYMANUFACTURING CO.,LTD
+            </option>
+            <option value="PENGYANG PUMP TAIZHOU CO.">
+              PENGYANG PUMP TAIZHOU CO.
+            </option>
+            <option value="TARGRAY INTERNATIONAL INC">
+              TARGRAY INTERNATIONAL INC
+            </option>
+            <option value="HANGZHOU ZHIJIANG SILICONCHEMICALS CO. LTD">
+              HANGZHOU ZHIJIANG SILICONCHEMICALS CO. LTD
+            </option>
+            <option value="GSOLAR POWER CO LTD">GSOLAR POWER CO LTD</option>
+            <option value="CENTRO ENERGY CO., LTD">
+              CENTRO ENERGY CO., LTD
+            </option>
+            <option value="DONGGUAN DALY ELECTRONICS">
+              DONGGUAN DALY ELECTRONICS
+            </option>
+            <option value="SHANDONG TIANQU ALUMINUM">
+              SHANDONG TIANQU ALUMINUM
+            </option>
+            <option value="MBC SOLAR ENERGY LIMITED">
+              MBC SOLAR ENERGY LIMITED
+            </option>
+            <option value="REIWA (YINGKOU) TRADING C">
+              REIWA (YINGKOU) TRADING C
+            </option>
+            <option value="ENETB2C COMPANY">ENETB2C COMPANY</option>
+            <option value="SHENZHEN GROWATTNEW ENERGY CO.,LIMITED">
+              SHENZHEN GROWATTNEW ENERGY CO.,LIMITED
+            </option>
+            <option value="SENERGY TECHINICAL SERVIC(SHANGAI) CO. LTD">
+              SENERGY TECHINICAL SERVIC(SHANGAI) CO. LTD
+            </option>
+            <option value="CHANGZHOU MANWE PV TECH C">
+              CHANGZHOU MANWE PV TECH C
+            </option>
+            <option value="JIANGYIN XINGTONG METALPRODUCTS CO.,LTD">
+              JIANGYIN XINGTONG METALPRODUCTS CO.,LTD
+            </option>
+            <option value="TONGWEI SOLAR CO., LTD">
+              TONGWEI SOLAR CO., LTD
+            </option>
+            <option value="QC SOLAR (SUZHOU) CORPORA">
+              QC SOLAR (SUZHOU) CORPORA
+            </option>
+            <option value="XINYI SOLAR MALAYSIA SDN">
+              XINYI SOLAR MALAYSIA SDN
+            </option>
+            <option value="JIANGYIN JINGYING PHOTOVOMATERIALS CO.LTD.">
+              JIANGYIN JINGYING PHOTOVOMATERIALS CO.LTD.
+            </option>
+            <option value="SOL-LITE MANUFACTURING CO">
+              SOL-LITE MANUFACTURING CO
+            </option>
+            <option value="HANGZHOU FIRST APPLIED MALTD.">
+              HANGZHOU FIRST APPLIED MALTD.
+            </option>
+            <option value="XI'AN TELISON NEW MATERIA">
+              XI'AN TELISON NEW MATERIA
+            </option>
+            <option value="COVEME ENGINEERED FILMS Z">
+              COVEME ENGINEERED FILMS Z
+            </option>
+            <option value="JOLYWOOD(SUZHOU) SUNWATT">
+              JOLYWOOD(SUZHOU) SUNWATT
+            </option>
+            <option value="SHANGHAI SOSUN NEW ENERGYTECHNOLOGY CO.,LTD.">
+              SHANGHAI SOSUN NEW ENERGYTECHNOLOGY CO.,LTD.
+            </option>
+            <option value="WEGOMA ASIA LIMITED">WEGOMA ASIA LIMITED</option>
+            <option value="POWERCHINA TRADE SOLUTION">
+              POWERCHINA TRADE SOLUTION
+            </option>
+            <option value="JIANGYIN TIANMU GREEN ENETECHNOLOGY CO.,LTD">
+              JIANGYIN TIANMU GREEN ENETECHNOLOGY CO.,LTD
+            </option>
+            <option value="CHANGZHOU FUFENG MATERIALTECHNOLOGY CO.,LTD">
+              CHANGZHOU FUFENG MATERIALTECHNOLOGY CO.,LTD
+            </option>
+            <option value="TAICANG JUREN INTERNATIONTRADE CO., LTD.">
+              TAICANG JUREN INTERNATIONTRADE CO., LTD.
+            </option>
+            <option value="SHANDONG TIANQU ENGINEERI">
+              SHANDONG TIANQU ENGINEERI
+            </option>
+            <option value="HARTALEGA NGC SDN BHD">HARTALEGA NGC SDN BHD</option>
+            <option value="SHENZHEN S.C NEW ENERGYTECHNOLOGY CORPORATION">
+              SHENZHEN S.C NEW ENERGYTECHNOLOGY CORPORATION
+            </option>
+            <option value="CENTROTHERM INTERNATIONAL">
+              CENTROTHERM INTERNATIONAL
+            </option>
+            <option value="GARBER TRADE LIMITED">GARBER TRADE LIMITED</option>
+            <option value="FLAT(HONG KONG)CO.,LTD">
+              FLAT(HONG KONG)CO.,LTD
+            </option>
+            <option value="NINGBO GZX PV TECHNOLOGY">
+              NINGBO GZX PV TECHNOLOGY
+            </option>
+            <option value="VIVA SOLAR FZC">VIVA SOLAR FZC</option>
+            <option value="SHANGHAI SUNTECH POWERTECHNOLOGY CO., LTD">
+              SHANGHAI SUNTECH POWERTECHNOLOGY CO., LTD
+            </option>
+            <option value="INGENIOUS AUTOMATIC GROUP">
+              INGENIOUS AUTOMATIC GROUP
+            </option>
+            <option value="H.A.L.M ELEKRONIK GMBH">
+              H.A.L.M ELEKRONIK GMBH
+            </option>
+            <option value="CHANGZHOU HERSHEY-POWERNEW ENERGY CO.,LTD">
+              CHANGZHOU HERSHEY-POWERNEW ENERGY CO.,LTD
+            </option>
+            <option value="SUZHOU AUTOWAY SYSTEM CO.">
+              SUZHOU AUTOWAY SYSTEM CO.
+            </option>
+            <option value="ZHUHAI GMEE SOLAR EQUIPME">
+              ZHUHAI GMEE SOLAR EQUIPME
+            </option>
+            <option value="HERAEUS MATERIALS SINGAPO">
+              HERAEUS MATERIALS SINGAPO
+            </option>
+            <option value="CHANGZHOU S.C SMART EQUIP">
+              CHANGZHOU S.C SMART EQUIP
+            </option>
+            <option value="DAS ENVIRONMENTAL EXPERTS">
+              DAS ENVIRONMENTAL EXPERTS
+            </option>
+            <option value="SHANGHAI PENGQIAN TRANSMIEQUIPMENT CO.,LTD">
+              SHANGHAI PENGQIAN TRANSMIEQUIPMENT CO.,LTD
+            </option>
+            <option value="INTERNATIONAL ELECTROTECHCOMMISSION">
+              INTERNATIONAL ELECTROTECHCOMMISSION
+            </option>
+            <option value="FREIBERG INSTRUMENTS GMBH">
+              FREIBERG INSTRUMENTS GMBH
+            </option>
+            <option value="JIA YUE GROUP CO., LTD">
+              JIA YUE GROUP CO., LTD
+            </option>
+            <option value="DIGI-KEY ELECTRONICS">DIGI-KEY ELECTRONICS</option>
+            <option value="YINGKOU JINCHEN MACHINERY">
+              YINGKOU JINCHEN MACHINERY
+            </option>
+            <option value="TUV NORD (HANGZHOU) CO.,">
+              TUV NORD (HANGZHOU) CO.,
+            </option>
+            <option value="HERAEUS PHOTOVOLTAICS SIN">
+              HERAEUS PHOTOVOLTAICS SIN
+            </option>
+            <option value="SUZHOU ENJOYSUN TECHNOLOG">
+              SUZHOU ENJOYSUN TECHNOLOG
+            </option>
+            <option value="CHANGZHOU S.C EXACT EQUIP">
+              CHANGZHOU S.C EXACT EQUIP
+            </option>
+            <option value="SOLAMET ELECTRONIC MATERI(H.K) LIMITED">
+              SOLAMET ELECTRONIC MATERI(H.K) LIMITED
+            </option>
+            <option value="EVOQUA WATER TECHNOLOGIES">
+              EVOQUA WATER TECHNOLOGIES
+            </option>
+            <option value="SHENZHEN EMBRACE GLORY ELMATERIAL CO.,LTD">
+              SHENZHEN EMBRACE GLORY ELMATERIAL CO.,LTD
+            </option>
+            <option value="ZHONGLI TALESUN HONG KONG">
+              ZHONGLI TALESUN HONG KONG
+            </option>
+            <option value="CHANGZHOU FUSION NEW MATECO., LTD">
+              CHANGZHOU FUSION NEW MATECO., LTD
+            </option>
+            <option value="INSPIRED ENERGY CO LTD">
+              INSPIRED ENERGY CO LTD
+            </option>
+            <option value="NA">NA</option>
+            <option value="JIANGSU FUJIHALO NEW ENER">
+              JIANGSU FUJIHALO NEW ENER
+            </option>
+            <option value="XINYI SOLAR (HONG KONG)">
+              XINYI SOLAR (HONG KONG)
+            </option>
+            <option value="FEEJOY TECHNOLOGY(SHANGHA">
+              FEEJOY TECHNOLOGY(SHANGHA
+            </option>
+            <option value="ATLAS COPCO (WUXI) COMPRE">
+              ATLAS COPCO (WUXI) COMPRE
+            </option>
+            <option value="GCL SOLAR POWER(SUZHOU)LMITED">
+              GCL SOLAR POWER(SUZHOU)LMITED
+            </option>
+            <option value="RENA TECHNOLOGIES GMBH">
+              RENA TECHNOLOGIES GMBH
+            </option>
+            <option value="SUZHOU TOPS NEW MATERIAL">
+              SUZHOU TOPS NEW MATERIAL
+            </option>
+            <option value="ASIA NEO TECH INDUSTRIALCO., LTD">
+              ASIA NEO TECH INDUSTRIALCO., LTD
+            </option>
+            <option value="AKCOME METALS TECHNOLOGY(CO.,LTD">
+              AKCOME METALS TECHNOLOGY(CO.,LTD
+            </option>
+            <option value="MAXWELL TECHNOLOGY PTE. L">
+              MAXWELL TECHNOLOGY PTE. L
+            </option>
+            <option value="ZHEJIANG AIKO SOLAR TECHNCO., LTD">
+              ZHEJIANG AIKO SOLAR TECHNCO., LTD
+            </option>
+            <option value="WUXI RUXING TECHNOLOGYDEVELOPMENT CO. LTD">
+              WUXI RUXING TECHNOLOGYDEVELOPMENT CO. LTD
+            </option>
+            <option value="FRAUNHOFER INSTITUT FUERSOLARE ENER-GIESYSTEM">
+              FRAUNHOFER INSTITUT FUERSOLARE ENER-GIESYSTEM
+            </option>
+            <option value="WUHAN DR LASER TECHNOLOGYCORP., LTD">
+              WUHAN DR LASER TECHNOLOGYCORP., LTD
+            </option>
+            <option value="WUXI HIGHLIGHT NEW ENERGY">
+              WUXI HIGHLIGHT NEW ENERGY
+            </option>
+            <option value="GIGA SOLAR MATERIALS CORP">
+              GIGA SOLAR MATERIALS CORP
+            </option>
+            <option value="BYSOL-LITE MANUFACTURING">
+              BYSOL-LITE MANUFACTURING
+            </option>
+            <option value="KOMEX INC">KOMEX INC</option>
+            <option value="BRAVE C&H SUPPLY CO., LTD">
+              BRAVE C&H SUPPLY CO., LTD
+            </option>
+            <option value="GUANGZHOU BAIYUN TECHNOLOCO.,LTD.">
+              GUANGZHOU BAIYUN TECHNOLOCO.,LTD.
+            </option>
+            <option value="SUNFONERGY TECHNOLOGIES (">
+              SUNFONERGY TECHNOLOGIES (
+            </option>
+            <option value="JIANGSU HUAHENG NEW ENERGCO., LTD.">
+              JIANGSU HUAHENG NEW ENERGCO., LTD.
+            </option>
+            <option value="JIANGXI HONGGE TECHNOLOGY">
+              JIANGXI HONGGE TECHNOLOGY
+            </option>
+            <option value="ROBOTECHNIK INTELLIGENT TCO., LTD.">
+              ROBOTECHNIK INTELLIGENT TCO., LTD.
+            </option>
+            <option value="CHANGZHOU PLET INTERNATIOCO., LTD.">
+              CHANGZHOU PLET INTERNATIOCO., LTD.
+            </option>
+            <option value="GENERAL SOLUTIONS &amp; TRADI">
+              GENERAL SOLUTIONS &amp; TRADI
+            </option>
+            <option value="TANGSHAN YANGTAI IMPORT&amp;EXPORT TRADE CO. LTD.">
+              TANGSHAN YANGTAI IMPORT&amp;EXPORT TRADE CO. LTD.
+            </option>
+            <option value="SHENZHEN S.C NEW ENERGYTECHNOLOGY CORPORATION">
+              SHENZHEN S.C NEW ENERGYTECHNOLOGY CORPORATION
+            </option>
+            <option value="SUZHOU SUNERGY TECHNOLOGY">
+              SUZHOU SUNERGY TECHNOLOGY
+            </option>
+            <option value="SINGAPORE SATORI PTE.LTD">
+              SINGAPORE SATORI PTE.LTD
+            </option>
+            <option value="HENGDIAN GROUP DMEGC MAGN">
+              HENGDIAN GROUP DMEGC MAGN
+            </option>
+            <option value="DAS ENVIRONMENTAL EXPERTS">
+              DAS ENVIRONMENTAL EXPERTS
+            </option>
+            {/* --- Continue with the rest of your supplier options exactly as provided --- */}
+            <option value="SHENZHEN BEITE PURIFICATICO., LTD">
+              SHENZHEN BEITE PURIFICATICO., LTD
+            </option>
+            <option value="XIAMEN XIANGYU NEW ENERGY">
+              XIAMEN XIANGYU NEW ENERGY
+            </option>
+            <option value="ISRA VISION GMBH">ISRA VISION GMBH</option>
+            <option value="GNBS ECO CO.,LTD">GNBS ECO CO.,LTD</option>
+            <option value="JIANGXI RISUNSOLARSALES C">
+              JIANGXI RISUNSOLARSALES C
+            </option>
+            <option value="WUJIANG CSG GLASS CO., LT">
+              WUJIANG CSG GLASS CO., LT
+            </option>
+            <option value="DAS ENVIRONMENTAL EQUIPMEPTE LTD">
+              DAS ENVIRONMENTAL EQUIPMEPTE LTD
+            </option>
+            <option value="SHENZHEN OUBEL TECHNOLOGY">
+              SHENZHEN OUBEL TECHNOLOGY
+            </option>
+            <option value="NMTORNICS (INDIA)- KERRYSEZ UNIT">
+              NMTORNICS (INDIA)- KERRYSEZ UNIT
+            </option>
+            <option value="DONGGUAN CSG SOLAR GLASS">
+              DONGGUAN CSG SOLAR GLASS
+            </option>
+            <option value="CYBRID TECHNOLOGIES INC">
+              CYBRID TECHNOLOGIES INC
+            </option>
+            <option value="CHIZHOU ANAN ALUMINUM CO.">
+              CHIZHOU ANAN ALUMINUM CO.
+            </option>
+            <option value="XINYI PV PRODUCTS(ANHUI)LTD.">
+              XINYI PV PRODUCTS(ANHUI)LTD.
+            </option>
+            <option value="RADIATION TECHNOLOGY CO.,">
+              RADIATION TECHNOLOGY CO.,
+            </option>
+            <option value="SHENZHEN TOPRAY SOLAR CO.">
+              SHENZHEN TOPRAY SOLAR CO.
+            </option>
+            <option value="GUANGDONG JINWAN GAOJINGENERGY TECHNOLOGY">
+              GUANGDONG JINWAN GAOJINGENERGY TECHNOLOGY
+            </option>
+            <option value="CHUXIONG LONGI SILICON MACO.,LTD">
+              CHUXIONG LONGI SILICON MACO.,LTD
+            </option>
+            <option value="SHANGRAO JIETAI NEW ENERG">
+              SHANGRAO JIETAI NEW ENERG
+            </option>
+            <option value="SUZHOU SHENGCHENG SOLAR ECO., LTD">
+              SUZHOU SHENGCHENG SOLAR ECO., LTD
+            </option>
+            <option value="CLIMAVENETA CHAT UNION REEQUIPMENT (SHANGHAI) CO.,">
+              CLIMAVENETA CHAT UNION REEQUIPMENT (SHANGHAI) CO.,
+            </option>
+            <option value="SHENGCHENG TECHNOLOGY PTE">
+              SHENGCHENG TECHNOLOGY PTE
+            </option>
+            <option value="PASAN SA">PASAN SA</option>
+            <option value="BENTHAM INSTRUMENTS LTD">
+              BENTHAM INSTRUMENTS LTD
+            </option>
+            <option value="CHUZHOU JIETAI NEW ENERGYTECHNOLOGY CO.">
+              CHUZHOU JIETAI NEW ENERGYTECHNOLOGY CO.
+            </option>
+            <option value="TECH GATE ENGINEERING PTE">
+              TECH GATE ENGINEERING PTE
+            </option>
+            <option value="TERASOLAR ENERGY MATERIAL">
+              TERASOLAR ENERGY MATERIAL
+            </option>
+            <option value="JIANGSU PROVINCIAL FOREIGTRADE CORPORATION">
+              JIANGSU PROVINCIAL FOREIGTRADE CORPORATION
+            </option>
+            <option value="JIANGSU HUANENG INTELLIGEENERGY SUPPLY CHAIN TECHN">
+              JIANGSU HUANENG INTELLIGEENERGY SUPPLY CHAIN TECHN
+            </option>
+            <option value="SOLAR LONG PV-TECH (CAMBOCO., LTD.">
+              SOLAR LONG PV-TECH (CAMBOCO., LTD.
+            </option>
+            <option value="AIDU ENERGY CO.,LTD">AIDU ENERGY CO.,LTD</option>
+            <option value="AIDU ENERGY PTE.LTD.">AIDU ENERGY PTE.LTD.</option>
+            <option value="RE PLUS EVENTS, LLC">RE PLUS EVENTS, LLC</option>
+            <option value="JIANGYIN TINZE NEW ENERGYTECHNOLOGY CO.,LTD">
+              JIANGYIN TINZE NEW ENERGYTECHNOLOGY CO.,LTD
+            </option>
+            <option value="SHANGHAI HUITIAN NEWMATERIAL CO.,LTD.">
+              SHANGHAI HUITIAN NEWMATERIAL CO.,LTD.
+            </option>
+            <option value="ZHONGHUAN HONG KONGHOLDING LIMITED">
+              ZHONGHUAN HONG KONGHOLDING LIMITED
+            </option>
+            <option value="SEMILAB SEMICONDUCTORPHYSICS LABORATORY CO. LT">
+              SEMILAB SEMICONDUCTORPHYSICS LABORATORY CO. LT
+            </option>
+            <option value="SOLAMET ELECTONIC MATERIA(H.K) LIMITED">
+              SOLAMET ELECTONIC MATERIA(H.K) LIMITED
+            </option>
+            <option value="KINGRAYLAND TECHNOLOGY CO">
+              KINGRAYLAND TECHNOLOGY CO
+            </option>
+            <option value="HK APK LIMITED">HK APK LIMITED</option>
+            <option value="SHANHAI SUPER SOLAR NEWENERGY TECHNOLOGY">
+              SHANHAI SUPER SOLAR NEWENERGY TECHNOLOGY
+            </option>
+            <option value="ZEALWE TECHNICAL CO., LTD">
+              ZEALWE TECHNICAL CO., LTD
+            </option>
+            <option value="HLA SUPPLY CHAIN SOLUTION">
+              HLA SUPPLY CHAIN SOLUTION
+            </option>
+            <option value="CYBRID TECHNOLOGIES (ZHEJ">
+              CYBRID TECHNOLOGIES (ZHEJ
+            </option>
+            <option value="SHANGHAI BERLING TECHNOLOCO., LTD">
+              SHANGHAI BERLING TECHNOLOCO., LTD
+            </option>
+            <option value="SHANDONG AOSHIGARMENT CO.">
+              SHANDONG AOSHIGARMENT CO.
+            </option>
+            <option value="ZHANGJIAGANG SIMPULSE-TEC">
+              ZHANGJIAGANG SIMPULSE-TEC
+            </option>
+            <option value="WATERON TECHNOLOGY (HONGCO., LTD.">
+              WATERON TECHNOLOGY (HONGCO., LTD.
+            </option>
+            <option value="XIAMEN C&D COMMODITY TRAD">
+              XIAMEN C&D COMMODITY TRAD
+            </option>
+            <option value="SINGAPORE ASAHI CHEMICALSOLDER INDUSTRIES PVT LTD">
+              SINGAPORE ASAHI CHEMICALSOLDER INDUSTRIES PVT LTD
+            </option>
+            <option value="BRIGHTSPOT AUTOMATION LLP">
+              BRIGHTSPOT AUTOMATION LLP
+            </option>
+            <option value="SUZHOU  DRLINK  AUTOMATIOTECHNOLOGY CO, LTD.">
+              SUZHOU DRLINK AUTOMATIOTECHNOLOGY CO, LTD.
+            </option>
+            <option value="NINGBO EXCITON NEWENERGY CO.,LTD">
+              NINGBO EXCITON NEWENERGY CO.,LTD
+            </option>
+            <option value="VOYAGER TRADINGPARTNERS LLC">
+              VOYAGER TRADINGPARTNERS LLC
+            </option>
+            <option value="JIANGSU PHOENTY PHOTOELECTECNOLOGY CO.,LTD">
+              JIANGSU PHOENTY PHOTOELECTECNOLOGY CO.,LTD
+            </option>
+            <option value="JIANGSU MINGHAO NEW MATERSCI-TECH CORPORATION">
+              JIANGSU MINGHAO NEW MATERSCI-TECH CORPORATION
+            </option>
+            <option value="DRIP CAPITAL, INC.">DRIP CAPITAL, INC.</option>
+            <option value="CV. BALI EXPORT IMPORT">
+              CV. BALI EXPORT IMPORT
+            </option>
+            <option value="WUXI DK ELECTRONIC MATERICO., LTD">
+              WUXI DK ELECTRONIC MATERICO., LTD
+            </option>
+            <option value="SUZHOU ISILVER MATERIALSCO., LTD.">
+              SUZHOU ISILVER MATERIALSCO., LTD.
+            </option>
+            <option value="TIANJIN AIKO SOLAR TECHOLCO., LTD.">
+              TIANJIN AIKO SOLAR TECHOLCO., LTD.
+            </option>
+            <option value="ZHEJIANG NINGHAI KIBINGNEW ENERGY MANAGEMENT CO.">
+              ZHEJIANG NINGHAI KIBINGNEW ENERGY MANAGEMENT CO.
+            </option>
+            <option value="JIANGXI TOPSUN SOLAR TECHCO., LTD">
+              JIANGXI TOPSUN SOLAR TECHCO., LTD
+            </option>
+            <option value="PFEIFFER VACUUM SAS">PFEIFFER VACUUM SAS</option>
+            <option value="ZHEJIANG RENHE PHOTOVOLTATECHNOLOGY CO.,LTD">
+              ZHEJIANG RENHE PHOTOVOLTATECHNOLOGY CO.,LTD
+            </option>
+            <option value="JIANGSU MEIKE SOLAR TECHN">
+              JIANGSU MEIKE SOLAR TECHN
+            </option>
+            <option value="WUXI HIGHLIGHT NEW ENERGYTECHNOLOGY CO., LTD">
+              WUXI HIGHLIGHT NEW ENERGYTECHNOLOGY CO., LTD
+            </option>
+            <option value="JIANGYIN YUANSHUO METALTECHNOLOGY CO., LTD.">
+              JIANGYIN YUANSHUO METALTECHNOLOGY CO., LTD.
+            </option>
+            <option value="JIANGSU HOLYSUN ELECTRONITECHNOLOGY CO., LTD.">
+              JIANGSU HOLYSUN ELECTRONITECHNOLOGY CO., LTD.
+            </option>
+            <option value="SCENERGY TECHNOLOGY LIMIT">
+              SCENERGY TECHNOLOGY LIMIT
+            </option>
+            <option value="PURITECH CO., LTD.">PURITECH CO., LTD.</option>
+            <option value="AIR GAS ELECTRONICMATERIALS ENTERPRISE CO.">
+              AIR GAS ELECTRONICMATERIALS ENTERPRISE CO.
+            </option>
+            <option value="ANHUI CSG NEW ENERGYMATERIAL TECHNOLOGY CO.,L">
+              ANHUI CSG NEW ENERGYMATERIAL TECHNOLOGY CO.,L
+            </option>
+            <option value="SUZHOU MAXWELL TECHNOLOGICO., LTD.">
+              SUZHOU MAXWELL TECHNOLOGICO., LTD.
+            </option>
+            <option value="WUXI LERIN NEW ENERGYTECHNOLOGY CO.,LTD">
+              WUXI LERIN NEW ENERGYTECHNOLOGY CO.,LTD
+            </option>
+            <option value="WUXI U PLUSTECHNOLOGY CO.LTD">
+              WUXI U PLUSTECHNOLOGY CO.LTD
+            </option>
+            <option value="HONGYUAN NEW MATERIAL(BAOTOU) CO., LTD.">
+              HONGYUAN NEW MATERIAL(BAOTOU) CO., LTD.
+            </option>
+            <option value="SUZHOU SHD INTELLIGENTTECHNOLOGIES CO., LTD.">
+              SUZHOU SHD INTELLIGENTTECHNOLOGIES CO., LTD.
+            </option>
+            <option value="SHUANGLIANG INTERNATIONAL(SHANGHAI) CO., LTD">
+              SHUANGLIANG INTERNATIONAL(SHANGHAI) CO., LTD
+            </option>
+            <option value="SHANGHAI XINZHUOZHUANGPRINTING TECHNOLOGY CO.,">
+              SHANGHAI XINZHUOZHUANGPRINTING TECHNOLOGY CO.,
+            </option>
+            <option value="VOSTRO ELECTRONICTECHNOLOGY(SUZHOU)CO.,LTD">
+              VOSTRO ELECTRONICTECHNOLOGY(SUZHOU)CO.,LTD
+            </option>
+            <option value="SUZHOU FLY SOLARTECHNOLOGY CO. , LTD">
+              SUZHOU FLY SOLARTECHNOLOGY CO. , LTD
+            </option>
+            <option value="ZHEJIANG DOUBLE HEAD EAGLIMPORT&amp;EXPORT CO.,LTD.">
+              ZHEJIANG DOUBLE HEAD EAGLIMPORT&amp;EXPORT CO.,LTD.
+            </option>
+            <option value="MEHTA PTE LTD.">MEHTA PTE LTD.</option>
+            <option value="HANG YUE TONGCOMPANY LIMITED">
+              HANG YUE TONGCOMPANY LIMITED
+            </option>
+            <option value="XIAMEN CANDOUR CO., LTD">
+              XIAMEN CANDOUR CO., LTD
+            </option>
+            <option value="FRINTRUP NB SPECIAL SCREETECHNOLOGY (KUNSHAN) CO.,">
+              FRINTRUP NB SPECIAL SCREETECHNOLOGY (KUNSHAN) CO.,
+            </option>
+            <option value="SOLAR N PLUS NEW ENERGYTECHNOLOGY CO., LTD.">
+              SOLAR N PLUS NEW ENERGYTECHNOLOGY CO., LTD.
+            </option>
+            <option value="SNL CORPORATION">SNL CORPORATION</option>
+            <option value="DONGGUAN MIVISIONTECHNOLOGY CO., LTD">
+              DONGGUAN MIVISIONTECHNOLOGY CO., LTD
+            </option>
+            <option value="JIANGSU HAITIANMICROELECTRONICS CORP.">
+              JIANGSU HAITIANMICROELECTRONICS CORP.
+            </option>
+            <option value="CHANGSHU TOPS PV MATERIAL">
+              CHANGSHU TOPS PV MATERIAL
+            </option>
+            <option value="FUJIAN  UNITE  MATERIALTECHNOLOGY  CO., LTD.">
+              FUJIAN UNITE MATERIALTECHNOLOGY CO., LTD.
+            </option>
+            <option value="SUZHOU QIANTONG INSTRUMENEQUIPMENT CO., LTD.">
+              SUZHOU QIANTONG INSTRUMENEQUIPMENT CO., LTD.
+            </option>
+            <option value="FUSION MATERIAL TECHNOLOG">
+              FUSION MATERIAL TECHNOLOG
+            </option>
+            <option value="TONGWEI SOLAR (MEISHAN) C">
+              TONGWEI SOLAR (MEISHAN) C
+            </option>
+            <option value="QINGDAO GAOCE TECHNOLOGY">
+              QINGDAO GAOCE TECHNOLOGY
+            </option>
+            <option value="DONGGUAN MINWEI PHOTOELECTECHNOLOGY">
+              DONGGUAN MINWEI PHOTOELECTECHNOLOGY
+            </option>
+            <option value="T-SUN NEW ENERGY LIMITED">
+              T-SUN NEW ENERGY LIMITED
+            </option>
+            <option value="JIANGSU TONGLING ELECTRIC">
+              JIANGSU TONGLING ELECTRIC
+            </option>
+            <option value="GEMUE GEBR MUELLER APPARAGMBH &amp; CO">
+              GEMUE GEBR MUELLER APPARAGMBH &amp; CO
+            </option>
+            <option value="SICHUAN MEIKE NEW ENERGY">
+              SICHUAN MEIKE NEW ENERGY
+            </option>
+            <option value="LONGI GREEN ENERGY TECHNO">
+              LONGI GREEN ENERGY TECHNO
+            </option>
+            <option value="INTRALINKS INC.">INTRALINKS INC.</option>
+            <option value="IDEAL DEPOSITION EQUIPMENAND APPLICATIONS(ZHEJIANG">
+              IDEAL DEPOSITION EQUIPMENAND APPLICATIONS(ZHEJIANG
+            </option>
+            <option value="FUZHOU ANTONG NEW MATERIATECHNOLOGY CO.,LTD.">
+              FUZHOU ANTONG NEW MATERIATECHNOLOGY CO.,LTD.
+            </option>
+            <option value="JIANGSU KUNA NEW ENERGY C">
+              JIANGSU KUNA NEW ENERGY C
+            </option>
+            <option value="SKY GLOVES">SKY GLOVES</option>
+            <option value="VIETNAM ADVANCE FILM MATECOMPANY LIMITED">
+              VIETNAM ADVANCE FILM MATECOMPANY LIMITED
+            </option>
+            <option value="CHANGZHOU CHENNAI NEW ENECO.,LTD">
+              CHANGZHOU CHENNAI NEW ENECO.,LTD
+            </option>
+            <option value="AN LAM CO., LTD">AN LAM CO., LTD</option>
+            <option value="SUZHOU CHANGQING NEWMATERIAL CO., LTD.">
+              SUZHOU CHANGQING NEWMATERIAL CO., LTD.
+            </option>
+            <option value="ICB GMBH &amp; CO. KG">ICB GMBH &amp; CO. KG</option>
+            <option value="C AND B INTERNATIONAL HOL">
+              C AND B INTERNATIONAL HOL
+            </option>
+            <option value="HUAIAN JIETAI NEW ENERGYTECHNOLOGY CO LTD">
+              HUAIAN JIETAI NEW ENERGYTECHNOLOGY CO LTD
+            </option>
+            <option value="SUZHOU YOURBEST NEW-TYPEMATERIALS CO.,LTD">
+              SUZHOU YOURBEST NEW-TYPEMATERIALS CO.,LTD
+            </option>
+            <option value="JOHNSON CONTROLS (S) PTE.">
+              JOHNSON CONTROLS (S) PTE.
+            </option>
+            <option value="FOMEX GLOBAL JOINT STOCK">
+              FOMEX GLOBAL JOINT STOCK
+            </option>
+            <option value="BETTERIAL ( VIET NAM ) FICOMPANY  LIMITED">
+              BETTERIAL ( VIET NAM ) FICOMPANY LIMITED
+            </option>
+            <option value="SHENZHEN PARTNERAE ELECTR">
+              SHENZHEN PARTNERAE ELECTR
+            </option>
+            <option value="EMPIRE PUMPS LTD.">EMPIRE PUMPS LTD.</option>
+            <option value="JIANGSU LONGHENG NEW ENERCO., LTD">
+              JIANGSU LONGHENG NEW ENERCO., LTD
+            </option>
+            <option value="CHUZHOU AIKO SOLAR TECHNO">
+              CHUZHOU AIKO SOLAR TECHNO
+            </option>
+            <option value="CE CELL ENGINEERING GMBH">
+              CE CELL ENGINEERING GMBH
+            </option>
+            <option value="SHANGHAI YANG ER IMPORT ACOMPANY LTD">
+              SHANGHAI YANG ER IMPORT ACOMPANY LTD
+            </option>
+            <option value="GUANGZHOU YICHUANG ELECTR">
+              GUANGZHOU YICHUANG ELECTR
+            </option>
+            <option value="SHENZHEN SOFARSOLAR CO.,">
+              SHENZHEN SOFARSOLAR CO.,
+            </option>
+            <option value="ANHUI SHIJING SOLARPOWERTECHNOLOGY CO.,LTD">
+              ANHUI SHIJING SOLARPOWERTECHNOLOGY CO.,LTD
+            </option>
+            <option value="SOLAR EQ TECHNOLOGY EUROP">
+              SOLAR EQ TECHNOLOGY EUROP
+            </option>
+            <option value="SHAOXING TUOBANG NEWENERGY CO., LTD.">
+              SHAOXING TUOBANG NEWENERGY CO., LTD.
+            </option>
+            <option value="FOXESS CO., LTD.">FOXESS CO., LTD.</option>
+            <option value="TONGWEI SOLAR (PENGSHAN)CO., LTD.">
+              TONGWEI SOLAR (PENGSHAN)CO., LTD.
+            </option>
+            {/* Finally, include an "Other" option */}
             <option value="Other">Other</option>
           </select>
-
-          {/* Conditionally render custom Vehicle Type input */}
-          {formData.vehicleType === "Other" && (
-            <div className="mt-2">
-              <label className="block text-xl font-medium text-black">
-                Please specify Vehicle Type
-              </label>
-              <input
-                type="text"
-                name="customVehicleType"
-                value={formData.customVehicleType}
-                onChange={handleChange}
-                className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                required
-              />
-            </div>
-          )}
         </div>
 
+        {/* If "Other" is selected, show an input field */}
+        {formData.supplierName === "Other" && (
+          <div className="mb-4">
+            <label className="block text-xl text-black">
+              Enter Supplier Name
+            </label>
+            <input
+              type="text"
+              name="supplierNameOther"
+              value={formData.supplierNameOther || ""}
+              onChange={handleChange}
+              className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
+              required
+            />
+          </div>
+        )}
+
+        {/* 6. Port of Loading */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Additional Vehicle Details
+          <label className="block text-xl text-black">
+            Port of Loading 
           </label>
           <select
-            name="additionalVehicleDetails"
-            value={formData.additionalVehicleDetails}
+            name="portOfLoading"
+            value={formData.portOfLoading || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
             required
           >
-            <option value="">Select Additional Vehicle Details</option>
-            <option value="20 Feet Container">20 Feet Container</option>
-            <option value="40 Feet Container">40 Feet Container</option>
-            <option value="40 ft HBT Trailer">40 Feet HBT Trailer</option>
-            <option value="40 HQ Container">40 HQ Container</option>
-            <option value="32MXL Container">32MXL Container</option>
-            <option value="32SXL Container">32SXL Container</option>
-            <option value="DCM 17 Feet">DCM 17 Feet</option>
-            <option value="DCM 19 Feet">DCM 19 Feet</option>
-            <option value="DCM 22 Feet">DCM 22 Feet</option>
-            <option value="JCB 32 Feet">JCB 32 Feet</option>
+            <option value="">Select Port of Loading</option>
+            <option value="Shanghai">Shanghai</option>
+            <option value="Ningbo">Ningbo</option>
+            <option value="Port klang">Port klang</option>
+            <option value="Haiphong">Haiphong</option>
+            <option value="Shekou">Shekou</option>
+            <option value="Shenzhen">Shenzhen</option>
+            <option value="Tianjin">Tianjin</option>
+            <option value="Dalian">Dalian</option>
+            <option value="Hamburg">Hamburg</option>
+            <option value="Nansha">Nansha</option>
           </select>
         </div>
 
+        {/* 7. Port of Destination */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Number of Vehicles
+          <label className="block text-xl text-black">
+            Port of Destination 
+          </label>
+          <select
+            name="portOfDestination"
+            value={formData.portOfDestination || ""}
+            onChange={handleChange}
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
+            required
+          >
+            <option value="">Select Destination Port</option>
+            <option value="Chennai/Ennore /Kattupalli">
+              Chennai/Ennore /Kattupalli
+            </option>
+            <option value="Nhava Sheva">Nhava Sheva</option>
+            <option value="ICD-Hyderabad">ICD-Hyderabad</option>
+            <option value="Hyderabad Airport">Hyderabad Airport</option>
+            <option value="Chennai airport">Chennai airport</option>
+            <option value="Mumbai Airport">Mumbai Airport</option>
+          </select>
+        </div>
+
+        {/* 8. Container Type */}
+        <div className="mb-4">
+          <label className="block text-xl text-black">
+            Container Type 
+          </label>
+          <select
+            name="containerType"
+            value={formData.containerType || ""}
+            onChange={handleChange}
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
+            required
+          >
+            <option value="">Select Container Type</option>
+            <option value="LCL">LCL</option>
+            <option value="20’GP">20’GP</option>
+            <option value="40’HC">40’HC</option>
+            <option value="40’FR">40’FR</option>
+            <option value="40’OT">40’OT</option>
+            <option value="20’OT">20’OT</option>
+          </select>
+        </div>
+
+        {/* 9. Number of Containers */}
+        <div className="mb-4">
+          <label className="block text-xl text-black">
+            Number of Containers 
           </label>
           <input
             type="number"
-            name="numberOfVehicles"
-            value={formData.numberOfVehicles}
+            name="numberOfContainers"
+            value={formData.numberOfContainers || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
             required
           />
-          {errors.numberOfVehicles && (
+          {errors.numberOfContainers && (
             <p className="text-red-600 font-bold mt-1">
-              {errors.numberOfVehicles}
+              {errors.numberOfContainers}
             </p>
           )}
         </div>
 
+        {/* 10. Cargo Weight in Container */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Weight in Tons
+          <label className="block text-xl text-black">
+            Cargo Weight in Container (In Tons) 
           </label>
           <input
             type="number"
-            name="weight"
-            value={formData.weight}
+            name="cargoWeightInContainer"
+            value={formData.cargoWeightInContainer || ""}
             onChange={handleChange}
-            min="1"
-            max="99"
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
             required
           />
-          {errors.weight && (
-            <p className="text-red-600 font-bold mt-1">{errors.weight}</p>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Budgeted Price By Sales Dept.
-          </label>
-          <input
-            type="text"
-            name="budgetedPriceBySalesDept"
-            value={formData.budgetedPriceBySalesDept}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          />
-          {errors.budgetedPriceBySalesDept && (
+          {errors.cargoWeightInContainer && (
             <p className="text-red-600 font-bold mt-1">
-              {errors.budgetedPriceBySalesDept}
+              {errors.cargoWeightInContainer}
             </p>
           )}
         </div>
 
+        {/* 11. Cargo Readiness Date */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Max Allowable Price
-          </label>
-          <input
-            type="text"
-            name="maxAllowablePrice"
-            value={formData.maxAllowablePrice}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          />
-          {errors.maxAllowablePrice && (
-            <p className="text-red-600 font-bold mt-1">
-              {errors.maxAllowablePrice}
-            </p>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Vehicle Placement Begin Date
+          <label className="block text-xl text-black">
+            Tentative Cargo Readiness Date 
           </label>
           <input
             type="date"
-            name="vehiclePlacementBeginDate"
-            value={formData.vehiclePlacementBeginDate}
+            name="cargoReadinessDate"
+            value={formData.cargoReadinessDate || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
             required
           />
         </div>
 
+        {/* 12. Initial Quote End Time */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Vehicle Placement End Date
-          </label>
-          <input
-            type="date"
-            name="vehiclePlacementEndDate"
-            value={formData.vehiclePlacementEndDate}
-            onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            required
-          />
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            Initial Quote End Time
+          <label className="block text-xl text-black">
+            Initial Quote End Time 
           </label>
           <input
             type="datetime-local"
             name="initialQuoteEndTime"
-            value={formData.initialQuoteEndTime}
+            value={formData.initialQuoteEndTime || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md"
             required
           />
         </div>
 
+        {/* 13. Evaluation End Time */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
+          <label className="block text-xl text-black">
             Evaluation End Time
           </label>
           <input
             type="datetime-local"
             name="evaluationEndTime"
-            value={formData.evaluationEndTime}
+            value={formData.evaluationEndTime || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md"
             required
           />
         </div>
 
-        {/* E-Reverse Toggle Switch */}
-        {/* <div className="mb-4"> 
-          <label className="block text-xl font-medium text-black">
-            E-Reverse:
+        {/* 14. E-Reverse Toggle 
+        <div className="mb-4">
+          <label className="block text-xl text-black">
+            E-Reverse
           </label>
           <label className="relative inline-flex items-center cursor-pointer">
             <input
               type="checkbox"
               name="eReverseToggle"
-              checked={formData.eReverseToggle}
+              checked={!!formData.eReverseToggle}
               onChange={handleChange}
               className="sr-only peer"
             />
             <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-indigo-600 peer-focus:ring-2 peer-focus:ring-indigo-500 transition-all duration-300"></div>
-            <div className="dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform duration-300 transform peer-checked:translate-x-full"></div>
+            <div className="dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform duration-300 transform peer-checked:translate-x-full" />
           </label>
         </div> */}
 
-        {/* the below fields of eReverseDate and eReverseTime are conditionally rendered fields based on the toggle state of the eReverse Toggle above */}
+        {/* Conditionally show eReverseDate/time */}
         {formData.eReverseToggle && (
           <>
             <div className="mb-4">
-              <label className="block text-xl font-medium text-black">
-                E-Reverse Date
-              </label>
+              <label className="block text-xl text-black">E-Reverse Date</label>
               <input
                 type="date"
                 name="eReverseDate"
-                value={formData.eReverseDate}
+                value={formData.eReverseDate || ""}
                 onChange={handleChange}
-                className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md"
                 required={formData.eReverseToggle}
               />
             </div>
-
             <div className="mb-4">
-              <label className="block text-xl font-medium text-black">
-                E-Reverse Time
-              </label>
+              <label className="block text-xl text-black">E-Reverse Time</label>
               <input
                 type="time"
                 name="eReverseTime"
-                value={formData.eReverseTime}
+                value={formData.eReverseTime || ""}
                 onChange={handleChange}
-                className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md"
                 required={formData.eReverseToggle}
               />
             </div>
           </>
         )}
 
+        {/* 15. RFQ Closing Date & Time */}
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            RFQ Closing Date
-          </label>
+          <label className="block text-xl text-black">RFQ Closing Date</label>
           <input
             type="date"
             name="RFQClosingDate"
-            value={formData.RFQClosingDate}
+            value={formData.RFQClosingDate || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md"
             required
           />
         </div>
 
         <div className="mb-4">
-          <label className="block text-xl font-medium text-black">
-            RFQ Closing Time
-          </label>
+          <label className="block text-xl text-black">RFQ Closing Time</label>
           <input
             type="time"
             name="RFQClosingTime"
-            value={formData.RFQClosingTime}
+            value={formData.RFQClosingTime || ""}
             onChange={handleChange}
-            className="mt-1 block w-full px-3 py-2 border bg-gray-200 hover:bg-white border-black rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md"
             required
           />
         </div>
 
+        {/* 16. Select Service Providers */}
         <div className="mb-4 md:col-span-3">
-          <label className="text-black mb-2 font-bold items-center text-xl text-center">
-            Select service providers:
+          <label className="text-black mb-2 font-bold text-xl">
+            Select Service Providers:
           </label>
           <div className="mt-2 overflow-x-auto">
             {vendors.length > 0 ? (
@@ -1592,19 +1306,18 @@ const NewRFQForm = () => {
                             selectedVendors.length === vendors.length
                           }
                           onChange={handleSelectAllVendors}
-                          className="form-checkbox h-4 w-4 text-indigo-600 transition duration-150 ease-in-out mr-2"
+                          className="form-checkbox h-4 w-4 text-indigo-600 mr-2"
                         />
                         <label
                           htmlFor="selectAllVendors"
                           className="text-white"
                         >
-                          
                           Select All
                         </label>
                       </div>
                     </th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-white">
-                      Company Name
+                      Company / Vendor
                     </th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-white">
                       Email
@@ -1620,11 +1333,11 @@ const NewRFQForm = () => {
                           id={vendor._id}
                           checked={selectedVendors.includes(vendor._id)}
                           onChange={() => handleVendorSelection(vendor._id)}
-                          className="form-checkbox h-4 w-4 text-indigo-600 transition duration-150 ease-in-out"
+                          className="form-checkbox h-4 w-4 text-indigo-600"
                         />
                       </td>
                       <td className="px-4 py-2 text-sm text-black">
-                        {vendor.companyName || vendor.vendorName}
+                        {vendor.vendorName}
                       </td>
                       <td className="px-4 py-2 text-sm text-black">
                         {vendor.email}
@@ -1634,11 +1347,12 @@ const NewRFQForm = () => {
                 </tbody>
               </table>
             ) : (
-              <p>No vendors available to select.</p>
+              <p>No inbound vendors available to select.</p>
             )}
           </div>
         </div>
 
+        {/* Submit Button */}
         <button
           type="submit"
           className={`md:col-span-3 bg-indigo-600 hover:bg-indigo-900 text-white font-bold py-2 px-4 rounded ${
@@ -1646,7 +1360,7 @@ const NewRFQForm = () => {
           }`}
           disabled={isLoading}
         >
-          {isLoading ? "Submitting..." : "Submit RFQ"}
+          {isLoading ? "Submitting..." : "Submit Inbound RFQ"}
         </button>
       </form>
     </div>

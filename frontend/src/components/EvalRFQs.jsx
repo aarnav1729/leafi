@@ -1,3 +1,5 @@
+// EvalRFQs.jsx
+
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { useNavigate, useParams } from "react-router-dom";
@@ -11,16 +13,20 @@ const EvalRFQs = ({ userRole }) => {
   const [vendors, setVendors] = useState([]);
   const [rfqStatus, setRfqStatus] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
-  const [leafAllocation, setLeafAllocation] = useState([]);
-  const [logisticsAllocation, setLogisticsAllocation] = useState([]);
-  const [totalLeafPrice, setTotalLeafPrice] = useState(0);
-  const [totalLogisticsPrice, setTotalLogisticsPrice] = useState(0);
+  const [homeAllocation, setHomeAllocation] = useState([]);
+  const [moowrAllocation, setMoowrAllocation] = useState([]);
+  const [totalHomePrice, setTotalHomePrice] = useState(0);
+  const [totalMoowrPrice, setTotalMoowrPrice] = useState(0);
   const [isFinalizeModalOpen, setIsFinalizeModalOpen] = useState(false);
   const [finalizeReason, setFinalizeReason] = useState("");
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [evaluationPeriodEnded, setEvaluationPeriodEnded] = useState(false);
   const [enrichedQuotes, setEnrichedQuotes] = useState([]);
 
+  // conversion rate from USD to INR
+  const conversionRate = 80;
+
+  // Use inbound endpoints on localhost
   useEffect(() => {
     fetchRFQDetails();
     fetchQuotes();
@@ -35,23 +41,7 @@ const EvalRFQs = ({ userRole }) => {
     }
   }, [rfqDetails]);
 
-  useEffect(() => {
-    if (rfqDetails && enrichedQuotes.length > 0) {
-      const leafAlloc = assignLeafAllocation(
-        enrichedQuotes,
-        rfqDetails.numberOfVehicles
-      );
-      setLeafAllocation(leafAlloc);
-      calculateTotalLeafPrice(leafAlloc);
-
-      // Only initialize logistics allocation if it's empty
-      if (logisticsAllocation.length === 0) {
-        const logisticsAlloc = assignLogisticsAllocation(leafAlloc);
-        setLogisticsAllocation(logisticsAlloc);
-      }
-    }
-  }, [rfqDetails, enrichedQuotes]);
-
+  // Enrich quotes with vendor companyName
   useEffect(() => {
     if (quotes.length > 0 && vendors.length > 0) {
       const enriched = quotes.map((quote) => {
@@ -69,15 +59,23 @@ const EvalRFQs = ({ userRole }) => {
     }
   }, [quotes, vendors]);
 
+  // When enriched quotes update, compute allocations for Home and MOOWR
   useEffect(() => {
-    calculateTotalLogisticsPrice(logisticsAllocation);
-  }, [logisticsAllocation]);
+    if (rfqDetails && enrichedQuotes.length > 0) {
+      const homeAlloc = assignAllocation(enrichedQuotes, rfqDetails.numberOfContainers, "home");
+      setHomeAllocation(homeAlloc);
+      calculateTotalHomePrice(homeAlloc);
 
+      const moowrAlloc = assignAllocation(enrichedQuotes, rfqDetails.numberOfContainers, "moowr");
+      setMoowrAllocation(moowrAlloc);
+      calculateTotalMoowrPrice(moowrAlloc);
+    }
+  }, [rfqDetails, enrichedQuotes]);
+
+  // API calls
   const fetchRFQDetails = async () => {
     try {
-      const response = await axios.get(
-        `https://leaf-tn20.onrender.com/api/rfq/${rfqId}`
-      );
+      const response = await axios.get(`http://localhost:5000/api/rfqsi/${rfqId}`);
       setRfqDetails(response.data);
       setRfqStatus(response.data.status);
     } catch (error) {
@@ -87,9 +85,8 @@ const EvalRFQs = ({ userRole }) => {
 
   const fetchQuotes = async () => {
     try {
-      const response = await axios.get(
-        `https://leaf-tn20.onrender.com/api/quotes/${rfqId}`
-      );
+      // NEW: Fetch all inbound quotes for this RFQ using the correct endpoint.
+      const response = await axios.get(`http://localhost:5000/api/quotesi/${rfqId}`);
       setQuotes(response.data);
     } catch (error) {
       console.error("Error fetching quotes:", error);
@@ -98,125 +95,141 @@ const EvalRFQs = ({ userRole }) => {
 
   const fetchVendors = async () => {
     try {
-      const response = await axios.get(
-        "https://leaf-tn20.onrender.com/api/vendors"
-      );
+      const response = await axios.get("http://localhost:5000/api/vendors");
       setVendors(response.data);
     } catch (error) {
       console.error("Error fetching vendors:", error);
     }
   };
 
-  const getDisplayedLeafAllocations = () => {
-    return leafAllocation;
+  // Compute totals for a given quote/allocation using the input values
+  const computeTotals = (quote, type = "home") => {
+    const seaFreightINR = parseFloat(quote.seaFreightPerContainer)
+      ? parseFloat(quote.seaFreightPerContainer) * conversionRate
+      : 0;
+    if (type === "home") {
+      const totalHome =
+        seaFreightINR +
+        (parseFloat(quote.houseDO) || 0) +
+        (parseFloat(quote.cfs) || 0) +
+        (parseFloat(quote.chaChargesHome) || 0) +
+        (parseFloat(quote.transportation) || 0);
+      return totalHome;
+    } else {
+      const totalMoowr =
+        seaFreightINR +
+        (parseFloat(quote.houseDO) || 0) +
+        (parseFloat(quote.cfs) || 0) +
+        (parseFloat(quote.chaChargesMOOWR) || 0) +
+        (parseFloat(quote.transportation) || 0);
+      return totalMoowr;
+    }
   };
 
-  const getDisplayedLogisticsAllocations = () => {
-    return logisticsAllocation;
-  };
-
-  // Assign LEAF Allocation
-  const assignLeafAllocation = (quotes, requiredTrucks) => {
-    if (!requiredTrucks || requiredTrucks <= 0) return quotes;
-
-    // Sort quotes by price (ascending)
-    const sortedQuotes = [...quotes].sort((a, b) => a.price - b.price);
-    let totalTrucks = 0;
-
+  // Allocation function (applies to both Home and MOOWR)
+  // It sorts quotes (ascending) based on the computed total and assigns labels and allotments.
+  const assignAllocation = (quotes, requiredContainers, type = "home") => {
+    if (!requiredContainers || requiredContainers <= 0) return quotes;
+    // Sort quotes based on total computed price (lower is better)
+    const sortedQuotes = [...quotes].sort((a, b) => {
+      const aTotal = computeTotals(a, type);
+      const bTotal = computeTotals(b, type);
+      return aTotal - bTotal;
+    });
+    let totalAllotted = 0;
     return sortedQuotes.map((quote, index) => {
-      if (totalTrucks < requiredTrucks) {
-        const trucksToAllot = Math.min(
-          quote.numberOfTrucks,
-          requiredTrucks - totalTrucks
-        );
-        totalTrucks += trucksToAllot;
-        return {
-          ...quote,
-          label: `L${index + 1}`,
-          trucksAllotted: trucksToAllot,
-        };
+      if (totalAllotted < requiredContainers) {
+        // Allot as many containers as offered but do not exceed the requiredContainers
+        const allot = Math.min(quote.numberOfContainers, requiredContainers - totalAllotted);
+        totalAllotted += allot;
+        return { ...quote, label: `L${index + 1}`, containersAllotted: allot };
       }
-      return { ...quote, label: "-", trucksAllotted: 0 };
+      return { ...quote, label: "-", containersAllotted: 0 };
     });
   };
 
-  // Assign Logistics Allocation (Labels assigned automatically)
-  const assignLogisticsAllocation = (leafAlloc) => {
-    // Assign labels automatically based on price (ascending)
-    const sortedAllocations = [...leafAlloc].sort((a, b) => a.price - b.price);
-    return sortedAllocations.map((alloc, index) => ({
-      vendorName: alloc.vendorName,
-      companyName: alloc.companyName,
-      trucksOffered: alloc.numberOfTrucks,
-      price: alloc.price,
-      trucksAllotted: alloc.trucksAllotted,
-      label: `L${index + 1}`,
+  // Recalculate labels after manual update based on new totals
+  const recalcLabels = (allocation, type = "home") => {
+    const sorted = [...allocation].sort((a, b) => {
+      const aTotal = computeTotals(a, type);
+      const bTotal = computeTotals(b, type);
+      return aTotal - bTotal;
+    });
+    return sorted.map((quote, index) => ({
+      ...quote,
+      label: `L${index + 1}`
     }));
   };
 
-  // Calculate Total LEAF Price
-  const calculateTotalLeafPrice = (allocations) => {
+  // Calculate total prices for Home and MOOWR allocations
+  const calculateTotalHomePrice = (allocations) => {
     const total = allocations.reduce(
-      (sum, quote) => sum + quote.price * quote.trucksAllotted,
+      (sum, alloc) => sum + (alloc.price ? alloc.price * (alloc.containersAllotted || 0) : 0),
       0
     );
-    setTotalLeafPrice(total);
+    setTotalHomePrice(total);
   };
 
-  // Handle Logistics Allocation Inputs
-  const handleLogisticsInputChange = (index, field, value) => {
-    setLogisticsAllocation((prevAllocations) => {
-      const updatedAllocations = [...prevAllocations];
-      updatedAllocations[index][field] =
-        field === "price" ? parseFloat(value) : parseInt(value);
-      return updatedAllocations;
+  const calculateTotalMoowrPrice = (allocations) => {
+    const total = allocations.reduce(
+      (sum, alloc) => sum + (alloc.price ? alloc.price * (alloc.containersAllotted || 0) : 0),
+      0
+    );
+    setTotalMoowrPrice(total);
+  };
+
+  // Handlers for manual changes in allocation inputs
+  const handleHomeInputChange = (index, field, value) => {
+    setHomeAllocation((prev) => {
+      const updated = [...prev];
+      updated[index][field] = field === "price" ? parseFloat(value) : parseInt(value);
+      // Recalculate labels based on new totals
+      const recalculated = recalcLabels(updated, "home");
+      calculateTotalHomePrice(recalculated);
+      return recalculated;
     });
   };
 
-  // Calculate Total Logistics Price
-  const calculateTotalLogisticsPrice = (allocations) => {
-    const total = allocations.reduce(
-      (sum, alloc) => sum + alloc.price * alloc.trucksAllotted,
-      0
-    );
-    setTotalLogisticsPrice(total);
+  const handleMoowrInputChange = (index, field, value) => {
+    setMoowrAllocation((prev) => {
+      const updated = [...prev];
+      updated[index][field] = field === "price" ? parseFloat(value) : parseInt(value);
+      const recalculated = recalcLabels(updated, "moowr");
+      calculateTotalMoowrPrice(recalculated);
+      return recalculated;
+    });
   };
 
-  // Finalize Allocation
+  // Finalize Allocation: Sends both home and moowr allocations to the backend
   const finalizeAllocation = async () => {
-    // Prepare data for comparison
-    const leafAllocData = leafAllocation.map((alloc) => ({
+    // Prepare payload
+    const payload = {
+      homeAllocation,
+      moowrAllocation,
+      finalizeReason: finalizeReason.trim()
+    };
+    // If allocations differ, require a reason
+    const homeData = homeAllocation.map((alloc) => ({
       vendorName: alloc.vendorName,
-      trucksAllotted: alloc.trucksAllotted,
+      containersAllotted: alloc.containersAllotted,
     }));
-    const logisticsAllocData = logisticsAllocation.map((alloc) => ({
+    const moowrData = moowrAllocation.map((alloc) => ({
       vendorName: alloc.vendorName,
-      trucksAllotted: alloc.trucksAllotted,
+      containersAllotted: alloc.containersAllotted,
     }));
-
-    // Check if Logistics Allocation matches LEAF Allocation
-    const isIdentical =
-      JSON.stringify(leafAllocData) === JSON.stringify(logisticsAllocData);
-
+    const isIdentical = JSON.stringify(homeData) === JSON.stringify(moowrData);
     if (!isIdentical && finalizeReason.trim() === "") {
       alert("Please provide a reason for the difference in allocation.");
       return;
     }
-
     setIsFinalizing(true);
-
     try {
       const response = await axios.post(
-        `https://leaf-tn20.onrender.com/api/rfq/${rfqId}/finalize-allocation`,
-        {
-          logisticsAllocation,
-          finalizeReason: isIdentical ? "" : finalizeReason,
-        }
+        `http://localhost:5000/api/rfqsi/${rfqId}/finalize-allocation`,
+        payload
       );
-
       setStatusMessage("Allocation finalized and emails sent to vendors.");
       setIsFinalizeModalOpen(false);
-      // Optionally, redirect or update the RFQ status
     } catch (error) {
       console.error("Error finalizing allocation:", error);
       setStatusMessage("Failed to finalize allocation.");
@@ -225,14 +238,18 @@ const EvalRFQs = ({ userRole }) => {
     }
   };
 
-  // Check if all trucks are allotted
-  const totalTrucksAllotted = logisticsAllocation.reduce(
-    (sum, alloc) => sum + (alloc.trucksAllotted || 0),
+  // Check if the total allotted containers (in both tables) match the required number
+  const totalAllottedHome = homeAllocation.reduce(
+    (sum, alloc) => sum + (alloc.containersAllotted || 0),
     0
   );
-
-  const allTrucksAllotted =
-    totalTrucksAllotted === rfqDetails?.numberOfVehicles;
+  const totalAllottedMoowr = moowrAllocation.reduce(
+    (sum, alloc) => sum + (alloc.containersAllotted || 0),
+    0
+  );
+  const allContainersAllotted =
+    totalAllottedHome === rfqDetails?.numberOfContainers &&
+    totalAllottedMoowr === rfqDetails?.numberOfContainers;
 
   return (
     <div className="container mx-auto px-3 py-7 bg-white rounded-lg shadow-lg">
@@ -247,179 +264,142 @@ const EvalRFQs = ({ userRole }) => {
         <div>
           <h2 className="text-2xl font-bold mb-4">{rfqDetails.RFQNumber}</h2>
 
-          {/* LEAF Allocation */}
+          {/* Home Allocation Table */}
           <div>
-            <h3 className="font-bold mb-2">LEAF Allocation</h3>
+            <h3 className="font-bold mb-2">Quotes with CHA – Home</h3>
             <div className="overflow-x-auto rounded-lg">
               <table className="min-w-full divide-y divide-black">
-                <thead className="bg-green-600 rounded-lg">
+                <thead className="bg-green-600">
                   <tr>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Vendor Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Trucks Offered
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Quote
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Label
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Trucks Allotted
-                    </th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Vendor Name</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Containers Offered</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Price</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Containers Allotted</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Label</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Total (INR)</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-black">
-                  {getDisplayedLeafAllocations().map((quote) => (
+                  {homeAllocation.map((quote, index) => (
                     <tr key={quote._id} className="hover:bg-blue-200">
-                      <td
-                        className={`px-6 py-4 whitespace-nowrap text-sm ${
-                          evaluationPeriodEnded
-                            ? "text-black"
-                            : "filter blur-sm text-gray-500"
-                        }`}
-                      >
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
                         {quote.companyName || quote.vendorName}
                       </td>
-
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {quote.numberOfTrucks}
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
+                        {quote.numberOfContainers}
                       </td>
-                      <td
-                        className={`px-6 py-4 whitespace-nowrap text-sm ${
-                          evaluationPeriodEnded
-                            ? "text-black"
-                            : "filter blur-sm text-gray-500"
-                        }`}
-                      >
-                        {quote.price}
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
+                        <input
+                          type="number"
+                          value={quote.price || ""}
+                          onChange={(e) =>
+                            handleHomeInputChange(index, "price", e.target.value)
+                          }
+                          className="p-1 border"
+                        />
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
+                        <input
+                          type="number"
+                          value={quote.containersAllotted || ""}
+                          onChange={(e) =>
+                            handleHomeInputChange(index, "containersAllotted", e.target.value)
+                          }
+                          className="p-1 border"
+                        />
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
                         {quote.label}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {quote.trucksAllotted}
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
+                        {computeTotals(quote, "home")}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {/* Total LEAF Price */}
             <div className="mt-2">
               <p className="text-right font-bold">
-                Total LEAF Price: {totalLeafPrice}
+                Total CHA – Home Price: {totalHomePrice}
               </p>
             </div>
           </div>
 
-          {/* Logistics Allocation */}
+          {/* MOOWR Allocation Table */}
           <div className="mt-8">
-            <h3 className="font-bold mb-2">Logistics Allocation</h3>
+            <h3 className="font-bold mb-2">Quotes with CHA – MOOWR</h3>
             <div className="overflow-x-auto rounded-lg">
               <table className="min-w-full divide-y divide-black">
-                <thead className="bg-blue-600 rounded-lg">
+                <thead className="bg-blue-600">
                   <tr>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Company Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Trucks Offered
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Price
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Trucks Allotted
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Label
-                    </th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Vendor Name</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Containers Offered</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Price</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Containers Allotted</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Label</th>
+                    <th className="px-4 py-2 text-left text-sm font-bold text-black uppercase tracking-wider">Total (INR)</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-black">
-                  {getDisplayedLogisticsAllocations().map((alloc, index) => (
+                  {moowrAllocation.map((alloc, index) => (
                     <tr key={index} className="hover:bg-blue-200">
-                      <td
-                        className={`px-6 py-4 whitespace-nowrap text-sm ${
-                          evaluationPeriodEnded
-                            ? "text-black"
-                            : "filter blur-sm text-gray-500"
-                        }`}
-                      >
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
                         {alloc.vendorName}
                       </td>
-
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {alloc.trucksOffered}
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
+                        {alloc.numberOfContainers}
                       </td>
-                      <td
-                        className={`px-6 py-4 whitespace-nowrap text-sm ${
-                          evaluationPeriodEnded
-                            ? "text-black"
-                            : "filter blur-sm text-gray-500"
-                        }`}
-                      >
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
                         <input
                           type="number"
-                          value={alloc.price}
+                          value={alloc.price || ""}
                           onChange={(e) =>
-                            handleLogisticsInputChange(
-                              index,
-                              "price",
-                              e.target.value
-                            )
+                            handleMoowrInputChange(index, "price", e.target.value)
                           }
                           className="p-1 border"
                         />
                       </td>
-
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
                         <input
                           type="number"
-                          value={alloc.trucksAllotted}
+                          value={alloc.containersAllotted || ""}
                           onChange={(e) =>
-                            handleLogisticsInputChange(
-                              index,
-                              "trucksAllotted",
-                              e.target.value
-                            )
+                            handleMoowrInputChange(index, "containersAllotted", e.target.value)
                           }
                           className="p-1 border"
                         />
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
                         {alloc.label}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-black">
+                        {computeTotals(alloc, "moowr")}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {/* Total Logistics Price */}
             <div className="mt-2">
               <p className="text-right font-bold">
-                Total Logistics Price: {totalLogisticsPrice}
+                Total CHA – MOOWR Price: {totalMoowrPrice}
               </p>
             </div>
           </div>
 
-          {/* Finalize Button */}
           <div className="mt-6 flex justify-center">
             <button
               className={`text-white bg-red-500 hover:bg-red-700 font-bold py-2 px-4 rounded-full ml-2 ${
-                allTrucksAllotted ? "" : "opacity-50 cursor-not-allowed"
+                allContainersAllotted ? "" : "opacity-50 cursor-not-allowed"
               }`}
               onClick={() => setIsFinalizeModalOpen(true)}
-              disabled={!allTrucksAllotted}
+              disabled={!allContainersAllotted}
             >
-              Finalize
+              Finalize Allocation
             </button>
           </div>
 
-          {/* Finalize Modal */}
           {isFinalizeModalOpen && (
             <div className="fixed z-50 inset-0 overflow-y-auto">
               <div className="flex items-center justify-center min-h-screen">
@@ -427,87 +407,16 @@ const EvalRFQs = ({ userRole }) => {
                   <h2 className="text-xl font-bold mb-4">
                     Finalize Allocation
                   </h2>
-                  {/* Display Logistics Allocation */}
-                  <table className="min-w-full divide-y divide-black mt-4">
-                    <thead className="bg-gray-200">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                          Vendor Name
-                        </th>
-                        <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                          Price
-                        </th>
-                        <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                          Trucks Allotted
-                        </th>
-                        <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                          Label
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-black">
-                      {logisticsAllocation
-                        .filter((alloc) => alloc.trucksAllotted > 0)
-                        .map((alloc, index) => (
-                          <tr key={index}>
-                            <td
-                              className={`px-6 py-4 whitespace-nowrap text-sm ${
-                                evaluationPeriodEnded
-                                  ? "text-black"
-                                  : "filter blur-sm text-gray-500"
-                              }`}
-                            >
-                              {alloc.vendorName}
-                            </td>
-                            <td
-                              className={`px-6 py-4 whitespace-nowrap text-sm ${
-                                evaluationPeriodEnded
-                                  ? "text-black"
-                                  : "filter blur-sm text-gray-500"
-                              }`}
-                            >
-                              {alloc.price}
-                            </td>
-
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                              {alloc.trucksAllotted}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                              {alloc.label}
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                  {/* Reason Input if allocations differ */}
-                  {!(
-                    JSON.stringify(
-                      leafAllocation.map((alloc) => ({
-                        vendorName: alloc.vendorName,
-                        trucksAllotted: alloc.trucksAllotted,
-                      }))
-                    ) ===
-                    JSON.stringify(
-                      logisticsAllocation.map((alloc) => ({
-                        vendorName: alloc.vendorName,
-                        trucksAllotted: alloc.trucksAllotted,
-                      }))
-                    )
-                  ) && (
-                    <div className="mt-4">
-                      <label className="font-bold">
-                        Please provide a reason for the difference in
-                        allocation:
-                      </label>
-                      <textarea
-                        value={finalizeReason}
-                        onChange={(e) => setFinalizeReason(e.target.value)}
-                        className="w-full p-2 border mt-2"
-                        rows="4"
-                      ></textarea>
-                    </div>
-                  )}
-                  <div className="flex justify-end mt-4">
+                  <p className="mb-2">
+                    If the allocation between CHA – Home and CHA – MOOWR differs, please provide a reason:
+                  </p>
+                  <textarea
+                    value={finalizeReason}
+                    onChange={(e) => setFinalizeReason(e.target.value)}
+                    className="w-full p-2 border mb-4"
+                    rows="4"
+                  ></textarea>
+                  <div className="flex justify-end">
                     <button
                       className="mr-4 bg-gray-300 hover:bg-gray-400 text-black py-2 px-4 rounded"
                       onClick={() => setIsFinalizeModalOpen(false)}
@@ -529,7 +438,6 @@ const EvalRFQs = ({ userRole }) => {
             </div>
           )}
 
-          {/* Status Message */}
           {statusMessage && (
             <div className="mt-6 text-center">
               <p
