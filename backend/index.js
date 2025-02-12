@@ -87,14 +87,12 @@ const vendorISchema = new mongoose.Schema(
 const VendorI = mongoose.model("VendorI", vendorISchema);
 
 // 2) Inbound RFQ Schema/Model
+// 2) Inbound RFQ Schema/Model
 const rfqISchema = new mongoose.Schema(
   {
     rfqNumber: { type: String, required: true, unique: true },
     itemDescription: { type: String, required: true },
-    companyName: {
-      type: String,
-      required: true,
-    },
+    companyName: { type: String, required: true },
     poNumber: { type: String, required: true },
     supplierName: { type: String, required: true },
     portOfLoading: { type: String, required: true },
@@ -126,13 +124,20 @@ const rfqISchema = new mongoose.Schema(
         timestamp: { type: Date, default: Date.now },
       },
     ],
+    // NEW FIELD: Store the final user allocation (split into home and MOOWR)
+    userAllocation: {
+      type: Object,
+      default: { home: [], moowr: [] }
+    }
   },
   {
     collection: "rfqsi",
     timestamps: true,
   }
 );
+
 const RFQI = mongoose.model("RFQI", rfqISchema);
+
 
 // 3) Inbound Quote Schema/Model
 const quoteISchema = new mongoose.Schema(
@@ -162,6 +167,9 @@ const quoteISchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+const QuoteI = mongoose.model("quotesi", quoteISchema);
+
 
 // 4) Inbound User Schema/Model
 const userISchema = new mongoose.Schema(
@@ -838,11 +846,14 @@ app.get("/api/rfqsi/:id", async (req, res) => {
 
 
 // finalize Inbound RFQ Allocation
+// Finalize Inbound RFQ Allocation Endpoint
+// Finalize Inbound RFQ Allocation Endpoint
 app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
   try {
     const { id } = req.params;
     const { homeAllocation, moowrAllocation, finalizeReason } = req.body;
 
+    // Find the RFQ document
     const rfq = await RFQI.findById(id);
     if (!rfq) {
       return res.status(404).json({ error: "RFQ not found." });
@@ -851,38 +862,85 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
       return res.status(400).json({ error: "RFQ has already been finalized." });
     }
 
-    const homeData = homeAllocation.map((alloc) => ({
-      vendorName: alloc.vendorName,
-      containersAllotted: alloc.containersAllotted,
-    }));
-    const moowrData = moowrAllocation.map((alloc) => ({
-      vendorName: alloc.vendorName,
-      containersAllotted: alloc.containersAllotted,
-    }));
-    const allocationsMatch = JSON.stringify(homeData) === JSON.stringify(moowrData);
-
-    if (!allocationsMatch && (!finalizeReason || finalizeReason.trim() === "")) {
-      return res.status(400).json({ error: "Please provide a reason for the difference in allocation." });
+    // Validate that the total allocated containers equal the required number
+    const totalAllocatedHome = homeAllocation.reduce(
+      (sum, alloc) => sum + (alloc.containersAllotted || 0),
+      0
+    );
+    const totalAllocatedMoowr = moowrAllocation.reduce(
+      (sum, alloc) => sum + (alloc.containersAllotted || 0),
+      0
+    );
+    const totalAllocated = totalAllocatedHome + totalAllocatedMoowr;
+    if (totalAllocated !== rfq.numberOfContainers) {
+      return res.status(400).json({
+        error: `Total containers allocated (${totalAllocated}) does not match required (${rfq.numberOfContainers}).`
+      });
     }
 
-    for (const alloc of homeAllocation) {
+    // Update each QuoteI record for the given RFQ with the final allocation.
+    const combinedAllocations = [...homeAllocation, ...moowrAllocation];
+    for (const alloc of combinedAllocations) {
       await QuoteI.findOneAndUpdate(
         { rfqId: id, vendorName: alloc.vendorName },
         {
           price: alloc.price,
-          containersAllotted: alloc.containersAllotted, 
+          containersAllotted: alloc.containersAllotted,
           label: alloc.label,
+          finalized: true, // optional flag indicating that the quote is finalized
         }
       );
-    }    
-
-    rfq.status = "closed";
-    if (finalizeReason) {
-      rfq.finalizeReason = finalizeReason;
     }
+
+    // Check if the RFQ document already has a userAllocation field;
+    // if not, initialize it.
+    if (!rfq.userAllocation) {
+      rfq.userAllocation = { home: [], moowr: [] };
+    }
+
+    // Store the user's final allocation and finalize reason in the RFQ document.
+    rfq.status = "closed";
+    rfq.finalizeReason = finalizeReason;
+    rfq.userAllocation = { home: homeAllocation, moowr: moowrAllocation };
     await rfq.save();
 
-    res.status(200).json({ message: "Allocation finalized and notifications sent." });
+    // Send confirmation emails to vendors.
+    // (Here we assume each allocation object contains an 'email' field. Otherwise, you may need to look up the vendor's email by vendorName.)
+    const vendorEmailsSet = new Set();
+    combinedAllocations.forEach((alloc) => {
+      if (alloc.email) {
+        vendorEmailsSet.add(alloc.email);
+      }
+    });
+    const vendorEmails = Array.from(vendorEmailsSet);
+
+    const emailPromises = vendorEmails.map((email) => {
+      const emailContent = {
+        message: {
+          subject: "Final Allocation Confirmed for RFQ " + rfq.rfqNumber,
+          body: {
+            contentType: "HTML",
+            content: `
+              <p>Dear Vendor,</p>
+              <p>The final allocation for RFQ <strong>${rfq.rfqNumber}</strong> has been confirmed.</p>
+              <p>Your final allocation details can be found in your account.
+              ${finalizeReason ? `<br/><br/><strong>User Reason for Allocation Difference:</strong> ${finalizeReason}` : ""}
+              </p>
+              <p>Thank you,<br/>Team LEAF</p>
+            `,
+          },
+          toRecipients: [{ emailAddress: { address: email } }],
+          from: { emailAddress: { address: SENDER_EMAIL } },
+        },
+      };
+      return client.api(`/users/${SENDER_EMAIL}/sendMail`).post(emailContent);
+    });
+    await Promise.all(emailPromises);
+
+    res.status(200).json({
+      message:
+        "Allocation finalized, user allocation stored, and confirmation emails sent to vendors."
+    });
   } catch (error) {
     console.error("Error finalizing allocation:", error);
     res.status(500).json({ error: "Failed to finalize allocation." });
