@@ -13,7 +13,7 @@ const VendorRFQList = ({ username }) => {
   // Fetch quotes submitted by the vendor using the new endpoint
   const fetchVendorQuotes = async () => {
     try {
-      const response = await axios.get(`/api/quotesi/vendor/${username}`);
+      const response = await axios.get(`http://localhost:8000/api/quotesi/vendor/${username}`);
       // Assuming response.data is an array of quotes
       const quotesByVendor = response.data.reduce((acc, quote) => {
         acc[quote.rfqId] = quote;
@@ -28,7 +28,7 @@ const VendorRFQList = ({ username }) => {
   // Fetch RFQs invited to the vendor using the new endpoint
   const fetchRFQs = async () => {
     try {
-      const response = await axios.get(`/api/rfqsi/vendor/${username}`);
+      const response = await axios.get(`http://localhost:8000/api/rfqsi/vendor/${username}`);
       setRfqs(response.data);
     } catch (error) {
       console.error("Error fetching RFQs for vendor:", error);

@@ -46,7 +46,7 @@ const Contact = () => {
 
     try {
       // Send form data to the backend API endpoint
-      await axios.post("https://leaf-tn20.onrender.com/api/contact", formData);
+      await axios.post("http://localhost:8000/api/contact", formData);
       setSubmissionSuccess(true);
       setFormData({
         name: "",

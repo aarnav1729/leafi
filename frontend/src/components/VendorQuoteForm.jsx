@@ -44,7 +44,7 @@ const VendorQuoteForm = ({ username }) => {
     const fetchRFQDetails = async () => {
       try {
         // Fetch the RFQ details
-        const rfqResponse = await axios.get(`http://localhost:5000/api/rfqsi/${rfqId}`);
+        const rfqResponse = await axios.get(`http://localhost:8000/api/rfqsi/${rfqId}`);
         setRfqDetails(rfqResponse.data);
         setRfqStatus(rfqResponse.data.status);
         setL1Price(rfqResponse.data.l1Price);
@@ -55,7 +55,7 @@ const VendorQuoteForm = ({ username }) => {
 
         // Fetch the vendor's existing quote (if any)
         const quoteResponse = await axios
-          .get(`http://localhost:5000/api/quotesi/rfq/${rfqId}/vendor/${username}`)
+          .get(`http://localhost:8000/api/quotesi/rfq/${rfqId}/vendor/${username}`)
           .catch((err) => {
             if (err.response && err.response.status === 404) {
               return { data: null };
@@ -126,7 +126,7 @@ const VendorQuoteForm = ({ username }) => {
 
     const fetchVendorDetails = async () => {
       try {
-        const vendorResponse = await axios.get(`http://localhost:5000/api/vendors/username/${username}`);
+        const vendorResponse = await axios.get(`http://localhost:8000/api/vendors/username/${username}`);
         setVendorDetails(vendorResponse.data);
       } catch (error) {
         console.error("Error fetching vendor details:", error);
@@ -353,13 +353,13 @@ const VendorQuoteForm = ({ username }) => {
 
       if (vendorQuote) {
         const updateResponse = await axios.put(
-          `http://localhost:5000/api/quotesi/${vendorQuote._id}`,
+          `http://localhost:8000/api/quotesi/${vendorQuote._id}`,
           quoteData
         );
         alert("Quote updated successfully!");
         setVendorQuote(updateResponse.data.quote);
       } else {
-        const submitResponse = await axios.post("http://localhost:5000/api/quotesi", quoteData);
+        const submitResponse = await axios.post("http://localhost:8000/api/quotesi", quoteData);
         alert("Quote submitted successfully!");
         setVendorQuote(submitResponse.data.quote);
       }

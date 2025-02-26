@@ -8,7 +8,7 @@ const ClosedRFQs = () => {
   useEffect(() => {
     const fetchClosedRFQs = async () => {
       try {
-        const response = await axios.get('https://leaf-tn20.onrender.com/api/closed-rfqs');
+        const response = await axios.get('http://localhost:8000/api/closed-rfqs');
         setRfqs(response.data);
         setLoading(false);
       } catch (error) {

@@ -20,7 +20,7 @@ const RFQList = () => {
 
   const fetchRFQs = async () => {
     try {
-      const response = await axios.get('https://leaf-tn20.onrender.com/api/rfqs');
+      const response = await axios.get('http://localhost:8000/api/rfqsi');
       setRfqs(response.data);
     } catch (error) {
       console.error('Error fetching RFQs:', error);

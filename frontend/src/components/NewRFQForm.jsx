@@ -35,7 +35,7 @@ const NewRFQForm = () => {
 
   const fetchInboundNextRFQNumber = async () => {
     try {
-      const response = await axios.get("/api/inbound-next-rfq-number");
+      const response = await axios.get("http://localhost:8000/api/inbound-next-rfq-number");
       const inboundNum = response.data?.RFQNumber || "";
       setFormData((prev) => ({ ...prev, RFQNumber: inboundNum }));
     } catch (error) {
@@ -45,7 +45,7 @@ const NewRFQForm = () => {
 
   const fetchInboundVendors = async () => {
     try {
-      const response = await axios.get("/api/inbound-vendors");
+      const response = await axios.get("http://localhost:8000/api/inbound-vendors");
       console.log("Inbound Vendors Response:", response.data); // Add this line
       setVendors(Array.isArray(response.data) ? response.data : []); // Ensure it's an array
     } catch (error) {
@@ -135,7 +135,7 @@ const NewRFQForm = () => {
       };
 
       // Post to your inbound create RFQ route, e.g. /api/rfqsi or /api/inbound-rfq
-      const response = await axios.post("/api/rfqsi", dataToSend);
+      const response = await axios.post("http://localhost:8000/api/rfqsi", dataToSend);
       if (response.status === 201 && response.data.success) {
         alert("Inbound RFQ created successfully!");
         // Reset

@@ -8,7 +8,7 @@ const ActiveAuctions = () => {
   useEffect(() => {
     const fetchActiveAuctions = async () => {
       try {
-        const response = await axios.get('https://leaf-tn20.onrender.com/api/active-auctions');
+        const response = await axios.get('http://localhost:8000/api/active-auctions');
         setAuctions(response.data);
       } catch (error) {
         console.error('Error fetching active auctions:', error);

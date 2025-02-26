@@ -70,6 +70,7 @@ mongoose
   .catch((err) => console.error("MongoDB connection error:", err));
 
 
+
 // 1) inbound vendor schema/Model
 const vendorISchema = new mongoose.Schema(
   {
@@ -86,7 +87,6 @@ const vendorISchema = new mongoose.Schema(
 );
 const VendorI = mongoose.model("VendorI", vendorISchema);
 
-// 2) Inbound RFQ Schema/Model
 // 2) Inbound RFQ Schema/Model
 const rfqISchema = new mongoose.Schema(
   {
@@ -202,229 +202,77 @@ const verificationISchema = new mongoose.Schema(
 );
 const VerificationI = mongoose.model("VerificationI", verificationISchema);
 
-//--------------------------------------------------
-// (Below) Outbound or existing code can remain as-is
-//--------------------------------------------------
 
-// (Outbound) Vendor
-const vendorSchema = new mongoose.Schema({
-  username: { type: String, unique: true },
-  vendorName: { type: String, unique: true },
-  password: String,
-  email: { type: String, unique: true, required: true },
-  contactNumber: { type: String, unique: true, required: true },
-});
-const Vendor = mongoose.model("Vendor", vendorSchema);
+app.post("/api/login", async (req, res) => {
+  const { username, password } = req.body;
 
-// (Outbound) Quote
-const quoteSchema = new mongoose.Schema(
-  {
-    rfqId: { type: mongoose.Schema.Types.ObjectId, ref: "RFQ" },
-    vendorName: String,
-    companyName: String,
-    price: Number,
-    message: String,
-    numberOfTrucks: Number,
-    validityPeriod: String,
-    label: String,
-    trucksAllotted: Number,
-    numberOfVehiclesPerDay: {
-      type: Number,
-      required: true,
-      min: 1,
-      max: 99,
-    },
-  },
-  { timestamps: true }
-);
-const Quote = mongoose.model("Quote", quoteSchema);
-
-// (Outbound) User
-const userSchema = new mongoose.Schema({
-  username: { type: String, unique: true },
-  password: String,
-  email: { type: String, unique: true, required: true },
-  contactNumber: { type: String, unique: true, required: true },
-  role: { type: String, enum: ["vendor", "factory"], required: true },
-  status: { type: String, enum: ["pending", "approved"], default: "pending" },
-});
-const User = mongoose.model("User", userSchema);
-
-// (Outbound) RFQ
-const rfqSchema = new mongoose.Schema(
-  {
-    RFQNumber: String,
-    shortName: String,
-    companyType: String,
-    sapOrder: String,
-    itemType: String,
-    customerName: String,
-    originLocation: String,
-    dropLocationState: String,
-    dropLocationDistrict: String,
-    address: { type: String, required: true },
-    pincode: {
-      type: String,
-      required: true,
-      validate: {
-        validator: function (v) {
-          return /^\d{6}$/.test(v);
-        },
-        message: (props) =>
-          `${props.value} is not a valid pincode. It should be exactly 6 digits.`,
-      },
-    },
-    vehicleType: String,
-    additionalVehicleDetails: String,
-    numberOfVehicles: Number,
-    weight: String,
-    budgetedPriceBySalesDept: Number,
-    maxAllowablePrice: Number,
-    eReverseDate: { type: Date, required: false },
-    eReverseTime: { type: String, required: false },
-    vehiclePlacementBeginDate: Date,
-    vehiclePlacementEndDate: Date,
-    status: {
-      type: String,
-      enum: ["initial", "evaluation", "closed"],
-      default: "initial",
-    },
-    initialQuoteEndTime: { type: Date, required: true },
-    evaluationEndTime: { type: Date, required: true },
-    finalizeReason: { type: String },
-    l1Price: Number,
-    l1VendorId: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor" },
-    RFQClosingDate: Date,
-    RFQClosingTime: { type: String, required: true },
-    eReverseToggle: { type: Boolean, default: false },
-    rfqType: { type: String, enum: ["Long Term", "D2D"], default: "D2D" },
-    selectedVendors: [{ type: mongoose.Schema.Types.ObjectId, ref: "Vendor" }],
-    vendorActions: [
-      {
-        action: String,
-        vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor" },
-        timestamp: { type: Date, default: Date.now },
-      },
-    ],
-  },
-  { timestamps: true }
-);
-const RFQ = mongoose.model("RFQ", rfqSchema);
-
-// (Outbound) Verification
-const verificationSchema = new mongoose.Schema({
-  email: { type: String, required: true },
-  otp: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now, expires: 300 },
-});
-const Verification = mongoose.model("Verification", verificationSchema);
-
-//--------------------------------------------------
-// EMAIL SENDING HELPER FOR OUTBOUND ONLY
-//--------------------------------------------------
-async function sendRFQEmail(rfqData, selectedVendorIds) {
-  const excludedFields = [
-    "_id",
-    "budgetedPriceBySalesDept",
-    "maxAllowablePrice",
-    "customerName",
-    "selectedVendors",
-    "vendorActions",
-    "createdAt",
-    "updatedAt",
-    "__v",
-    "eReverseTime",
-    "eReverseDate",
-    "sapOrder",
-    "status",
-    "eReverseToggle",
-  ];
+  // Check if the user is admin
+  if (username === "aarnav" && password === "aarnav") {
+    // Return success response with role 'admin'
+    return res
+      .status(200)
+      .json({ success: true, role: "admin", username: "aarnav" });
+  }
 
   try {
-    let vendorsToEmail;
+    // Find the user without specifying the role
+    const user = await UserI.findOne({ username, password });
 
-    if (selectedVendorIds && selectedVendorIds.length > 0) {
-      vendorsToEmail = await Vendor.find(
-        { _id: { $in: selectedVendorIds } },
-        "email vendorName"
-      );
-    } else {
-      vendorsToEmail = [];
-    }
-
-    const vendorEmails = vendorsToEmail.map((vendor) => vendor.email);
-
-    if (vendorEmails.length > 0) {
-      for (const vendor of vendorsToEmail) {
-        const emailContent = {
-          message: {
-            subject: "New RFQ Posted - Submit Initial Quote",
-            body: {
-              contentType: "HTML",
-              content: `
-                  <p>Dear Vendor,</p>
-                  <p>You are one of the selected vendors for ${rfqData.RFQNumber}.</p>
-                  <p>Initial Quote End Time: ${moment(rfqData.initialQuoteEndTime)
-                    .tz("Asia/Kolkata")
-                    .format("YYYY-MM-DD HH:mm")}</p>
-                  <p>Evaluation Period End Time: ${moment(rfqData.evaluationEndTime)
-                    .tz("Asia/Kolkata")
-                    .format("YYYY-MM-DD HH:mm")}</p>
-                  <p>Please log in to your account to submit your quote.</p>
-        
-                <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; inline-size: 100%;">
-                  <thead>
-                    <tr>
-                      <th style="background-color: #f2f2f2;">Field</th>
-                      <th style="background-color: #f2f2f2;">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${Object.entries(rfqData)
-                      .filter(([key]) => !excludedFields.includes(key))
-                      .map(
-                        ([key, value]) => `
-                      <tr>
-                        <td style="padding: 8px; text-align: start;">${key.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase())}</td>
-                        <td style="padding: 8px; text-align: start;">${value}</td>
-                      </tr>
-                    `
-                      )
-                      .join("")}
-                  </tbody>
-                </table>
-                <p>We look forward to receiving your quote.</p>
-                <p>Best regards,<br/>Team LEAF.</p>
-              `,
-            },
-            toRecipients: [
-              {
-                emailAddress: {
-                  address: vendor.email,
-                },
-              },
-            ],
-            from: {
-              emailAddress: {
-                address: "leaf@premierenergies.com",
-              },
-            },
-          },
-        };
-
-        await client.api(`/users/${SENDER_EMAIL}/sendMail`).post(emailContent);
-        console.log(`Email sent to ${vendor.email}`);
+    if (user) {
+      if (user.status === "approved") {
+        return res
+          .status(200)
+          .json({ success: true, role: user.role, username: user.username });
+      } else {
+        return res
+          .status(403)
+          .json({ success: false, message: "Account pending admin approval" });
       }
-      return { success: true };
     } else {
-      console.log("No selected vendors to send emails to.");
-      return { success: false };
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid username or password" });
     }
   } catch (error) {
-    console.error("Error sending RFQ email:", error);
-    return { success: false };
+    console.error("Error during login:", error);
+    return res.status(500).json({ success: false });
   }
-}
+});
+
+app.post("/api/usersi", async (req, res) => {
+  const { username, password, role, email, contactNumber } = req.body;
+  try {
+    // Optionally, check for an existing user to prevent duplicates.
+    const existingUser = await UserI.findOne({ $or: [{ username }, { email }, { contactNumber }] });
+    if (existingUser) {
+      return res.status(400).json({ error: "User with the provided username, email, or contact number already exists." });
+    }
+    
+    const newUser = new UserI({
+      username,
+      password,
+      role,
+      email,
+      contactNumber
+    });
+    
+    await newUser.save();
+    res.status(201).json({
+      message: "Inbound user created successfully.",
+      user: {
+        id: newUser._id,
+        username: newUser.username,
+        role: newUser.role,
+        email: newUser.email,
+        contactNumber: newUser.contactNumber
+      }
+    });
+  } catch (error) {
+    console.error("Error creating inbound user:", error);
+    res.status(500).json({ error: "Failed to create inbound user." });
+  }
+});
+
 
 //--------------------------------------------------
 // NEW ENDPOINT: GET all inbound RFQs
@@ -948,7 +796,7 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
 });
 
 // start the server
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8000;
 server.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });

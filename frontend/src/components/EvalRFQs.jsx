@@ -40,7 +40,7 @@ const EvalRFQs = ({ userRole }) => {
 
   const fetchRFQDetails = async () => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/rfqsi/${rfqId}`);
+      const response = await axios.get(`http://localhost:8000/api/rfqsi/${rfqId}`);
       setRfqDetails(response.data);
       setRfqStatus(response.data.status);
       // If finalized and a stored userAllocation exists, load it
@@ -66,7 +66,7 @@ const EvalRFQs = ({ userRole }) => {
 
   const fetchQuotes = async () => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/quotesi/${rfqId}`);
+      const response = await axios.get(`http://localhost:8000/api/quotesi/${rfqId}`);
       setQuotes(response.data);
     } catch (error) {
       console.error("Error fetching quotes:", error);
@@ -75,7 +75,7 @@ const EvalRFQs = ({ userRole }) => {
 
   const fetchVendors = async () => {
     try {
-      const response = await axios.get("http://localhost:5000/api/inbound-vendors");
+      const response = await axios.get("http://localhost:8000/api/inbound-vendors");
       setVendors(response.data);
     } catch (error) {
       console.error("Error fetching vendors:", error);
@@ -304,7 +304,7 @@ const EvalRFQs = ({ userRole }) => {
     }
     setIsFinalizing(true);
     try {
-      await axios.post(`http://localhost:5000/api/rfqsi/${rfqId}/finalize-allocation`, payload);
+      await axios.post(`http://localhost:8000/api/rfqsi/${rfqId}/finalize-allocation`, payload);
       setStatusMessage("Allocation finalized and emails sent to vendors.");
       setIsFinalizeModalOpen(false);
       // Refresh RFQ details and quotes so that the stored userAllocation and final status are loaded.

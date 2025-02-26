@@ -21,7 +21,7 @@ const FactoryRFQList = () => {
   // Use the inbound RFQ endpoint (with full URL) so that all new fields are available
   const fetchRFQs = async () => {
     try {
-      const response = await axios.get('http://localhost:5000/api/rfqsi');
+      const response = await axios.get('http://localhost:8000/api/rfqsi');
       setRfqs(response.data);
     } catch (error) {
       console.error('Error fetching RFQs:', error);
