@@ -2,15 +2,13 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const nodemailer = require("nodemailer");
-const { google } = require("googleapis");
 const cron = require("node-cron");
 const moment = require("moment-timezone");
 const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
 
-// outlook emails
+// Microsoft Graph client modules
 const { Client } = require("@microsoft/microsoft-graph-client");
 const { ClientSecretCredential } = require("@azure/identity");
 
@@ -20,14 +18,14 @@ const CLIENT_SECRET = "6_I8Q~U7IbS~NERqNeszoCRs2kETiO1Yc3cXAaup";
 const TENANT_ID = "1c3de7f3-f8d1-41d3-8583-2517cf3ba3b1";
 const SENDER_EMAIL = "leaf@premierenergies.com";
 
-// creating an authentication credential for microsoft graph apis
+// creating an authentication credential for Microsoft Graph APIs
 const credential = new ClientSecretCredential(
   TENANT_ID,
   CLIENT_ID,
   CLIENT_SECRET
 );
 
-// creating a microsoft graph client
+// creating a Microsoft Graph client
 const client = Client.initWithMiddleware({
   authProvider: {
     getAccessToken: async () => {
@@ -70,8 +68,7 @@ mongoose
   .catch((err) => console.error("MongoDB connection error:", err));
 
 
-
-// 1) inbound vendor schema/Model
+// 1) Inbound Vendor Schema/Model (stored in "vendorsi")
 const vendorISchema = new mongoose.Schema(
   {
     username: { type: String, unique: true },
@@ -87,7 +84,7 @@ const vendorISchema = new mongoose.Schema(
 );
 const VendorI = mongoose.model("VendorI", vendorISchema);
 
-// 2) Inbound RFQ Schema/Model
+// 2) Inbound RFQ Schema/Model (stored in "rfqsi")
 const rfqISchema = new mongoose.Schema(
   {
     rfqNumber: { type: String, required: true, unique: true },
@@ -124,7 +121,6 @@ const rfqISchema = new mongoose.Schema(
         timestamp: { type: Date, default: Date.now },
       },
     ],
-    // NEW FIELD: Store the final user allocation (split into home and MOOWR)
     userAllocation: {
       type: Object,
       default: { home: [], moowr: [] }
@@ -135,11 +131,9 @@ const rfqISchema = new mongoose.Schema(
     timestamps: true,
   }
 );
-
 const RFQI = mongoose.model("RFQI", rfqISchema);
 
-
-// 3) Inbound Quote Schema/Model
+// 3) Inbound Quote Schema/Model (stored in "quotesi")
 const quoteISchema = new mongoose.Schema(
   {
     rfqId: { type: mongoose.Schema.Types.ObjectId, ref: "RFQI" },
@@ -167,11 +161,10 @@ const quoteISchema = new mongoose.Schema(
     timestamps: true,
   }
 );
-
 const QuoteI = mongoose.model("quotesi", quoteISchema);
 
-
-// 4) Inbound User Schema/Model
+// 4) Inbound User Schema/Model (stored in "usersi")
+// Users will be stored in the UsersI model.
 const userISchema = new mongoose.Schema(
   {
     username: { type: String, unique: true },
@@ -186,9 +179,10 @@ const userISchema = new mongoose.Schema(
     timestamps: true,
   }
 );
-const UserI = mongoose.model("UserI", userISchema);
+const UsersI = mongoose.model("UsersI", userISchema);
 
-// 5) Inbound Verification Schema/Model
+// 5) Inbound Verification Schema/Model (stored in "verificationi")
+// We now use the model VerificationsI.
 const verificationISchema = new mongoose.Schema(
   {
     email: { type: String, required: true },
@@ -200,38 +194,110 @@ const verificationISchema = new mongoose.Schema(
     timestamps: true,
   }
 );
-const VerificationI = mongoose.model("VerificationI", verificationISchema);
+const VerificationsI = mongoose.model("VerificationsI", verificationISchema);
 
+// ------------------------
+// OTP ENDPOINTS (using Microsoft Graph API)
+// ------------------------
+
+// POST /api/send-otp: Generate an OTP, clear any previous OTPs for the email,
+// save it in VerificationsI, and send it via Microsoft Graph API
+app.post("/api/send-otp", async (req, res) => {
+  let { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ success: false, message: "Email is required" });
+  }
+  // Normalize the email
+  email = email.toLowerCase().trim();
+  // Generate a 6-digit OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  try {
+    // Remove any previous OTPs for this email
+    await VerificationsI.deleteMany({ email });
+    // Save OTP in VerificationsI collection
+    await VerificationsI.create({ email, otp });
+
+    // Create the email content using Microsoft Graph API
+    const emailContent = {
+      message: {
+        subject: "Your OTP for Registration",
+        body: {
+          contentType: "Text",
+          content: `Your OTP for registration is: ${otp}. It is valid for 5 minutes.`,
+        },
+        toRecipients: [
+          {
+            emailAddress: {
+              address: email,
+            },
+          },
+        ],
+        from: {
+          emailAddress: {
+            address: SENDER_EMAIL,
+          },
+        },
+      },
+    };
+
+    // Send the email using Microsoft Graph API
+    await client.api(`/users/${SENDER_EMAIL}/sendMail`).post(emailContent);
+    res.status(200).json({ success: true, message: "OTP sent to email." });
+  } catch (error) {
+    console.error("Error sending OTP:", error);
+    res.status(500).json({ success: false, message: "Failed to send OTP." });
+  }
+});
+
+// POST /api/verify-otp: Verify the OTP for the given email using VerificationsI
+// POST /api/verify-otp: Verify the OTP for the given email using VerificationsI
+app.post("/api/verify-otp", async (req, res) => {
+  let { email, otp } = req.body;
+  if (!email || !otp) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Email and OTP are required" });
+  }
+  // Normalize inputs: ensure email is lowercased and both values are trimmed and OTP is a string
+  email = email.toLowerCase().trim();
+  otp = otp.toString().trim();
+  try {
+    const record = await VerificationsI.findOne({ email, otp });
+    if (record) {
+      // Remove the verification entry upon successful verification
+      await VerificationsI.deleteOne({ _id: record._id });
+      res.status(200).json({ success: true, message: "OTP verified." });
+    } else {
+      res.status(400).json({ success: false, message: "Invalid OTP." });
+    }
+  } catch (error) {
+    console.error("Error verifying OTP:", error);
+    res.status(500).json({ success: false, message: "Error verifying OTP" });
+  }
+});
+
+// ------------------------
+// AUTHENTICATION ENDPOINTS
+// ------------------------
 
 app.post("/api/login", async (req, res) => {
   const { username, password } = req.body;
 
   // Check if the user is admin
   if (username === "aarnav" && password === "aarnav") {
-    // Return success response with role 'admin'
-    return res
-      .status(200)
-      .json({ success: true, role: "admin", username: "aarnav" });
+    return res.status(200).json({ success: true, role: "admin", username: "aarnav" });
   }
 
   try {
-    // Find the user without specifying the role
-    const user = await UserI.findOne({ username, password });
-
+    const user = await UsersI.findOne({ username, password });
     if (user) {
       if (user.status === "approved") {
-        return res
-          .status(200)
-          .json({ success: true, role: user.role, username: user.username });
+        return res.status(200).json({ success: true, role: user.role, username: user.username });
       } else {
-        return res
-          .status(403)
-          .json({ success: false, message: "Account pending admin approval" });
+        return res.status(403).json({ success: false, message: "Account pending admin approval" });
       }
     } else {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid username or password" });
+      return res.status(401).json({ success: false, message: "Invalid username or password" });
     }
   } catch (error) {
     console.error("Error during login:", error);
@@ -239,23 +305,38 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+// POST /api/usersi: Register a new user in the UsersI collection
 app.post("/api/usersi", async (req, res) => {
-  const { username, password, role, email, contactNumber } = req.body;
+  let { username, password, role, email, contactNumber } = req.body;
+  // Basic check for required fields
+  if (!username || !password || !role || !email || !contactNumber) {
+    return res.status(400).json({ error: "All fields are required." });
+  }
+
+  // Normalize the email and trim username and contact number
+  email = email.toLowerCase().trim();
+  username = username.trim();
+  contactNumber = contactNumber.trim();
+
   try {
-    // Optionally, check for an existing user to prevent duplicates.
-    const existingUser = await UserI.findOne({ $or: [{ username }, { email }, { contactNumber }] });
+    // Check if a user already exists with the same username, email, or contact number
+    const existingUser = await UsersI.findOne({
+      $or: [{ username }, { email }, { contactNumber }],
+    });
     if (existingUser) {
-      return res.status(400).json({ error: "User with the provided username, email, or contact number already exists." });
+      return res.status(400).json({ 
+        error: "User with the provided username, email, or contact number already exists." 
+      });
     }
-    
-    const newUser = new UserI({
+
+    // Create and save the new user (consider hashing the password in production)
+    const newUser = new UsersI({
       username,
       password,
       role,
       email,
-      contactNumber
+      contactNumber,
     });
-    
     await newUser.save();
     res.status(201).json({
       message: "Inbound user created successfully.",
@@ -274,9 +355,62 @@ app.post("/api/usersi", async (req, res) => {
 });
 
 
-//--------------------------------------------------
-// NEW ENDPOINT: GET all inbound RFQs
-//--------------------------------------------------
+// ------------------------
+// ADMIN ACCOUNT MANAGEMENT ENDPOINTS
+// ------------------------
+
+app.get("/api/pending-accounts", async (req, res) => {
+  try {
+    const pendingAccounts = await UsersI.find({ status: "pending" }).lean();
+    res.status(200).json(pendingAccounts);
+  } catch (error) {
+    console.error("Error fetching pending accounts:", error);
+    res.status(500).json({ error: "Failed to fetch pending accounts" });
+  }
+});
+
+app.post("/api/approve-account/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid user ID." });
+    }
+    const updatedUser = await UsersI.findByIdAndUpdate(
+      id,
+      { status: "approved" },
+      { new: true }
+    );
+    if (!updatedUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    res.status(200).json({ message: "Account approved successfully.", user: updatedUser });
+  } catch (error) {
+    console.error("Error approving account:", error);
+    res.status(500).json({ error: "Failed to approve account." });
+  }
+});
+
+app.post("/api/decline-account/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid user ID." });
+    }
+    const deletedUser = await UsersI.findByIdAndDelete(id);
+    if (!deletedUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    res.status(200).json({ message: "Account declined and deleted successfully." });
+  } catch (error) {
+    console.error("Error declining account:", error);
+    res.status(500).json({ error: "Failed to decline account." });
+  }
+});
+
+// ------------------------
+// OTHER EXISTING ENDPOINTS
+// ------------------------
+
 app.get("/api/rfqsi", async (req, res) => {
   try {
     const rfqs = await RFQI.find().lean();
@@ -287,16 +421,12 @@ app.get("/api/rfqsi", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// NEW ENDPOINT: GET all inbound quotes for a given RFQ ID
-//--------------------------------------------------
 app.get("/api/quotesi/:rfqId", async (req, res) => {
   try {
     const { rfqId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(rfqId)) {
       return res.status(400).json({ error: "Invalid RFQ ID." });
     }
-    // FIX: Use the inbound QuoteI model instead of Quote
     const quotes = await QuoteI.find({ rfqId }).lean();
     res.status(200).json(quotes);
   } catch (error) {
@@ -305,9 +435,6 @@ app.get("/api/quotesi/:rfqId", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Next inbound RFQ number
-//--------------------------------------------------
 app.get("/api/inbound-next-rfq-number", async (req, res) => {
   try {
     const lastInboundRFQ = await RFQI.findOne().sort({ _id: -1 });
@@ -325,9 +452,6 @@ app.get("/api/inbound-next-rfq-number", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Fetch inbound vendors from "vendorsi"
-//--------------------------------------------------
 app.get("/api/inbound-vendors", async (req, res) => {
   try {
     const inboundVendors = await VendorI.find();
@@ -338,9 +462,6 @@ app.get("/api/inbound-vendors", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Create a new inbound RFQ in "rfqsi"
-//--------------------------------------------------
 app.post("/api/rfqsi", async (req, res) => {
   try {
     const {
@@ -400,9 +521,6 @@ app.post("/api/rfqsi", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Create a new inbound vendor
-//--------------------------------------------------
 app.post("/api/vendorsi", async (req, res) => {
   const { username, vendorName, password, email, contactNumber } = req.body;
   try {
@@ -438,9 +556,6 @@ app.post("/api/vendorsi", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Fetch inbound RFQs for a specific vendor
-//--------------------------------------------------
 app.get("/api/rfqsi/vendor/:username", async (req, res) => {
   const { username } = req.params;
   try {
@@ -458,9 +573,6 @@ app.get("/api/rfqsi/vendor/:username", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Fetch inbound quotes for a specific vendor
-//--------------------------------------------------
 app.get("/api/quotesi/vendor/:username", async (req, res) => {
   const { username } = req.params;
   try {
@@ -478,9 +590,6 @@ app.get("/api/quotesi/vendor/:username", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Fetch a specific inbound quote by RFQ ID and Vendor Username
-//--------------------------------------------------
 app.get("/api/quotesi/rfq/:rfqId/vendor/:username", async (req, res) => {
   const { rfqId, username } = req.params;
   try {
@@ -500,9 +609,6 @@ app.get("/api/quotesi/rfq/:rfqId/vendor/:username", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Create a new inbound quote
-//--------------------------------------------------
 app.post("/api/quotesi", async (req, res) => {
   try {
     const {
@@ -593,9 +699,6 @@ app.post("/api/quotesi", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Update an existing inbound quote
-//--------------------------------------------------
 app.put("/api/quotesi/:quoteId", async (req, res) => {
   try {
     const { quoteId } = req.params;
@@ -670,9 +773,6 @@ app.put("/api/quotesi/:quoteId", async (req, res) => {
   }
 });
 
-//--------------------------------------------------
-// INBOUND: Fetch a specific inbound RFQ by ID
-//--------------------------------------------------
 app.get("/api/rfqsi/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -692,16 +792,11 @@ app.get("/api/rfqsi/:id", async (req, res) => {
   }
 });
 
-
-// finalize Inbound RFQ Allocation
-// Finalize Inbound RFQ Allocation Endpoint
-// Finalize Inbound RFQ Allocation Endpoint
 app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
   try {
     const { id } = req.params;
     const { homeAllocation, moowrAllocation, finalizeReason } = req.body;
 
-    // Find the RFQ document
     const rfq = await RFQI.findById(id);
     if (!rfq) {
       return res.status(404).json({ error: "RFQ not found." });
@@ -710,7 +805,6 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
       return res.status(400).json({ error: "RFQ has already been finalized." });
     }
 
-    // Validate that the total allocated containers equal the required number
     const totalAllocatedHome = homeAllocation.reduce(
       (sum, alloc) => sum + (alloc.containersAllotted || 0),
       0
@@ -726,7 +820,6 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
       });
     }
 
-    // Update each QuoteI record for the given RFQ with the final allocation.
     const combinedAllocations = [...homeAllocation, ...moowrAllocation];
     for (const alloc of combinedAllocations) {
       await QuoteI.findOneAndUpdate(
@@ -735,25 +828,20 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
           price: alloc.price,
           containersAllotted: alloc.containersAllotted,
           label: alloc.label,
-          finalized: true, // optional flag indicating that the quote is finalized
+          finalized: true,
         }
       );
     }
 
-    // Check if the RFQ document already has a userAllocation field;
-    // if not, initialize it.
     if (!rfq.userAllocation) {
       rfq.userAllocation = { home: [], moowr: [] };
     }
 
-    // Store the user's final allocation and finalize reason in the RFQ document.
     rfq.status = "closed";
     rfq.finalizeReason = finalizeReason;
     rfq.userAllocation = { home: homeAllocation, moowr: moowrAllocation };
     await rfq.save();
 
-    // Send confirmation emails to vendors.
-    // (Here we assume each allocation object contains an 'email' field. Otherwise, you may need to look up the vendor's email by vendorName.)
     const vendorEmailsSet = new Set();
     combinedAllocations.forEach((alloc) => {
       if (alloc.email) {
@@ -786,8 +874,7 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
     await Promise.all(emailPromises);
 
     res.status(200).json({
-      message:
-        "Allocation finalized, user allocation stored, and confirmation emails sent to vendors."
+      message: "Allocation finalized, user allocation stored, and confirmation emails sent to vendors."
     });
   } catch (error) {
     console.error("Error finalizing allocation:", error);
@@ -795,8 +882,6 @@ app.post("/api/rfqsi/:id/finalize-allocation", async (req, res) => {
   }
 });
 
-// start the server
-const PORT = process.env.PORT || 8000;
-server.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+server.listen(process.env.PORT || 8000, () => {
+  console.log(`Server is running on http://localhost:${process.env.PORT || 8000}`);
 });

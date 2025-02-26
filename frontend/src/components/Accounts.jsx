@@ -20,7 +20,6 @@ const Accounts = () => {
   const approveAccount = async (id) => {
     try {
       await axios.post(`http://localhost:8000/api/approve-account/${id}`);
-      // remove the approved account from the list
       setPendingAccounts(pendingAccounts.filter((account) => account._id !== id));
     } catch (error) {
       console.error("Error approving account:", error);
@@ -30,7 +29,6 @@ const Accounts = () => {
   const declineAccount = async (id) => {
     try {
       await axios.post(`http://localhost:8000/api/decline-account/${id}`);
-      // remove the declined account from the list
       setPendingAccounts(pendingAccounts.filter((account) => account._id !== id));
     } catch (error) {
       console.error("Error declining account:", error);

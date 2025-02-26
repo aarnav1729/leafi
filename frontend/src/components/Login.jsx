@@ -21,7 +21,7 @@ const Login = ({ onLogin }) => {
       alert("Please enter your email.");
       return;
     }
-    try { 
+    try {
       const response = await axios.post("http://localhost:8000/api/send-otp", {
         email,
       });
@@ -84,7 +84,7 @@ const Login = ({ onLogin }) => {
             // OTP verified, proceed to register
             try {
               const registerResponse = await axios.post(
-                "http://localhost:8000/api/register",
+                "http://localhost:8000/api/usersi",
                 {
                   username,
                   password,
@@ -130,7 +130,6 @@ const Login = ({ onLogin }) => {
               <label className="block mb-2 text-sm font-medium text-black">
                 Username
               </label>
-
               <input
                 type="text"
                 value={username}
@@ -145,7 +144,6 @@ const Login = ({ onLogin }) => {
               <label className="block mb-2 text-sm font-medium text-black">
                 Password
               </label>
-
               <input
                 type="password"
                 value={password}
@@ -162,7 +160,6 @@ const Login = ({ onLogin }) => {
                   <label className="block mb-2 text-sm font-medium text-black">
                     Email
                   </label>
-
                   <input
                     type="email"
                     value={email}

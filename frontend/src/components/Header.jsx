@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import Logo from "../assets/it.png";
+import Logo from "../assets/leafi.png";
 
 const Header = ({ role, onLogout }) => {
   const [openNav, setOpenNav] = useState(false);
