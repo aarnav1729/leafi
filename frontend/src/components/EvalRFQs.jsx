@@ -355,6 +355,19 @@ const EvalRFQs = ({ userRole }) => {
                         <th className="px-4 py-2 text-left text-sm font-bold">Price</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
+                        {/* New Columns */}
+                        <th className="px-4 py-2 text-left text-sm font-bold">Shipping Line Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Container Type</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel ETD</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel ETA</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Sea Freight Per Container (USD)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">House DO (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">CFS (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Transportation (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">CHA Charges - Home (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Quote Valid Till</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Message</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Total (INR)</th>
                       </tr>
                     </thead>
@@ -370,6 +383,25 @@ const EvalRFQs = ({ userRole }) => {
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.price}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.containersAllotted}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.label}</td>
+                          {/* New Columns */}
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.shippingLineName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.containerType}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.vesselName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.vesselETD ? moment(quote.vesselETD).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.vesselETA ? moment(quote.vesselETA).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.seaFreightPerContainer}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.houseDO}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.cfs}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.transportation}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.chaChargesHome}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.validityPeriod ? moment(quote.validityPeriod).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.message}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">
                             {quote.price * quote.containersAllotted}
                           </td>
@@ -391,6 +423,19 @@ const EvalRFQs = ({ userRole }) => {
                         <th className="px-4 py-2 text-left text-sm font-bold">Price</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
+                        {/* New Columns */}
+                        <th className="px-4 py-2 text-left text-sm font-bold">Shipping Line Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Container Type</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel ETD</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel ETA</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Sea Freight Per Container (USD)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">House DO (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">CFS (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Transportation (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">CHA Charges - MOOWR (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Quote Valid Till</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Message</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Total (INR)</th>
                       </tr>
                     </thead>
@@ -402,6 +447,25 @@ const EvalRFQs = ({ userRole }) => {
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.price}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.containersAllotted}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.label}</td>
+                          {/* New Columns */}
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.shippingLineName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.containerType}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.vesselName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.vesselETD ? moment(alloc.vesselETD).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.vesselETA ? moment(alloc.vesselETA).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.seaFreightPerContainer}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.houseDO}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.cfs}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.transportation}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.chaChargesMOOWR}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.validityPeriod ? moment(alloc.validityPeriod).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.message}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">
                             {alloc.price * alloc.containersAllotted}
                           </td>
@@ -430,6 +494,19 @@ const EvalRFQs = ({ userRole }) => {
                         <th className="px-4 py-2 text-left text-sm font-bold">Price</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
+                        {/* New Columns */}
+                        <th className="px-4 py-2 text-left text-sm font-bold">Shipping Line Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Container Type</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel ETD</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel ETA</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Sea Freight Per Container (USD)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">House DO (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">CFS (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Transportation (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">CHA Charges - Home (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Quote Valid Till</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Message</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Total (INR)</th>
                       </tr>
                     </thead>
@@ -463,6 +540,25 @@ const EvalRFQs = ({ userRole }) => {
                             />
                           </td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.label}</td>
+                          {/* New Columns */}
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.shippingLineName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.containerType}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.vesselName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.vesselETD ? moment(quote.vesselETD).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.vesselETA ? moment(quote.vesselETA).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.seaFreightPerContainer}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.houseDO}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.cfs}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.transportation}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.chaChargesHome}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.validityPeriod ? moment(quote.validityPeriod).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.message}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">
                             {quote.price * quote.containersAllotted}
                           </td>
@@ -487,6 +583,19 @@ const EvalRFQs = ({ userRole }) => {
                         <th className="px-4 py-2 text-left text-sm font-bold">Price</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
+                        {/* New Columns */}
+                        <th className="px-4 py-2 text-left text-sm font-bold">Shipping Line Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Container Type</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel Name</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel ETD</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Vessel ETA</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Sea Freight Per Container (USD)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">House DO (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">CFS (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Transportation (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">CHA Charges - MOOWR (INR)</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Quote Valid Till</th>
+                        <th className="px-4 py-2 text-left text-sm font-bold">Message</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Total (INR)</th>
                       </tr>
                     </thead>
@@ -518,6 +627,25 @@ const EvalRFQs = ({ userRole }) => {
                             />
                           </td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.label}</td>
+                          {/* New Columns */}
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.shippingLineName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.containerType}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.vesselName}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.vesselETD ? moment(alloc.vesselETD).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.vesselETA ? moment(alloc.vesselETA).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.seaFreightPerContainer}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.houseDO}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.cfs}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.transportation}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.chaChargesMOOWR}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.validityPeriod ? moment(alloc.validityPeriod).format("YYYY-MM-DD") : ""}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.message}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">
                             {alloc.price * alloc.containersAllotted}
                           </td>
