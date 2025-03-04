@@ -9,12 +9,8 @@ const RFQList = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetchRFQs(); // Initial fetch
-
-    // Polling mechanism to fetch RFQs every minute
-    const intervalId = setInterval(fetchRFQs, 60000); // 60000 ms = 1 minute
-
-    // Cleanup interval on component unmount
+    fetchRFQs();
+    const intervalId = setInterval(fetchRFQs, 60000); // Refresh every 1 minute
     return () => clearInterval(intervalId);
   }, []);
 
@@ -28,47 +24,49 @@ const RFQList = () => {
   };
 
   const updateStatus = async (id, newStatus) => {
-    console.log(`Updating RFQ with ID: ${id}, New Status: ${newStatus}`);
     try {
-      await axios.patch(`https://leaf-tn20.onrender.com/api/rfq/${id}`, { status: newStatus });
-
-      // Find the RFQ in the current state and update its status directly
+      // Update status using the appropriate endpoint (adjust if needed)
+      await axios.patch(`http://localhost:8000/api/rfqsi/${id}`, { status: newStatus });
       setRfqs(prevRfqs =>
         prevRfqs.map(rfq =>
           rfq._id === id ? { ...rfq, status: newStatus } : rfq
         )
       );
-
     } catch (error) {
       console.error('Error updating status:', error);
     }
   };
 
-
-  // function to format dates to only show the date part
+  // Format a date string into a locale date (without time)
   const formatDate = (dateString) => {
     if (!dateString) return "";
-    const date = new Date(dateString);
-    return date.toLocaleDateString();
+    return new Date(dateString).toLocaleDateString();
   };
 
+  // Format a date-time string into a locale string with both date and time
+  const formatDateTime = (dateTimeString) => {
+    if (!dateTimeString) return "";
+    return new Date(dateTimeString).toLocaleString();
+  };
+
+  // Filter RFQs based on search term and status filter
   const filteredRfqs = rfqs
-  .filter((rfq) =>
-    Object.values(rfq)
-      .join(" ")
-      .toLowerCase()
-      .includes(searchTerm.toLowerCase())
-  )
-  .filter((rfq) =>
-    filterStatus
-      ? (rfq.status || "open").toLowerCase() === filterStatus.toLowerCase()
-      : true
-  );
+    .filter((rfq) =>
+      Object.values(rfq)
+        .join(" ")
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase())
+    )
+    .filter((rfq) =>
+      filterStatus
+        ? (rfq.status || "initial").toLowerCase() === filterStatus.toLowerCase()
+        : true
+    );
 
   return (
     <div className="container mx-auto mt-8 px-4 py-6 bg-white rounded-lg shadow-lg">
       <h2 className="text-2xl font-bold text-center mb-6">RFQ List</h2>
-      <div className="mb-4 flex flex-col md:flex-row justify-between items-center gap-4 rounded-lg">
+      <div className="mb-4 flex flex-col md:flex-row justify-between items-center gap-4">
         <input
           type="text"
           placeholder="Search RFQs..."
@@ -82,70 +80,83 @@ const RFQList = () => {
           className="text-black p-3 border bg-gray-200 border-blue-900 rounded w-full md:w-1/4"
         >
           <option value="">All Statuses</option>
-          <option value="open">open</option>
-          <option value="closed">closed</option>
+          <option value="initial">Initial</option>
+          <option value="evaluation">Evaluation</option>
+          <option value="closed">Closed</option>
         </select>
       </div>
-      <div className="overflow-x-auto rounded">
-        <table className="w-full min-w-full divide-y divide-white rounded-full">
-          <thead className="bg-green-600 rounded-lg">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-full divide-y divide-gray-300">
+          <thead className="bg-green-600 text-white">
             <tr>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Actions</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">RFQ Number</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Short Name</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Company Type</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">SAP Sale Order #</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Item Type</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Customer Name</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Origin Location</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Drop Location State</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Drop Location District</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Vehicle Type</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Additional Vehicle Details</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Number of Vehicles</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Weight (in tons)</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Budget Price/Vehicle</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Max Allowable Price/Vehicle</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">Begin Date</th>
-              <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">End Date</th>
-              <th className="px-4 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">RFQ Closing Date</th>
-              <th className="px-4 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">RFQ Closing Time</th>
+              <th className="px-4 py-2">Actions</th>
+              <th className="px-4 py-2">RFQ Number</th>
+              <th className="px-4 py-2">Item Description</th>
+              <th className="px-4 py-2">Company Name</th>
+              <th className="px-4 py-2">PO Number</th>
+              <th className="px-4 py-2">Supplier Name</th>
+              <th className="px-4 py-2">Port of Loading</th>
+              <th className="px-4 py-2">Port of Destination</th>
+              <th className="px-4 py-2">Container Type</th>
+              <th className="px-4 py-2"># of Containers</th>
+              <th className="px-4 py-2">Cargo Weight (tons)</th>
+              <th className="px-4 py-2">Cargo Readiness Date</th>
+              <th className="px-4 py-2">E-Reverse</th>
+              <th className="px-4 py-2">E-Reverse Date</th>
+              <th className="px-4 py-2">E-Reverse Time</th>
+              <th className="px-4 py-2">Initial Quote End Time</th>
+              <th className="px-4 py-2">Evaluation End Time</th>
+              <th className="px-4 py-2">RFQ Closing Date</th>
+              <th className="px-4 py-2">RFQ Closing Time</th>
+              <th className="px-4 py-2">Selected Vendors</th>
             </tr>
           </thead>
-          <tbody className="bg-white divide-y divide-black">
+          <tbody className="bg-white divide-y divide-gray-200">
             {filteredRfqs.map((rfq) => (
-              <tr key={rfq._id} onClick={() => navigate(`/rfq/${rfq._id}`)} className="cursor-pointer hover:bg-blue-200">
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+              <tr
+                key={rfq._id}
+                className="cursor-pointer hover:bg-blue-100"
+                onClick={() => navigate(`/rfq/${rfq._id}`)}
+              >
+                <td className="px-4 py-2">
                   <select
                     value={rfq.status}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => updateStatus(rfq._id, e.target.value)}
-                    className="mt-1 block w-full px-1 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    className="p-1 border rounded"
                   >
-                    <option value="open">open</option>
-                    <option value="closed">closed</option>
+                    <option value="initial">Initial</option>
+                    <option value="evaluation">Evaluation</option>
+                    <option value="closed">Closed</option>
                   </select>
-
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-black">{rfq.RFQNumber}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.shortName}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.companyType}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.sapOrder}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.itemType}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.customerName}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.originLocation}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.dropLocationState}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.dropLocationDistrict}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.vehicleType}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.additionalVehicleDetails}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.numberOfVehicles}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.weight}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.budgetedPriceBySalesDept}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.maxAllowablePrice}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{formatDate(rfq.vehiclePlacementBeginDate)}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{formatDate(rfq.vehiclePlacementEndDate)}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{formatDate(rfq.RFQClosingDate)}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{rfq.RFQClosingTime}</td>
+                <td className="px-4 py-2">{rfq.RFQNumber}</td>
+                <td className="px-4 py-2">{rfq.itemDescription}</td>
+                <td className="px-4 py-2">{rfq.companyName}</td>
+                <td className="px-4 py-2">{rfq.poNumber}</td>
+                <td className="px-4 py-2">{rfq.supplierName}</td>
+                <td className="px-4 py-2">{rfq.portOfLoading}</td>
+                <td className="px-4 py-2">{rfq.portOfDestination}</td>
+                <td className="px-4 py-2">{rfq.containerType}</td>
+                <td className="px-4 py-2">{rfq.numberOfContainers}</td>
+                <td className="px-4 py-2">{rfq.cargoWeightInContainer}</td>
+                <td className="px-4 py-2">{formatDate(rfq.cargoReadinessDate)}</td>
+                <td className="px-4 py-2">{rfq.eReverseToggle ? "Yes" : "No"}</td>
+                <td className="px-4 py-2">
+                  {rfq.eReverseToggle ? formatDate(rfq.eReverseDate) : ""}
+                </td>
+                <td className="px-4 py-2">
+                  {rfq.eReverseToggle ? rfq.eReverseTime : ""}
+                </td>
+                <td className="px-4 py-2">{formatDateTime(rfq.initialQuoteEndTime)}</td>
+                <td className="px-4 py-2">{formatDateTime(rfq.evaluationEndTime)}</td>
+                <td className="px-4 py-2">{formatDate(rfq.RFQClosingDate)}</td>
+                <td className="px-4 py-2">{rfq.RFQClosingTime}</td>
+                <td className="px-4 py-2">
+                  {rfq.selectedVendors && Array.isArray(rfq.selectedVendors)
+                    ? rfq.selectedVendors.join(", ")
+                    : ""}
+                </td>
               </tr>
             ))}
           </tbody>

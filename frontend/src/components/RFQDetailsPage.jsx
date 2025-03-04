@@ -1,199 +1,263 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { useNavigate, useParams } from "react-router-dom";
+import moment from "moment";
 
 const RFQDetailsPage = ({ userRole }) => {
   const { rfqId } = useParams();
   const navigate = useNavigate();
+
+  // State declarations
   const [rfqDetails, setRfqDetails] = useState(null);
   const [quotes, setQuotes] = useState([]);
-  const [activeTab, setActiveTab] = useState("details");
   const [vendors, setVendors] = useState([]);
   const [rfqStatus, setRfqStatus] = useState("");
-
-  // State variables for vendor selections and modals
-  const [reminderSelectedVendors, setReminderSelectedVendors] = useState([]);
-  const [addVendorsSelectedVendors, setAddVendorsSelectedVendors] = useState(
-    []
-  );
-  const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
-  const [isAddVendorsModalOpen, setIsAddVendorsModalOpen] = useState(false);
-
-  const [isSending, setIsSending] = useState(false);
+  const [leafiAllocation, setLeafiAllocation] = useState({ home: [], moowr: [] });
+  const [homeAllocation, setHomeAllocation] = useState([]);
+  const [moowrAllocation, setMoowrAllocation] = useState([]);
+  const [totalHomePrice, setTotalHomePrice] = useState(0);
+  const [totalMoowrPrice, setTotalMoowrPrice] = useState(0);
+  const [allocationsComputed, setAllocationsComputed] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
+  const [isFinalizeModalOpen, setIsFinalizeModalOpen] = useState(false);
+  const [finalizeReason, setFinalizeReason] = useState("");
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const [activeTab, setActiveTab] = useState("details");
 
-  useEffect(() => {
-    fetchRFQDetails();
+  // Conversion rate used for price computation
+  const conversionRate = 80;
 
-    const fetchQuotes = async () => {
-      try {
-        const response = await axios.get(
-          `http://localhost:8000/api/quotes/${rfqId}`
-        );
-        setQuotes(response.data);
-      } catch (error) {
-        console.error("Error fetching quotes:", error);
-      }
-    };
-
-    const fetchVendors = async () => {
-      try {
-        const response = await axios.get("http://localhost:8000/api/vendors");
-        setVendors(response.data);
-      } catch (error) {
-        console.error("Error fetching vendors:", error);
-      }
-    };
-
-    fetchQuotes();
-    fetchVendors();
-  }, [rfqId]);
-
+  // -------------------------------
+  // Data Fetching Functions
+  // -------------------------------
   const fetchRFQDetails = async () => {
     try {
-      const response = await axios.get(
-        `http://localhost:8000api/rfq/${rfqId}`
-      );
+      const response = await axios.get(`http://localhost:8000/api/rfqsi/${rfqId}`);
       setRfqDetails(response.data);
-      setRfqStatus(response.data.status); // Set rfqStatus here
-
-      // Initialize the reminder selected vendors with those already selected in the RFQ
-      if (response.data.selectedVendors) {
-        setReminderSelectedVendors(
-          response.data.selectedVendors.map((vendor) => vendor._id)
-        );
+      setRfqStatus(response.data.status);
+      if (response.data.status === "closed" && response.data.userAllocation) {
+        if (
+          Array.isArray(response.data.userAllocation.home) &&
+          Array.isArray(response.data.userAllocation.moowr)
+        ) {
+          setHomeAllocation(response.data.userAllocation.home);
+          setMoowrAllocation(response.data.userAllocation.moowr);
+          calculateTotalHomePrice(response.data.userAllocation.home);
+          calculateTotalMoowrPrice(response.data.userAllocation.moowr);
+          setAllocationsComputed(true);
+        }
+      } else {
+        setAllocationsComputed(false);
       }
     } catch (error) {
       console.error("Error fetching RFQ details:", error);
     }
   };
 
-  const reminderVendors = vendors.filter(
-    (vendor) =>
-      rfqDetails &&
-      rfqDetails.selectedVendors &&
-      rfqDetails.selectedVendors.some(
-        (selectedVendor) => selectedVendor._id === vendor._id
-      )
-  );
-
-  const addVendorsList = vendors.filter(
-    (vendor) =>
-      !rfqDetails ||
-      !rfqDetails.selectedVendors ||
-      !rfqDetails.selectedVendors.some(
-        (selectedVendor) => selectedVendor._id === vendor._id
-      )
-  );
-
-  const handleReminderVendorSelection = (vendorId) => {
-    setReminderSelectedVendors((prevSelected) =>
-      prevSelected.includes(vendorId)
-        ? prevSelected.filter((id) => id !== vendorId)
-        : [...prevSelected, vendorId]
-    );
-  };
-
-  const handleAddVendorsSelection = (vendorId) => {
-    setAddVendorsSelectedVendors((prevSelected) =>
-      prevSelected.includes(vendorId)
-        ? prevSelected.filter((id) => id !== vendorId)
-        : [...prevSelected, vendorId]
-    );
-  };
-
-  const sendParticipationReminder = async () => {
-    setIsSending(true);
-    setStatusMessage("");
+  const fetchQuotes = async () => {
     try {
-      const response = await axios.post(
-        "http://localhost:8000/api/send-reminder",
-        {
-          rfqId,
-          vendorIds: reminderSelectedVendors,
-        }
-      );
-
-      setStatusMessage(response.data.message || "Reminder sent successfully!");
+      const response = await axios.get(`http://localhost:8000/api/quotesi/${rfqId}`);
+      setQuotes(response.data);
     } catch (error) {
-      setStatusMessage("Error sending participation reminder.");
-    } finally {
-      setIsSending(false);
-      setIsReminderModalOpen(false);
+      console.error("Error fetching quotes:", error);
     }
   };
 
-  const addVendorsToRFQ = async () => {
-    setIsSending(true);
-    setStatusMessage("");
+  const fetchVendors = async () => {
     try {
-      const response = await axios.post(
-        `http://localhost:8000/api/rfq/${rfqId}/add-vendors`,
-        {
-          vendorIds: addVendorsSelectedVendors,
-        }
-      );
-
-      setStatusMessage(response.data.message || "Vendors added successfully!");
-
-      // Re-fetch the RFQ details to update the selectedVendors list
-      await fetchRFQDetails();
-      // Reset the selected vendors for adding
-      setAddVendorsSelectedVendors([]);
+      const response = await axios.get("http://localhost:8000/api/inbound-vendors");
+      setVendors(response.data);
     } catch (error) {
-      setStatusMessage("Error adding vendors to RFQ.");
-    } finally {
-      setIsSending(false);
-      setIsAddVendorsModalOpen(false);
+      console.error("Error fetching vendors:", error);
     }
   };
 
-  const assignQuoteLabels = (quotes, requiredTrucks) => {
-    if (!requiredTrucks || requiredTrucks <= 0) return quotes; // Ensure `requiredTrucks` is valid
-    const sortedQuotes = [...quotes].sort((a, b) => a.price - b.price); // Sort by price ascending
-    let totalTrucks = 0;
+  useEffect(() => {
+    fetchRFQDetails();
+    fetchQuotes();
+    fetchVendors();
+  }, [rfqId]);
 
-    return sortedQuotes.map((quote, index) => {
-      if (totalTrucks < requiredTrucks) {
-        const trucksToAllot = Math.min(
-          quote.numberOfTrucks,
-          requiredTrucks - totalTrucks
-        );
-        totalTrucks += trucksToAllot;
-        return {
-          ...quote,
-          label: `L${index + 1}`,
-          trucksAllotted: trucksToAllot,
-        };
+  // -------------------------------
+  // Helper Functions
+  // -------------------------------
+  const formatDate = (dateStr) => {
+    if (!dateStr) return "";
+    return new Date(dateStr).toLocaleDateString();
+  };
+
+  const formatDateTime = (dateStr) => {
+    if (!dateStr) return "";
+    return new Date(dateStr).toLocaleString();
+  };
+
+  // Compute total price for a quote for a given type (home or moowr)
+  const computeTotals = (quote, type = "home") => {
+    const seaFreightINR = parseFloat(quote.seaFreightPerContainer)
+      ? parseFloat(quote.seaFreightPerContainer) * conversionRate
+      : 0;
+    if (type === "home") {
+      return (
+        seaFreightINR +
+        (parseFloat(quote.houseDO) || 0) +
+        (parseFloat(quote.cfs) || 0) +
+        (parseFloat(quote.chaChargesHome) || 0) +
+        (parseFloat(quote.transportation) || 0)
+      );
+    } else {
+      return (
+        seaFreightINR +
+        (parseFloat(quote.houseDO) || 0) +
+        (parseFloat(quote.cfs) || 0) +
+        (parseFloat(quote.chaChargesMOOWR) || 0) +
+        (parseFloat(quote.transportation) || 0)
+      );
+    }
+  };
+
+  // Compute combined LEAFI allocation from quotes
+  const assignCombinedLeafiAllocation = (quotes, requiredContainers) => {
+    const quotesWithTotals = quotes.map((q) => {
+      const numContainers = Number(q.numberOfContainers) || 0;
+      const homeTotal = computeTotals(q, "home");
+      const moowrTotal = computeTotals(q, "moowr");
+      const bestPrice = Math.min(homeTotal, moowrTotal);
+      const allocatedType = homeTotal <= moowrTotal ? "home" : "moowr";
+      return {
+        ...q,
+        numberOfContainers: numContainers,
+        homeTotal,
+        moowrTotal,
+        bestPrice,
+        allocatedType,
+      };
+    });
+    const sorted = [...quotesWithTotals].sort((a, b) => a.bestPrice - b.bestPrice);
+    let totalAllocated = 0;
+    return sorted.map((q) => {
+      let allocatedContainers = 0;
+      if (totalAllocated < requiredContainers) {
+        allocatedContainers = Math.min(q.numberOfContainers, requiredContainers - totalAllocated);
+        totalAllocated += allocatedContainers;
       }
-      return { ...quote, label: "-", trucksAllotted: 0 };
+      return { ...q, allocatedContainers };
     });
   };
 
-  const handleTrucksAllottedChange = (quoteId, value) => {
-    setQuotes((prevQuotes) =>
-      prevQuotes.map((quote) =>
-        quote._id === quoteId ? { ...quote, trucksAllotted: value } : quote
-      )
-    );
+  // Recalculate labels for an allocation array
+  const recalcLabels = (allocation, type = "home") => {
+    const sorted = [...allocation].sort((a, b) => computeTotals(a, type) - computeTotals(b, type));
+    return sorted.map((quote, index) => ({
+      ...quote,
+      label: `L${index + 1}`,
+    }));
   };
 
-  const updateTrucksAllotted = async (quoteId) => {
+  // Calculate total prices for allocations
+  const calculateTotalHomePrice = (allocations) => {
+    const total = allocations.reduce(
+      (sum, alloc) => sum + ((alloc.price || 0) * (alloc.containersAllotted || 0)),
+      0
+    );
+    setTotalHomePrice(total);
+  };
+
+  const calculateTotalMoowrPrice = (allocations) => {
+    const total = allocations.reduce(
+      (sum, alloc) => sum + ((alloc.price || 0) * (alloc.containersAllotted || 0)),
+      0
+    );
+    setTotalMoowrPrice(total);
+  };
+
+  useEffect(() => {
+    if (rfqDetails && quotes.length > 0 && vendors.length > 0) {
+      const required = Number(rfqDetails.numberOfContainers) || 0;
+      const combined = assignCombinedLeafiAllocation(quotes, required) || [];
+      const computedLeafiHome = combined.map((q) => ({
+        ...q,
+        containersAllotted: q.allocatedType === "home" ? (q.allocatedContainers || 0) : 0,
+        price: q.homeTotal || 0,
+      }));
+      const computedLeafiMoowr = combined.map((q) => ({
+        ...q,
+        containersAllotted: q.allocatedType === "moowr" ? (q.allocatedContainers || 0) : 0,
+        price: q.moowrTotal || 0,
+      }));
+      setLeafiAllocation({ home: computedLeafiHome, moowr: computedLeafiMoowr });
+      if (rfqDetails.status === "closed" && rfqDetails.userAllocation) {
+        setHomeAllocation(rfqDetails.userAllocation.home);
+        setMoowrAllocation(rfqDetails.userAllocation.moowr);
+        calculateTotalHomePrice(rfqDetails.userAllocation.home);
+        calculateTotalMoowrPrice(rfqDetails.userAllocation.moowr);
+        setAllocationsComputed(true);
+      } else if (!allocationsComputed) {
+        setHomeAllocation(recalcLabels(computedLeafiHome, "home"));
+        setMoowrAllocation(recalcLabels(computedLeafiMoowr, "moowr"));
+        calculateTotalHomePrice(computedLeafiHome);
+        calculateTotalMoowrPrice(computedLeafiMoowr);
+        setAllocationsComputed(true);
+      }
+    }
+  }, [rfqDetails, quotes, vendors, allocationsComputed]);
+
+  const handleHomeInputChange = (index, field, value) => {
+    if (rfqDetails && rfqDetails.status === "closed") return;
+    setHomeAllocation((prev) => {
+      const updated = [...prev];
+      updated[index][field] = field === "price" ? parseFloat(value) : parseInt(value);
+      const recalculated = recalcLabels(updated, "home");
+      calculateTotalHomePrice(recalculated);
+      return recalculated;
+    });
+  };
+
+  const handleMoowrInputChange = (index, field, value) => {
+    if (rfqDetails && rfqDetails.status === "closed") return;
+    setMoowrAllocation((prev) => {
+      const updated = [...prev];
+      updated[index][field] = field === "price" ? parseFloat(value) : parseInt(value);
+      const recalculated = recalcLabels(updated, "moowr");
+      calculateTotalMoowrPrice(recalculated);
+      return recalculated;
+    });
+  };
+
+  const finalizeAllocation = async () => {
+    const userTotalAllocated =
+      homeAllocation.reduce((sum, a) => sum + (a.containersAllotted || 0), 0) +
+      moowrAllocation.reduce((sum, a) => sum + (a.containersAllotted || 0), 0);
+    if (userTotalAllocated !== Number(rfqDetails.numberOfContainers)) {
+      alert(
+        `Total containers allocated (${userTotalAllocated}) does not match required (${rfqDetails.numberOfContainers}).`
+      );
+      return;
+    }
+    const payload = {
+      homeAllocation,
+      moowrAllocation,
+      finalizeReason: finalizeReason.trim(),
+    };
+    setIsFinalizing(true);
     try {
-      const quoteToUpdate = quotes.find((quote) => quote._id === quoteId);
-      await axios.put(`http://localhost:8000/api/quote/${quoteId}`, {
-        ...quoteToUpdate,
-      });
-      alert("Trucks allotted updated successfully.");
+      await axios.post(`http://localhost:8000/api/rfqsi/${rfqId}/finalize-allocation`, payload);
+      setStatusMessage("Allocation finalized and emails sent to vendors.");
+      setIsFinalizeModalOpen(false);
+      fetchRFQDetails();
+      fetchQuotes();
     } catch (error) {
-      console.error("Error updating trucks allotted:", error);
-      alert("Failed to update trucks allotted.");
+      console.error("Error finalizing allocation:", error);
+      setStatusMessage("Failed to finalize allocation.");
+    } finally {
+      setIsFinalizing(false);
     }
   };
 
-  const labeledQuotes = rfqDetails
-    ? assignQuoteLabels(quotes, rfqDetails?.numberOfVehicles)
-    : [];
+  const allContainersAllotted =
+    rfqDetails &&
+    (homeAllocation.reduce((sum, a) => sum + (a.containersAllotted || 0), 0) +
+      moowrAllocation.reduce((sum, a) => sum + (a.containersAllotted || 0), 0) ===
+      Number(rfqDetails.numberOfContainers));
 
   return (
     <div className="container mx-auto px-3 py-7 bg-white rounded-lg shadow-lg">
@@ -207,344 +271,272 @@ const RFQDetailsPage = ({ userRole }) => {
       {/* Tab Navigation */}
       <div className="flex justify-center mb-6">
         <button
-          className={`px-4 py-2 mx-2 rounded-lg ${
-            activeTab === "details"
-              ? "bg-indigo-600 text-white"
-              : "bg-gray-200 text-gray-800 opacity-80"
-          }`}
+          className={`px-4 py-2 mx-2 rounded-lg ${activeTab === "details" ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-800"}`}
           onClick={() => setActiveTab("details")}
         >
           RFQ Details
         </button>
         <button
-          className={`px-4 py-2 mx-2 rounded-lg ${
-            activeTab === "quotes"
-              ? "bg-indigo-600 text-white"
-              : "bg-gray-200 text-gray-800 opacity-80"
-          }`}
+          className={`px-4 py-2 mx-2 rounded-lg ${activeTab === "quotes" ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-800"}`}
           onClick={() => setActiveTab("quotes")}
         >
-          Vendor Quotes
+          Vendor Quotes &amp; Allocations
         </button>
       </div>
 
-      {/* RFQ Details */}
       {activeTab === "details" ? (
         rfqDetails ? (
-          <div>
-            {/* RFQ Creation Time */}
-            <div className="mb-4">
-              <dt className="font-medium">RFQ Creation Time:</dt>
-              <dd className="text-black">
-                {rfqDetails.createdAt
-                  ? new Date(rfqDetails.createdAt).toLocaleString()
-                  : "N/A"}
-              </dd>
-            </div>
-
-            {rfqDetails.finalizeReason && (
-              <div className="mb-4">
-                <dt className="font-medium">
-                  Reason for Allocation Difference:
-                </dt>
-                <dd className="text-black">{rfqDetails.finalizeReason}</dd>
+          <div className="space-y-6">
+            {/* RFQ Basic Details Section */}
+            <div className="border p-4 rounded-lg">
+              <h2 className="text-2xl font-bold mb-4">RFQ Details</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p><strong>RFQ Number:</strong> {rfqDetails.RFQNumber}</p>
+                  <p><strong>Item Description:</strong> {rfqDetails.itemDescription}</p>
+                  <p><strong>Company Name:</strong> {rfqDetails.companyName}</p>
+                  <p><strong>PO Number:</strong> {rfqDetails.poNumber}</p>
+                  <p><strong>Supplier Name:</strong> {rfqDetails.supplierName}</p>
+                  <p><strong>Port of Loading:</strong> {rfqDetails.portOfLoading}</p>
+                  <p><strong>Port of Destination:</strong> {rfqDetails.portOfDestination}</p>
+                </div>
+                <div>
+                  <p><strong>Container Type:</strong> {rfqDetails.containerType}</p>
+                  <p><strong># of Containers:</strong> {rfqDetails.numberOfContainers}</p>
+                  <p><strong>Cargo Weight (tons):</strong> {rfqDetails.cargoWeightInContainer}</p>
+                  <p><strong>Cargo Readiness Date:</strong> {formatDate(rfqDetails.cargoReadinessDate)}</p>
+                  <p><strong>E-Reverse Enabled:</strong> {rfqDetails.eReverseToggle ? "Yes" : "No"}</p>
+                  {rfqDetails.eReverseToggle && (
+                    <>
+                      <p><strong>E-Reverse Date:</strong> {formatDate(rfqDetails.eReverseDate)}</p>
+                      <p><strong>E-Reverse Time:</strong> {rfqDetails.eReverseTime}</p>
+                    </>
+                  )}
+                  <p><strong>Initial Quote End Time:</strong> {formatDateTime(rfqDetails.initialQuoteEndTime)}</p>
+                  <p><strong>Evaluation End Time:</strong> {formatDateTime(rfqDetails.evaluationEndTime)}</p>
+                  <p><strong>RFQ Closing Date:</strong> {formatDate(rfqDetails.RFQClosingDate)}</p>
+                  <p><strong>RFQ Closing Time:</strong> {rfqDetails.RFQClosingTime}</p>
+                </div>
               </div>
-            )}
-
-            {/* Selected Vendors at Creation */}
-            <div className="mb-4">
-              <dt className="font-medium">Selected Vendors at Creation:</dt>
-              <dd className="text-black">
-                {rfqDetails.vendorActions
-                  .filter((action) => action.action === "addedAtCreation")
-                  .map((action) => action.vendorId.vendorName)
-                  .join(", ") || "N/A"}
-              </dd>
+              <div className="mt-4">
+                <p>
+                  <strong>Selected Vendors:</strong>{" "}
+                  {rfqDetails.selectedVendors && Array.isArray(rfqDetails.selectedVendors)
+                    ? rfqDetails.selectedVendors.map((v) => v.vendorName).join(", ")
+                    : "N/A"}
+                </p>
+              </div>
+              {rfqDetails.finalizeReason && (
+                <div className="mt-4">
+                  <p><strong>Allocation Difference Reason:</strong> {rfqDetails.finalizeReason}</p>
+                </div>
+              )}
             </div>
 
-            {/* Vendor Actions */}
-            <div className="mb-4">
-              <h3 className="font-bold mb-2">Vendor Actions:</h3>
-              <table className="min-w-full divide-y divide-black">
-                <thead className="bg-green-600">
+            {/* Vendor Actions Section */}
+            <div className="border p-4 rounded-lg">
+              <h3 className="text-xl font-bold mb-2">Vendor Actions</h3>
+              <table className="w-full divide-y divide-gray-300">
+                <thead className="bg-gray-700 text-white">
                   <tr>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Action
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Company Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Timestamp
-                    </th>
+                    <th className="px-4 py-2">Action</th>
+                    <th className="px-4 py-2">Vendor Name</th>
+                    <th className="px-4 py-2">Timestamp</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-black">
-                  {rfqDetails.vendorActions.map((action, index) => (
-                    <tr key={index} className="hover:bg-blue-200">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {action.action}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {action.vendorId.companyName}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {action.timestamp
-                          ? new Date(action.timestamp).toLocaleString()
-                          : "N/A"}
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {rfqDetails.vendorActions && rfqDetails.vendorActions.length > 0 ? (
+                    rfqDetails.vendorActions.map((action, index) => (
+                      <tr key={index} className="hover:bg-blue-100">
+                        <td className="px-4 py-2">{action.action}</td>
+                        <td className="px-4 py-2">{action.vendorId?.vendorName || "N/A"}</td>
+                        <td className="px-4 py-2">
+                          {action.timestamp ? new Date(action.timestamp).toLocaleString() : "N/A"}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className="px-4 py-2" colSpan="3">
+                        No vendor actions recorded.
                       </td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
+            </div>
+
+            {/* LEAFI Allocation Section */}
+            <div className="border p-4 rounded-lg">
+              <h3 className="text-xl font-bold mb-4">LEAFI Allocation</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* LEAFI CHA – Home */}
+                <div>
+                  <h4 className="font-bold mb-2">CHA – Home (LEAFI)</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full divide-y divide-gray-300">
+                      <thead className="bg-green-600 text-white">
+                        <tr>
+                          <th className="px-2 py-1">Vendor Name</th>
+                          <th className="px-2 py-1">Containers Offered</th>
+                          <th className="px-2 py-1">Price</th>
+                          <th className="px-2 py-1">Containers Allotted</th>
+                          <th className="px-2 py-1">Label</th>
+                          <th className="px-2 py-1">Total (INR)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {(leafiAllocation.home || []).map((quote, index) => (
+                          <tr key={quote._id || index} className="hover:bg-blue-100">
+                            <td className="px-2 py-1">{quote.vendorName || quote.companyName}</td>
+                            <td className="px-2 py-1">{quote.numberOfContainers}</td>
+                            <td className="px-2 py-1">{quote.price}</td>
+                            <td className="px-2 py-1">{quote.containersAllotted}</td>
+                            <td className="px-2 py-1">{quote.label}</td>
+                            <td className="px-2 py-1">{quote.price * quote.containersAllotted}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                {/* LEAFI CHA – MOOWR */}
+                <div>
+                  <h4 className="font-bold mb-2">CHA – MOOWR (LEAFI)</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full divide-y divide-gray-300">
+                      <thead className="bg-blue-600 text-white">
+                        <tr>
+                          <th className="px-2 py-1">Vendor Name</th>
+                          <th className="px-2 py-1">Containers Offered</th>
+                          <th className="px-2 py-1">Price</th>
+                          <th className="px-2 py-1">Containers Allotted</th>
+                          <th className="px-2 py-1">Label</th>
+                          <th className="px-2 py-1">Total (INR)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {(leafiAllocation.moowr || []).map((alloc, index) => (
+                          <tr key={alloc._id || index} className="hover:bg-blue-100">
+                            <td className="px-2 py-1">{alloc.vendorName}</td>
+                            <td className="px-2 py-1">{alloc.numberOfContainers}</td>
+                            <td className="px-2 py-1">{alloc.price}</td>
+                            <td className="px-2 py-1">{alloc.containersAllotted}</td>
+                            <td className="px-2 py-1">{alloc.label}</td>
+                            <td className="px-2 py-1">{alloc.price * alloc.containersAllotted}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         ) : (
-          <p className="text-center text-black">Loading RFQ details...</p>
+          <p className="text-center">Loading RFQ details</p>
         )
+      ) : activeTab === "quotes" ? (
+        <div className="space-y-6">
+          {/* Vendor Quotes & Logistics Allocation Section */}
+          <div className="border p-4 rounded-lg">
+            <h3 className="text-xl font-bold mb-4">Vendor Quotes &amp; Logistics Allocation</h3>
+            {quotes.length === 0 ? (
+              <p className="text-center">No quotes available for this RFQ.</p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg mb-6">
+                <table className="w-full divide-y divide-gray-300">
+                  <thead className="bg-green-600 text-white">
+                    <tr>
+                      <th className="px-4 py-2">Vendor Name</th>
+                      <th className="px-4 py-2"># of Trucks</th>
+                      <th className="px-4 py-2">Quote</th>
+                      <th className="px-4 py-2">Label</th>
+                      <th className="px-4 py-2">Trucks Allotted</th>
+                      <th className="px-4 py-2">Submitted At</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {quotes.map((quote) => (
+                      <tr key={quote._id} className="hover:bg-blue-100">
+                        <td className="px-4 py-2">{quote.vendorName}</td>
+                        <td className="px-4 py-2">{quote.numberOfTrucks || "N/A"}</td>
+                        <td className="px-4 py-2">
+                          {userRole === "factory" ? (
+                            <span className="blur-sm">Blurred</span>
+                          ) : (
+                            quote.price
+                          )}
+                        </td>
+                        <td className="px-4 py-2">
+                          {userRole === "factory" ? (
+                            <span className="blur-sm">Blurred</span>
+                          ) : (
+                            quote.label
+                          )}
+                        </td>
+                        <td className="px-4 py-2">
+                          {userRole === "factory" ? (
+                            <span className="blur-sm">Blurred</span>
+                          ) : (
+                            quote.trucksAllotted
+                          )}
+                        </td>
+                        <td className="px-4 py-2">
+                          {quote.createdAt ? new Date(quote.createdAt).toLocaleString() : "N/A"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
       ) : null}
 
-      {/* Vendor Quotes */}
-      {activeTab === "quotes" && (
-        <div>
-          {rfqDetails && !rfqDetails.eReverseToggle && (
-            <p className="text-center text-red-500 mb-4">
-              eReverse auction is not enabled for this RFQ.
-            </p>
-          )}
-          {quotes.length === 0 ? (
-            <p className="text-center text-black">
-              No quotes available for this RFQ.
-            </p>
-          ) : (
-            <div className="overflow-x-auto rounded-lg">
-              <table className="min-w-full divide-y divide-black">
-                <thead className="bg-green-600 rounded-lg">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Company Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Number of Trucks
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Quote
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Label
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Trucks Allotted
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-bold text-black uppercase tracking-wider">
-                      Time Submitted
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-black">
-                  {labeledQuotes.map((quote) => (
-                    <tr key={quote._id} className="hover:bg-blue-200">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {quote.vendorName}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {quote.numberOfTrucks}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {userRole === "factory" ? (
-                          <span className="blur-sm">Blurred</span>
-                        ) : (
-                          quote.price
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {userRole === "factory" ? (
-                          <span className="blur-sm">Blurred</span>
-                        ) : (
-                          quote.label
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {userRole === "factory" ? (
-                          <span className="blur-sm">Blurred</span>
-                        ) : (
-                          quote.trucksAllotted
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                        {quote.createdAt
-                          ? new Date(quote.createdAt).toLocaleString()
-                          : "N/A"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Render labels and allocations if RFQ is in evaluation or closed */}
-          {(rfqStatus === "evaluation" || rfqStatus === "closed") && (
-            <div>
-              <h3 className="font-bold mb-2">
-                Vendor Labels and Truck Allocations
-              </h3>
-              {/* Display the quotes with labels and trucksAllotted */}
-              {quotes.map((quote) => (
-                <div key={quote._id} className="border p-4 mb-2">
-                  <p>Vendor: {quote.vendorName}</p>
-                  <p>Label: {quote.label || "-"}</p>
-                  <p>Price: {quote.price}</p>
-                  <p>Trucks Allotted: {quote.trucksAllotted || 0}</p>
-                  {/* If in evaluation, allow factory user to update L2 and L3 allocations */}
-                  {rfqStatus === "evaluation" &&
-                    userRole === "factory" &&
-                    quote.label !== "L1" && (
-                      <div className="mt-2">
-                        <input
-                          type="number"
-                          value={quote.trucksAllotted || 0}
-                          onChange={(e) =>
-                            handleTrucksAllottedChange(
-                              quote._id,
-                              e.target.value
-                            )
-                          }
-                          className="p-1 border"
-                        />
-                        <button
-                          onClick={() => updateTrucksAllotted(quote._id)}
-                          className="ml-2 bg-blue-500 text-white px-2 py-1 rounded"
-                        >
-                          Update
-                        </button>
-                      </div>
-                    )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Buttons for Actions */}
-          <div className="mt-6 flex justify-center">
-            <button
-              className="text-white bg-blue-500 hover:bg-blue-700 font-bold py-2 px-4 rounded-full mr-2"
-              onClick={() => setIsReminderModalOpen(true)}
-            >
-              Send Participation Reminder
-            </button>
-            <button
-              className="text-white bg-green-500 hover:bg-green-700 font-bold py-2 px-4 rounded-full"
-              onClick={() => setIsAddVendorsModalOpen(true)}
-            >
-              Add Vendors to RFQ
-            </button>
-          </div>
-
-          {/* Send Participation Reminder Modal */}
-          {isReminderModalOpen && (
-            <div className="fixed z-50 inset-0 overflow-y-auto">
-              <div className="flex items-center justify-center min-h-screen">
-                <div className="bg-white p-6 rounded-lg shadow-lg w-3/4">
-                  <h2 className="text-xl font-bold mb-4">
-                    Select Vendors for Reminder
-                  </h2>
-                  <ul className="mb-4">
-                    {reminderVendors.map((vendor) => (
-                      <li key={vendor._id} className="flex items-center mb-2">
-                        <input
-                          type="checkbox"
-                          checked={reminderSelectedVendors.includes(vendor._id)}
-                          onChange={() =>
-                            handleReminderVendorSelection(vendor._id)
-                          }
-                          className="mr-2"
-                        />
-                        {vendor.vendorName}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="flex justify-end">
-                    <button
-                      className="mr-4 bg-gray-300 hover:bg-gray-400 text-black py-2 px-4 rounded"
-                      onClick={() => setIsReminderModalOpen(false)}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className={`bg-green-500 hover:bg-green-700 text-white py-2 px-4 rounded-lg ${
-                        isSending ? "opacity-50 cursor-not-allowed" : ""
-                      }`}
-                      onClick={sendParticipationReminder}
-                      disabled={isSending}
-                    >
-                      {isSending ? "Sending..." : "Send Reminder"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Add Vendors to RFQ Modal */}
-          {isAddVendorsModalOpen && (
-            <div className="fixed z-50 inset-0 overflow-y-auto">
-              <div className="flex items-center justify-center min-h-screen">
-                <div className="bg-white p-6 rounded-lg shadow-lg w-3/4">
-                  <h2 className="text-xl font-bold mb-4">
-                    Select Vendors to Add
-                  </h2>
-                  <ul className="mb-4">
-                    {addVendorsList.map((vendor) => (
-                      <li key={vendor._id} className="flex items-center mb-2">
-                        <input
-                          type="checkbox"
-                          checked={addVendorsSelectedVendors.includes(
-                            vendor._id
-                          )}
-                          onChange={() => handleAddVendorsSelection(vendor._id)}
-                          className="mr-2"
-                        />
-                        {vendor.vendorName}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="flex justify-end">
-                    <button
-                      className="mr-4 bg-gray-300 hover:bg-gray-400 text-black py-2 px-4 rounded"
-                      onClick={() => setIsAddVendorsModalOpen(false)}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className={`bg-green-500 hover:bg-green-700 text-white py-2 px-4 rounded-lg ${
-                        isSending ? "opacity-50 cursor-not-allowed" : ""
-                      }`}
-                      onClick={addVendorsToRFQ}
-                      disabled={isSending}
-                    >
-                      {isSending ? "Adding..." : "Add Vendors"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+      {statusMessage && (
+        <div className="mt-6 text-center">
+          <p className={`text-lg ${statusMessage.includes("Error") ? "text-red-600 font-bold" : "text-green-800 font-bold"}`}>
+            {statusMessage}
+          </p>
         </div>
       )}
 
-      {/* Status Message */}
-      {statusMessage && (
-        <div className="mt-6 text-center">
-          <p
-            className={`text-lg ${
-              statusMessage.includes("Error")
-                ? "text-red-600 font-bold"
-                : "text-green-800 font-bold"
-            }`}
-          >
-            {statusMessage}
-          </p>
+      {/* Finalize Allocation Modal */}
+      {isFinalizeModalOpen && (
+        <div className="fixed z-50 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen">
+            <div className="bg-white p-6 rounded-lg shadow-lg w-3/4">
+              <h2 className="text-xl font-bold mb-4">Finalize Allocation</h2>
+              <p className="mb-2">
+                If your allocation differs from the LEAFI allocation, please provide a reason:
+              </p>
+              <textarea
+                value={finalizeReason}
+                onChange={(e) => setFinalizeReason(e.target.value)}
+                className="w-full p-2 border mb-4"
+                rows="4"
+              ></textarea>
+              <div className="flex justify-end">
+                <button
+                  className="mr-4 bg-gray-300 hover:bg-gray-400 text-black py-2 px-4 rounded"
+                  onClick={() => setIsFinalizeModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className={`bg-red-500 hover:bg-red-700 text-white py-2 px-4 rounded-lg ${
+                    isFinalizing ? "opacity-50 cursor-not-allowed" : ""
+                  }`}
+                  onClick={finalizeAllocation}
+                  disabled={isFinalizing}
+                >
+                  {isFinalizing ? "Finalizing..." : "Finalize Allocation"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
