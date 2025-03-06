@@ -356,6 +356,7 @@ const EvalRFQs = ({ userRole }) => {
                         <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
                         {/* New Columns */}
+                        <th className="px-4 py-2 text-left text-sm font-bold">Transship/Direct</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Shipping Line Name</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Container Type</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Vessel Name</th>
@@ -384,6 +385,9 @@ const EvalRFQs = ({ userRole }) => {
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.containersAllotted}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.label}</td>
                           {/* New Columns */}
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {quote.transshipOrDirect || "-"}
+                          </td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.shippingLineName}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.containerType}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{quote.vesselName}</td>
@@ -424,6 +428,7 @@ const EvalRFQs = ({ userRole }) => {
                         <th className="px-4 py-2 text-left text-sm font-bold">Containers Allotted</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Label</th>
                         {/* New Columns */}
+                        <th className="px-4 py-2 text-left text-sm font-bold">Transship/Direct</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Shipping Line Name</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Container Type</th>
                         <th className="px-4 py-2 text-left text-sm font-bold">Vessel Name</th>
@@ -448,6 +453,9 @@ const EvalRFQs = ({ userRole }) => {
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.containersAllotted}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.label}</td>
                           {/* New Columns */}
+                          <td className="px-4 py-2 whitespace-nowrap text-sm">
+                            {alloc.transshipOrDirect || "-"}
+                          </td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.shippingLineName}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.containerType}</td>
                           <td className="px-4 py-2 whitespace-nowrap text-sm">{alloc.vesselName}</td>

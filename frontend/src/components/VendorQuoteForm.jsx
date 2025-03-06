@@ -33,29 +33,37 @@ const VendorQuoteForm = ({ username }) => {
   const [chaChargesHome, setChaChargesHome] = useState("");
   const [chaChargesMOOWR, setChaChargesMOOWR] = useState("");
 
+  const [transshipOrDirect, setTransshipOrDirect] = useState("Direct");
+
   // New state for dynamically calculated totals
   const [totalCHAHome, setTotalCHAHome] = useState(0);
   const [totalCHAMOOWR, setTotalCHAMOOWR] = useState(0);
 
   // Example conversion rate from USD to INR
-  const conversionRate = 80;
+  const conversionRate = 84;
 
   useEffect(() => {
     const fetchRFQDetails = async () => {
       try {
         // Fetch the RFQ details
-        const rfqResponse = await axios.get(`http://localhost:8000/api/rfqsi/${rfqId}`);
+        const rfqResponse = await axios.get(
+          `http://localhost:8000/api/rfqsi/${rfqId}`
+        );
         setRfqDetails(rfqResponse.data);
         setRfqStatus(rfqResponse.data.status);
         setL1Price(rfqResponse.data.l1Price);
-        const minContainers = Math.ceil(0.39 * rfqResponse.data.numberOfContainers);
+        const minContainers = Math.ceil(
+          0.39 * rfqResponse.data.numberOfContainers
+        );
         setMinContainersRequired(minContainers);
         // Automatically fill containerType from the RFQ details
         setContainerType(rfqResponse.data.containerType || "");
 
         // Fetch the vendor's existing quote (if any)
         const quoteResponse = await axios
-          .get(`http://localhost:8000/api/quotesi/rfq/${rfqId}/vendor/${username}`)
+          .get(
+            `http://localhost:8000/api/quotesi/rfq/${rfqId}/vendor/${username}`
+          )
           .catch((err) => {
             if (err.response && err.response.status === 404) {
               return { data: null };
@@ -114,6 +122,9 @@ const VendorQuoteForm = ({ username }) => {
               ? quoteResponse.data.chaChargesMOOWR.toString()
               : ""
           );
+          setTransshipOrDirect(
+            quoteResponse.data.transshipOrDirect || "Direct"
+          );
         }
       } catch (error) {
         console.error("Error fetching RFQ details or quote:", error);
@@ -126,7 +137,9 @@ const VendorQuoteForm = ({ username }) => {
 
     const fetchVendorDetails = async () => {
       try {
-        const vendorResponse = await axios.get(`http://localhost:8000/api/vendors/username/${username}`);
+        const vendorResponse = await axios.get(
+          `http://localhost:8000/api/vendors/username/${username}`
+        );
         setVendorDetails(vendorResponse.data);
       } catch (error) {
         console.error("Error fetching vendor details:", error);
@@ -179,7 +192,8 @@ const VendorQuoteForm = ({ username }) => {
         if (!/^\d*$/.test(value)) {
           setErrors((prev) => ({
             ...prev,
-            numberOfContainers: "Number of Containers must contain only digits.",
+            numberOfContainers:
+              "Number of Containers must contain only digits.",
           }));
         } else {
           setErrors((prev) => ({ ...prev, numberOfContainers: "" }));
@@ -257,6 +271,9 @@ const VendorQuoteForm = ({ username }) => {
         }
         setChaChargesMOOWR(value);
         break;
+      case "transshipOrDirect":
+        setTransshipOrDirect(value);
+        break;
       default:
         break;
     }
@@ -300,7 +317,8 @@ const VendorQuoteForm = ({ username }) => {
       hasError = true;
     }
     if (!seaFreightPerContainer || seaFreightPerContainer.trim() === "") {
-      newErrors.seaFreightPerContainer = "Sea Freight per container is required.";
+      newErrors.seaFreightPerContainer =
+        "Sea Freight per container is required.";
       hasError = true;
     }
     if (!houseDO || houseDO.trim() === "") {
@@ -349,6 +367,7 @@ const VendorQuoteForm = ({ username }) => {
         chaChargesHome: Number(chaChargesHome),
         chaChargesMOOWR: Number(chaChargesMOOWR),
         message,
+        transshipOrDirect,
       };
 
       if (vendorQuote) {
@@ -359,7 +378,10 @@ const VendorQuoteForm = ({ username }) => {
         alert("Quote updated successfully!");
         setVendorQuote(updateResponse.data.quote);
       } else {
-        const submitResponse = await axios.post("http://localhost:8000/api/quotesi", quoteData);
+        const submitResponse = await axios.post(
+          "http://localhost:8000/api/quotesi",
+          quoteData
+        );
         alert("Quote submitted successfully!");
         setVendorQuote(submitResponse.data.quote);
       }
@@ -369,7 +391,9 @@ const VendorQuoteForm = ({ username }) => {
       if (error.response?.data?.error) {
         setErrors({ submit: error.response.data.error });
       } else {
-        setErrors({ submit: "Failed to submit/update quote. Please try again." });
+        setErrors({
+          submit: "Failed to submit/update quote. Please try again.",
+        });
       }
     } finally {
       setIsLoading(false);
@@ -692,11 +716,24 @@ const VendorQuoteForm = ({ username }) => {
             </p>
           </div>
 
+          {/* New Dropdown: Transship or Direct? */}
+          <div className="mb-4">
+            <label className="block mb-1">Transship or Direct?</label>
+            <select
+              name="transshipOrDirect"
+              value={transshipOrDirect}
+              onChange={handleInputChange}
+              className="w-full p-2 border border-gray-300 rounded"
+              required
+            >
+              <option value="Direct">Direct</option>
+              <option value="Transship">Transship</option>
+            </select>
+          </div>
+
           {/* Till When is your Quote Valid */}
           <div className="mb-4">
-            <label className="block mb-1">
-              Till When is your Quote Valid
-            </label>
+            <label className="block mb-1">Till When is your Quote Valid</label>
             <input
               type="date"
               name="validityPeriod"
@@ -755,7 +792,8 @@ const VendorQuoteForm = ({ username }) => {
       return (
         <div className="container mx-auto mt-8 px-4 py-6 bg-white rounded-lg shadow-lg">
           <h2 className="text-2xl font-bold text-center mb-6">
-            You did not submit an initial quote. You cannot update your quote now.
+            You did not submit an initial quote. You cannot update your quote
+            now.
           </h2>
         </div>
       );

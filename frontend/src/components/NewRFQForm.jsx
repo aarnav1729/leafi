@@ -21,6 +21,7 @@ const NewRFQForm = () => {
     evaluationEndTime: "",
     RFQClosingDate: "",
     RFQClosingTime: "",
+    description: "",
   });
 
   const [vendors, setVendors] = useState([]);
@@ -35,7 +36,9 @@ const NewRFQForm = () => {
 
   const fetchInboundNextRFQNumber = async () => {
     try {
-      const response = await axios.get("http://localhost:8000/api/inbound-next-rfq-number");
+      const response = await axios.get(
+        "http://localhost:8000/api/inbound-next-rfq-number"
+      );
       const inboundNum = response.data?.RFQNumber || "";
       setFormData((prev) => ({ ...prev, RFQNumber: inboundNum }));
     } catch (error) {
@@ -45,7 +48,9 @@ const NewRFQForm = () => {
 
   const fetchInboundVendors = async () => {
     try {
-      const response = await axios.get("http://localhost:8000/api/inbound-vendors");
+      const response = await axios.get(
+        "http://localhost:8000/api/inbound-vendors"
+      );
       console.log("Inbound Vendors Response:", response.data); // Add this line
       setVendors(Array.isArray(response.data) ? response.data : []); // Ensure it's an array
     } catch (error) {
@@ -135,7 +140,10 @@ const NewRFQForm = () => {
       };
 
       // Post to your inbound create RFQ route, e.g. /api/rfqsi or /api/inbound-rfq
-      const response = await axios.post("http://localhost:8000/api/rfqsi", dataToSend);
+      const response = await axios.post(
+        "http://localhost:8000/api/rfqsi",
+        dataToSend
+      );
       if (response.status === 201 && response.data.success) {
         alert("Inbound RFQ created successfully!");
         // Reset
@@ -154,6 +162,7 @@ const NewRFQForm = () => {
           eReverseToggle: false,
           eReverseDate: "",
           eReverseTime: "",
+          description: "",
           initialQuoteEndTime: "",
           evaluationEndTime: "",
           RFQClosingDate: "",
@@ -175,7 +184,7 @@ const NewRFQForm = () => {
   return (
     <div className="container mx-auto mt-8 px-4 py-6 bg-transparent text-black rounded-lg shadow-lg border border-black">
       <h2 className="text-2xl font-bold mb-6 text-center">
-        Create New Inbound RFQ 
+        Create New Inbound RFQ
       </h2>
 
       <form
@@ -184,9 +193,7 @@ const NewRFQForm = () => {
       >
         {/* 1. RFQNumber */}
         <div className="mb-4">
-          <label className="block text-xl text-black">
-            RFQ Number
-          </label>
+          <label className="block text-xl text-black">RFQ Number</label>
           <input
             type="text"
             name="RFQNumber"
@@ -200,9 +207,7 @@ const NewRFQForm = () => {
 
         {/* 2. Item Description */}
         <div className="mb-4">
-          <label className="block text-xl text-black">
-            Item Description 
-          </label>
+          <label className="block text-xl text-black">Item Description</label>
           <select
             name="itemDescription"
             value={formData.itemDescription || ""}
@@ -274,9 +279,7 @@ const NewRFQForm = () => {
 
         {/* 3. Company Name */}
         <div className="mb-4">
-          <label className="block text-xl text-black">
-            Company Name 
-          </label>
+          <label className="block text-xl text-black">Company Name</label>
           <select
             name="companyName"
             value={formData.companyName || ""}
@@ -286,64 +289,75 @@ const NewRFQForm = () => {
           >
             <option value="">Select</option>
 
-            <option value="Premier Energies Limited SURVEY NO 53 ANNARAM VILLAGAE G P ANNARAM
+            <option
+              value="Premier Energies Limited SURVEY NO 53 ANNARAM VILLAGAE G P ANNARAM
               JINNARAM Mandal MEDAK District, Telangana-502313 India. IEC :
-              0996000402 PAN : AABCP8800D GST :36AABCP8800D1ZP">
-              
+              0996000402 PAN : AABCP8800D GST :36AABCP8800D1ZP"
+            >
               Premier Energies Limited SURVEY NO 53 ANNARAM VILLAGAE G P ANNARAM
               JINNARAM Mandal MEDAK District, Telangana-502313 India. IEC :
               0996000402 PAN : AABCP8800D GST :36AABCP8800D1ZP
             </option>
-            
-            <option value="Premier Energies Photovoltaic Private Limited Plot No. 8/B/1/ and
+
+            <option
+              value="Premier Energies Photovoltaic Private Limited Plot No. 8/B/1/ and
               8/B/2 E-City, Raviryala Village, Maheshwaram Mandal, Ranga Reddy,
               Telangana, 501359,India. IEC : AAXCS4996H PAN : AAXCS4996H GST :
-              36AAXCS4996H1ZB">
+              36AAXCS4996H1ZB"
+            >
               Premier Energies Photovoltaic Private Limited Plot No. 8/B/1/ and
               8/B/2 E-City, Raviryala Village, Maheshwaram Mandal, Ranga Reddy,
               Telangana, 501359,India. IEC : AAXCS4996H PAN : AAXCS4996H GST :
               36AAXCS4996H1ZB
             </option>
-            <option value="Premier Energies International Private Limited- Unit 1
+            <option
+              value="Premier Energies International Private Limited- Unit 1
               Unit-I,Survey No 62 P 63P and 88 P Plot No 8/B/1 and 8/B/2,
               Raviryala Srinagar Village, Maheshwaram Mandal, Ranga Reddy
               TS,Srinagar Village, Pedda Golconda ,
               Rangareddy,Telangana,501359,India IEC : AATCA8732D PAN: AATCA8732D
-              GST : 36AATCA8732D1ZF">
-            Premier Energies International Private Limited- Unit 1
+              GST : 36AATCA8732D1ZF"
+            >
+              Premier Energies International Private Limited- Unit 1
               Unit-I,Survey No 62 P 63P and 88 P Plot No 8/B/1 and 8/B/2,
               Raviryala Srinagar Village, Maheshwaram Mandal, Ranga Reddy
               TS,Srinagar Village, Pedda Golconda ,
               Rangareddy,Telangana,501359,India IEC : AATCA8732D PAN: AATCA8732D
               GST : 36AATCA8732D1ZF
             </option>
-            <option value="Premier Energies International Private Limited- Unit 2
+            <option
+              value="Premier Energies International Private Limited- Unit 2
               Unit-II,Plot No S-95 S-96 S-100 S-101 S-102 S-103 S-104, Raviryala
               Srinagar Village Maheswaram, FAB City, Rangareddy, Telangana,
               501359,India IEC : AATCA8732D PAN: AATCA8732D GST :
-              36AATCA8732D1ZF">
-            Premier Energies International Private Limited- Unit 2
+              36AATCA8732D1ZF"
+            >
+              Premier Energies International Private Limited- Unit 2
               Unit-II,Plot No S-95 S-96 S-100 S-101 S-102 S-103 S-104, Raviryala
               Srinagar Village Maheswaram, FAB City, Rangareddy, Telangana,
               501359,India IEC : AATCA8732D PAN: AATCA8732D GST :
               36AATCA8732D1ZF
             </option>
-            <option value="Premier energies Global Environment Private Limited Plot No S-95,
+            <option
+              value="Premier energies Global Environment Private Limited Plot No S-95,
               S-96, S-100, S-101, S-102, S-103, S-104, Raviryala, Srinagar
               Village, Maheswaram, Raviryal Industrial Area, FAB City,
               Rangareddy, Telangana – 501359,India. IEC : AALCP9141K PAN:
-              AALCP9141K GST : 36AALCP9141K1ZW">
-            Premier energies Global Environment Private Limited Plot No S-95,
+              AALCP9141K GST : 36AALCP9141K1ZW"
+            >
+              Premier energies Global Environment Private Limited Plot No S-95,
               S-96, S-100, S-101, S-102, S-103, S-104, Raviryala, Srinagar
               Village, Maheswaram, Raviryal Industrial Area, FAB City,
               Rangareddy, Telangana – 501359,India. IEC : AALCP9141K PAN:
               AALCP9141K GST : 36AALCP9141K1ZW
             </option>
-            <option value="Premier Energies Global Environment Private Limited- Unit 2 Sy No
+            <option
+              value="Premier Energies Global Environment Private Limited- Unit 2 Sy No
               303 304 305 and 306/2, EMC Maheswaram, Ranga Reddy Dist, ,
               Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
-              36AALCP9141K1ZW">
-            Premier Energies Global Environment Private Limited- Unit 2 Sy No
+              36AALCP9141K1ZW"
+            >
+              Premier Energies Global Environment Private Limited- Unit 2 Sy No
               303 304 305 and 306/2, EMC Maheswaram, Ranga Reddy Dist, ,
               Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
               36AALCP9141K1ZW
@@ -353,9 +367,7 @@ const NewRFQForm = () => {
 
         {/* 4. PO Number */}
         <div className="mb-4">
-          <label className="block text-xl text-black">
-            Material PO Number 
-          </label>
+          <label className="block text-xl text-black">Material PO Number</label>
           <input
             type="text"
             name="poNumber"
@@ -368,9 +380,7 @@ const NewRFQForm = () => {
 
         {/* 5. Supplier Name */}
         <div className="mb-4">
-          <label className="block text-xl text-black">
-            Supplier Name 
-          </label>
+          <label className="block text-xl text-black">Supplier Name</label>
           <select
             name="supplierName"
             value={formData.supplierName || ""}
@@ -468,7 +478,7 @@ const NewRFQForm = () => {
               HANGZHOU FIRST APPLIED MALTD.
             </option>
             <option value="XI'AN TELISON NEW MATERIA">
-              XI'AN TELISON NEW MATERIA
+              XI AN TELISON NEW MATERIAL
             </option>
             <option value="COVEME ENGINEERED FILMS Z">
               COVEME ENGINEERED FILMS Z
@@ -609,7 +619,7 @@ const NewRFQForm = () => {
               ASIA NEO TECH INDUSTRIALCO., LTD
             </option>
             <option value="AKCOME METALS TECHNOLOGY(CO.,LTD">
-              AKCOME METALS TECHNOLOGY(CO.,LTD
+              AKCOME METALS TECHNOLOGY CO.,LTD
             </option>
             <option value="MAXWELL TECHNOLOGY PTE. L">
               MAXWELL TECHNOLOGY PTE. L
@@ -643,7 +653,7 @@ const NewRFQForm = () => {
               GUANGZHOU BAIYUN TECHNOLOCO.,LTD.
             </option>
             <option value="SUNFONERGY TECHNOLOGIES (">
-              SUNFONERGY TECHNOLOGIES (
+              SUNFONERGY TECHNOLOGIES
             </option>
             <option value="JIANGSU HUAHENG NEW ENERGCO., LTD.">
               JIANGSU HUAHENG NEW ENERGCO., LTD.
@@ -758,7 +768,7 @@ const NewRFQForm = () => {
               JIANGSU HUANENG INTELLIGEENERGY SUPPLY CHAIN TECHN
             </option>
             <option value="SOLAR LONG PV-TECH (CAMBOCO., LTD.">
-              SOLAR LONG PV-TECH (CAMBOCO., LTD.
+              SOLAR LONG PV-TECH CAMBOCO., LTD.
             </option>
             <option value="AIDU ENERGY CO.,LTD">AIDU ENERGY CO.,LTD</option>
             <option value="AIDU ENERGY PTE.LTD.">AIDU ENERGY PTE.LTD.</option>
@@ -804,7 +814,7 @@ const NewRFQForm = () => {
               ZHANGJIAGANG SIMPULSE-TEC
             </option>
             <option value="WATERON TECHNOLOGY (HONGCO., LTD.">
-              WATERON TECHNOLOGY (HONGCO., LTD.
+              WATERON TECHNOLOGY HONGCO., LTD.
             </option>
             <option value="XIAMEN C&D COMMODITY TRAD">
               XIAMEN C&D COMMODITY TRAD
@@ -1060,9 +1070,7 @@ const NewRFQForm = () => {
 
         {/* 6. Port of Loading */}
         <div className="mb-4">
-          <label className="block text-xl text-black">
-            Port of Loading 
-          </label>
+          <label className="block text-xl text-black">Port of Loading</label>
           <select
             name="portOfLoading"
             value={formData.portOfLoading || ""}
@@ -1087,7 +1095,7 @@ const NewRFQForm = () => {
         {/* 7. Port of Destination */}
         <div className="mb-4">
           <label className="block text-xl text-black">
-            Port of Destination 
+            Port of Destination
           </label>
           <select
             name="portOfDestination"
@@ -1110,9 +1118,7 @@ const NewRFQForm = () => {
 
         {/* 8. Container Type */}
         <div className="mb-4">
-          <label className="block text-xl text-black">
-            Container Type 
-          </label>
+          <label className="block text-xl text-black">Container Type</label>
           <select
             name="containerType"
             value={formData.containerType || ""}
@@ -1133,7 +1139,7 @@ const NewRFQForm = () => {
         {/* 9. Number of Containers */}
         <div className="mb-4">
           <label className="block text-xl text-black">
-            Number of Containers 
+            Number of Containers
           </label>
           <input
             type="number"
@@ -1153,7 +1159,7 @@ const NewRFQForm = () => {
         {/* 10. Cargo Weight in Container */}
         <div className="mb-4">
           <label className="block text-xl text-black">
-            Cargo Weight in Container (In Tons) 
+            Cargo Weight in Container (In Tons)
           </label>
           <input
             type="number"
@@ -1173,7 +1179,7 @@ const NewRFQForm = () => {
         {/* 11. Cargo Readiness Date */}
         <div className="mb-4">
           <label className="block text-xl text-black">
-            Tentative Cargo Readiness Date 
+            Tentative Cargo Readiness Date
           </label>
           <input
             type="date"
@@ -1188,7 +1194,7 @@ const NewRFQForm = () => {
         {/* 12. Initial Quote End Time */}
         <div className="mb-4">
           <label className="block text-xl text-black">
-            Initial Quote End Time 
+            Initial Quote End Time
           </label>
           <input
             type="datetime-local"
@@ -1260,6 +1266,21 @@ const NewRFQForm = () => {
             </div>
           </>
         )}
+
+        {/* New Description Field */}
+        <div className="mb-4 md:col-span-3">
+          <label className="block text-xl text-black">
+            Description (Optional)
+          </label>
+          <textarea
+            name="description"
+            value={formData.description || ""}
+            onChange={handleChange}
+            placeholder="Paste any data here..."
+            className="mt-1 block w-full px-3 py-2 border border-black bg-gray-200 rounded-md shadow-sm"
+            rows="4"
+          />
+        </div>
 
         {/* 15. RFQ Closing Date & Time */}
         <div className="mb-4">
