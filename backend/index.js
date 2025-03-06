@@ -247,6 +247,16 @@ app.post("/api/verify-otp", async (req, res) => {
   }
 });
 
+// Endpoint for fetching inbound factory users (role "factory")
+app.get("/api/inbound-factory-users", async (req, res) => {
+  try {
+    const factoryUsers = await UsersI.find({ role: "factory" }).lean();
+    res.status(200).json(factoryUsers);
+  } catch (error) {
+    console.error("Error fetching inbound factory users:", error);
+    res.status(500).json({ error: "Failed to fetch inbound factory users" });
+  }
+});
 
 // POST /api/login: Login the user using UsersI
 app.post("/api/login", async (req, res) => {

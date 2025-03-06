@@ -34,7 +34,8 @@ const VendorList = () => {
 
   const fetchVendors = async () => {
     try {
-      const response = await axios.get("http://localhost:8000/api/vendors");
+      // Updated to fetch inbound vendors
+      const response = await axios.get("http://localhost:8000/api/inbound-vendors");
       setVendors(response.data);
     } catch (error) {
       console.error("Error fetching vendors:", error);
@@ -43,9 +44,8 @@ const VendorList = () => {
 
   const fetchFactoryUsers = async () => {
     try {
-      const response = await axios.get(
-        "http://localhost:8000/api/factory-users"
-      );
+      // New endpoint for inbound factory users
+      const response = await axios.get("http://localhost:8000/api/inbound-factory-users");
       setFactoryUsers(response.data);
     } catch (error) {
       console.error("Error fetching factory users:", error);
@@ -55,10 +55,8 @@ const VendorList = () => {
   const addVendor = async (e) => {
     e.preventDefault();
     try {
-      await axios.post(
-        "http://localhost:8000/api/add-vendor",
-        vendorFormData
-      );
+      // Use inbound vendor endpoint
+      await axios.post("http://localhost:8000/api/vendorsi", vendorFormData);
       fetchVendors();
       setVendorFormData({
         username: "",
@@ -77,7 +75,8 @@ const VendorList = () => {
   const addFactoryUser = async (e) => {
     e.preventDefault();
     try {
-      await axios.post("http://localhost:8000/api/add-factory-user", factoryFormData);
+      // Use inbound user endpoint for factory users
+      await axios.post("http://localhost:8000/api/usersi", factoryFormData);
       fetchFactoryUsers();
       setFactoryFormData({ username: "", password: "", email: "", contactNumber: "" });
       setShowFactoryForm(false);
@@ -90,7 +89,8 @@ const VendorList = () => {
 
   const deleteVendor = async (id) => {
     try {
-      await axios.delete(`http://localhost:8000/api/vendors/${id}`);
+      // Delete inbound vendor by ID
+      await axios.delete(`http://localhost:8000/api/vendorsi/${id}`);
       fetchVendors();
     } catch (error) {
       console.error("Error deleting vendor:", error);
@@ -99,7 +99,8 @@ const VendorList = () => {
 
   const deleteFactoryUser = async (id) => {
     try {
-      await axios.delete(`http://localhost:8000/api/factory-users/${id}`);
+      // Delete inbound factory user by ID
+      await axios.delete(`http://localhost:8000/api/usersi/${id}`);
       fetchFactoryUsers();
     } catch (error) {
       console.error("Error deleting factory user:", error);
@@ -109,7 +110,7 @@ const VendorList = () => {
   return (
     <div className="container mx-auto mt-8 px-4 py-6 bg-white rounded-lg shadow-lg">
       {/* Vendors Table */}
-      <h2 className="text-2xl font-bold text-center mb-6">Vendor List</h2>
+      <h2 className="text-2xl font-bold text-center mb-6">Vendor Users</h2>
       {/* New Vendor Button */}
       <div className="flex justify-end mb-4">
         <button
@@ -183,7 +184,6 @@ const VendorList = () => {
             </button>
           </div>
         </form>
-        
       )}
       {/* Vendors Table */}
       <div className="overflow-x-auto">
@@ -191,7 +191,7 @@ const VendorList = () => {
           <thead className="bg-green-600">
             <tr>
               <th className="px-6 py-3 text-left text-sm text-black font-bold uppercase tracking-wider">
-                Company Name
+                Vendor Name
               </th>
               <th className="px-6 py-3 text-left text-sm text-black font-bold uppercase tracking-wider">
                 Email
@@ -208,7 +208,7 @@ const VendorList = () => {
             {vendors.map((vendor) => (
               <tr key={vendor._id}>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                  {vendor.companyName}
+                  {vendor.vendorName}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
                   {vendor.email}
@@ -231,7 +231,7 @@ const VendorList = () => {
       </div>
 
       {/* Factory Users Table */}
-      <h2 className="text-2xl font-bold text-center my-6">Factory Users</h2>
+      <h2 className="text-2xl font-bold text-center my-6">Logistics Users</h2>
       {/* New Factory User Button */}
       <div className="flex justify-end mb-4">
         <button
@@ -254,7 +254,6 @@ const VendorList = () => {
                   ...factoryFormData,
                   username: e.target.value,
                 })
-              
               }
               required
               className="p-2 border border-black rounded text-white bg-gray-700 hover:bg-white hover:text-black"
