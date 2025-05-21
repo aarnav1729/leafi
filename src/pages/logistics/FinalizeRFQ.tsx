@@ -1,5 +1,5 @@
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
@@ -28,8 +28,8 @@ const FinalizeRFQ = () => {
     };
   }>({});
 
-  // Calculate optimal allocation based on cost
-  useMemo(() => {
+  // Calculate optimal allocation based on cost once when component mounts or dependencies change
+  useEffect(() => {
     if (rfq && quotes.length > 0) {
       // For demo purpose, we'll allocate all containers to the first quote's cheapest option
       const initialAllocation: typeof logisticsAllocation = {};
@@ -44,7 +44,10 @@ const FinalizeRFQ = () => {
         };
       });
       
-      setLogisticsAllocation(initialAllocation);
+      // Only set state if it's different from current state or empty
+      if (Object.keys(logisticsAllocation).length === 0) {
+        setLogisticsAllocation(initialAllocation);
+      }
     }
   }, [rfq, quotes]);
 
