@@ -1,5 +1,5 @@
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
@@ -148,284 +148,322 @@ const FinalizeRFQ = () => {
         </Button>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {quotes.map((quote) => {
-          const vendorName = quote.vendorName;
-          const seaFreightInINR = quote.seaFreightPerContainer * USD_TO_INR_RATE;
-          
-          const homeTotal = 
-            seaFreightInINR + 
-            quote.houseDeliveryOrderPerBOL + 
-            quote.cfsPerContainer + 
-            quote.transportationPerContainer + 
-            quote.ediChargesPerBOE + 
-            quote.chaChargesHome;
-          
-          const mooWRTotal = 
-            seaFreightInINR + 
-            quote.houseDeliveryOrderPerBOL + 
-            quote.cfsPerContainer + 
-            quote.transportationPerContainer + 
-            quote.ediChargesPerBOE + 
-            quote.mooWRReeWarehousingCharges + 
-            quote.chaChargesMOOWR;
+      {/* LEAFI Allocation Section - both tables side by side */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold">LEAFI Allocation</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {quotes.map((quote) => {
+            const vendorName = quote.vendorName;
+            const seaFreightInINR = quote.seaFreightPerContainer * USD_TO_INR_RATE;
+            
+            const homeTotal = 
+              seaFreightInINR + 
+              quote.houseDeliveryOrderPerBOL + 
+              quote.cfsPerContainer + 
+              quote.transportationPerContainer + 
+              quote.ediChargesPerBOE + 
+              quote.chaChargesHome;
+            
+            const mooWRTotal = 
+              seaFreightInINR + 
+              quote.houseDeliveryOrderPerBOL + 
+              quote.cfsPerContainer + 
+              quote.transportationPerContainer + 
+              quote.ediChargesPerBOE + 
+              quote.mooWRReeWarehousingCharges + 
+              quote.chaChargesMOOWR;
 
-          return (
-            <div key={quote.id} className="space-y-6">
-              {/* Vendor Allocations Section */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>{vendorName} Allocation - CHA-HOME</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full data-table text-sm">
-                      <thead>
-                        <tr>
-                          <th>Vendor</th>
-                          <th>Offered</th>
-                          <th>Allotted</th>
-                          <th>Transship/Direct</th>
-                          <th>Shipping Line</th>
-                          <th>Container Type</th>
-                          <th>Vessel</th>
-                          <th>ETD</th>
-                          <th>ETA</th>
-                          <th>Sea Freight (INR)</th>
-                          <th>HDO (INR)</th>
-                          <th>CFS (INR)</th>
-                          <th>Transport (INR)</th>
-                          <th>EDI (INR)</th>
-                          <th>CHA-Home (INR)</th>
-                          <th>Validity Date</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr>
-                          <td>{vendorName}</td>
-                          <td>{quote.numberOfContainers}</td>
-                          <td>{quote.containersAllottedHome || 0}</td>
-                          <td>{quote.transshipOrDirect}</td>
-                          <td>{quote.shippingLineName}</td>
-                          <td>{quote.containerType}</td>
-                          <td>{quote.vesselName}</td>
-                          <td>{new Date(quote.vesselETD).toLocaleDateString()}</td>
-                          <td>{new Date(quote.vesselETA).toLocaleDateString()}</td>
-                          <td>{(quote.seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}</td>
-                          <td>{quote.houseDeliveryOrderPerBOL.toFixed(2)}</td>
-                          <td>{quote.cfsPerContainer.toFixed(2)}</td>
-                          <td>{quote.transportationPerContainer.toFixed(2)}</td>
-                          <td>{quote.ediChargesPerBOE.toFixed(2)}</td>
-                          <td>{quote.chaChargesHome.toFixed(2)}</td>
-                          <td>{new Date(quote.quoteValidityDate).toLocaleDateString()}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    <div className="mt-4 text-right font-bold">
-                      Total: ₹{homeTotal.toFixed(2)}
+            return (
+              <>
+                {/* CHA-HOME Table */}
+                <Card key={`${quote.id}-home`}>
+                  <CardHeader>
+                    <CardTitle>{vendorName} Allocation - CHA-HOME</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full data-table text-sm">
+                        <thead>
+                          <tr>
+                            <th>Vendor</th>
+                            <th>Offered</th>
+                            <th>Allotted</th>
+                            <th>Transship/Direct</th>
+                            <th>Shipping Line</th>
+                            <th>Container Type</th>
+                            <th>Vessel</th>
+                            <th>ETD</th>
+                            <th>ETA</th>
+                            <th>Sea Freight (INR)</th>
+                            <th>HDO (INR)</th>
+                            <th>CFS (INR)</th>
+                            <th>Transport (INR)</th>
+                            <th>EDI (INR)</th>
+                            <th>CHA-Home (INR)</th>
+                            <th>Validity Date</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>{vendorName}</td>
+                            <td>{quote.numberOfContainers}</td>
+                            <td>{logisticsAllocation[quote.id]?.containersAllottedHome || 0}</td>
+                            <td>{quote.transshipOrDirect}</td>
+                            <td>{quote.shippingLineName}</td>
+                            <td>{quote.containerType}</td>
+                            <td>{quote.vesselName}</td>
+                            <td>{new Date(quote.vesselETD).toLocaleDateString()}</td>
+                            <td>{new Date(quote.vesselETA).toLocaleDateString()}</td>
+                            <td>{(quote.seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}</td>
+                            <td>{quote.houseDeliveryOrderPerBOL.toFixed(2)}</td>
+                            <td>{quote.cfsPerContainer.toFixed(2)}</td>
+                            <td>{quote.transportationPerContainer.toFixed(2)}</td>
+                            <td>{quote.ediChargesPerBOE.toFixed(2)}</td>
+                            <td>{quote.chaChargesHome.toFixed(2)}</td>
+                            <td>{new Date(quote.quoteValidityDate).toLocaleDateString()}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="mt-4 text-right font-bold">
+                        Total: ₹{(homeTotal * (logisticsAllocation[quote.id]?.containersAllottedHome || 0)).toFixed(2)}
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader>
-                  <CardTitle>{vendorName} Allocation - CHA-MOOWR</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full data-table text-sm">
-                      <thead>
-                        <tr>
-                          <th>Vendor</th>
-                          <th>Offered</th>
-                          <th>Allotted</th>
-                          <th>Transship/Direct</th>
-                          <th>Shipping Line</th>
-                          <th>Container Type</th>
-                          <th>Vessel</th>
-                          <th>ETD</th>
-                          <th>ETA</th>
-                          <th>Sea Freight (INR)</th>
-                          <th>HDO (INR)</th>
-                          <th>CFS (INR)</th>
-                          <th>Transport (INR)</th>
-                          <th>EDI (INR)</th>
-                          <th>MOOWR (INR)</th>
-                          <th>CHA-MOOWR (INR)</th>
-                          <th>Validity Date</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr>
-                          <td>{vendorName}</td>
-                          <td>{quote.numberOfContainers}</td>
-                          <td>{quote.containersAllottedMOOWR || 0}</td>
-                          <td>{quote.transshipOrDirect}</td>
-                          <td>{quote.shippingLineName}</td>
-                          <td>{quote.containerType}</td>
-                          <td>{quote.vesselName}</td>
-                          <td>{new Date(quote.vesselETD).toLocaleDateString()}</td>
-                          <td>{new Date(quote.vesselETA).toLocaleDateString()}</td>
-                          <td>{(quote.seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}</td>
-                          <td>{quote.houseDeliveryOrderPerBOL.toFixed(2)}</td>
-                          <td>{quote.cfsPerContainer.toFixed(2)}</td>
-                          <td>{quote.transportationPerContainer.toFixed(2)}</td>
-                          <td>{quote.ediChargesPerBOE.toFixed(2)}</td>
-                          <td>{quote.mooWRReeWarehousingCharges.toFixed(2)}</td>
-                          <td>{quote.chaChargesMOOWR.toFixed(2)}</td>
-                          <td>{new Date(quote.quoteValidityDate).toLocaleDateString()}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    <div className="mt-4 text-right font-bold">
-                      Total: ₹{mooWRTotal.toFixed(2)}
+                  </CardContent>
+                </Card>
+                
+                {/* CHA-MOOWR Table */}
+                <Card key={`${quote.id}-moowr`}>
+                  <CardHeader>
+                    <CardTitle>{vendorName} Allocation - CHA-MOOWR</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full data-table text-sm">
+                        <thead>
+                          <tr>
+                            <th>Vendor</th>
+                            <th>Offered</th>
+                            <th>Allotted</th>
+                            <th>Transship/Direct</th>
+                            <th>Shipping Line</th>
+                            <th>Container Type</th>
+                            <th>Vessel</th>
+                            <th>ETD</th>
+                            <th>ETA</th>
+                            <th>Sea Freight (INR)</th>
+                            <th>HDO (INR)</th>
+                            <th>CFS (INR)</th>
+                            <th>Transport (INR)</th>
+                            <th>EDI (INR)</th>
+                            <th>MOOWR (INR)</th>
+                            <th>CHA-MOOWR (INR)</th>
+                            <th>Validity Date</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>{vendorName}</td>
+                            <td>{quote.numberOfContainers}</td>
+                            <td>{logisticsAllocation[quote.id]?.containersAllottedMOOWR || 0}</td>
+                            <td>{quote.transshipOrDirect}</td>
+                            <td>{quote.shippingLineName}</td>
+                            <td>{quote.containerType}</td>
+                            <td>{quote.vesselName}</td>
+                            <td>{new Date(quote.vesselETD).toLocaleDateString()}</td>
+                            <td>{new Date(quote.vesselETA).toLocaleDateString()}</td>
+                            <td>{(quote.seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}</td>
+                            <td>{quote.houseDeliveryOrderPerBOL.toFixed(2)}</td>
+                            <td>{quote.cfsPerContainer.toFixed(2)}</td>
+                            <td>{quote.transportationPerContainer.toFixed(2)}</td>
+                            <td>{quote.ediChargesPerBOE.toFixed(2)}</td>
+                            <td>{quote.mooWRReeWarehousingCharges.toFixed(2)}</td>
+                            <td>{quote.chaChargesMOOWR.toFixed(2)}</td>
+                            <td>{new Date(quote.quoteValidityDate).toLocaleDateString()}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="mt-4 text-right font-bold">
+                        Total: ₹{(mooWRTotal * (logisticsAllocation[quote.id]?.containersAllottedMOOWR || 0)).toFixed(2)}
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              {/* Logistics Allocation Section */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Logistics Allocation - CHA-HOME</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full data-table text-sm">
-                      <thead>
-                        <tr>
-                          <th>Vendor</th>
-                          <th>Offered</th>
-                          <th>Allotted</th>
-                          <th>Transship/Direct</th>
-                          <th>Shipping Line</th>
-                          <th>Container Type</th>
-                          <th>Vessel</th>
-                          <th>ETD</th>
-                          <th>ETA</th>
-                          <th>Sea Freight (INR)</th>
-                          <th>HDO (INR)</th>
-                          <th>CFS (INR)</th>
-                          <th>Transport (INR)</th>
-                          <th>EDI (INR)</th>
-                          <th>CHA-Home (INR)</th>
-                          <th>Validity Date</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr>
-                          <td>{vendorName}</td>
-                          <td>{quote.numberOfContainers}</td>
-                          <td>
-                            <Input
-                              type="number"
-                              min="0"
-                              max={rfq.numberOfContainers}
-                              value={logisticsAllocation[quote.id]?.containersAllottedHome || 0}
-                              onChange={(e) => handleAllocationChange(
-                                quote.id, 
-                                "home", 
-                                parseInt(e.target.value) || 0
-                              )}
-                              className="w-16"
-                            />
-                          </td>
-                          <td>{quote.transshipOrDirect}</td>
-                          <td>{quote.shippingLineName}</td>
-                          <td>{quote.containerType}</td>
-                          <td>{quote.vesselName}</td>
-                          <td>{new Date(quote.vesselETD).toLocaleDateString()}</td>
-                          <td>{new Date(quote.vesselETA).toLocaleDateString()}</td>
-                          <td>{(quote.seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}</td>
-                          <td>{quote.houseDeliveryOrderPerBOL.toFixed(2)}</td>
-                          <td>{quote.cfsPerContainer.toFixed(2)}</td>
-                          <td>{quote.transportationPerContainer.toFixed(2)}</td>
-                          <td>{quote.ediChargesPerBOE.toFixed(2)}</td>
-                          <td>{quote.chaChargesHome.toFixed(2)}</td>
-                          <td>{new Date(quote.quoteValidityDate).toLocaleDateString()}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    <div className="mt-4 text-right font-bold">
-                      Total: ₹{(homeTotal * (logisticsAllocation[quote.id]?.containersAllottedHome || 0)).toFixed(2)}
+                  </CardContent>
+                </Card>
+              </>
+            );
+          })}
+        </div>
+      </div>
+      
+      {/* Logistics Allocation Section - both tables side by side */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold">Logistics Allocation</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {quotes.map((quote) => {
+            const vendorName = quote.vendorName;
+            const seaFreightInINR = quote.seaFreightPerContainer * USD_TO_INR_RATE;
+            
+            const homeTotal = 
+              seaFreightInINR + 
+              quote.houseDeliveryOrderPerBOL + 
+              quote.cfsPerContainer + 
+              quote.transportationPerContainer + 
+              quote.ediChargesPerBOE + 
+              quote.chaChargesHome;
+            
+            const mooWRTotal = 
+              seaFreightInINR + 
+              quote.houseDeliveryOrderPerBOL + 
+              quote.cfsPerContainer + 
+              quote.transportationPerContainer + 
+              quote.ediChargesPerBOE + 
+              quote.mooWRReeWarehousingCharges + 
+              quote.chaChargesMOOWR;
+
+            return (
+              <>
+                {/* Logistics CHA-HOME Table */}
+                <Card key={`${quote.id}-logistics-home`}>
+                  <CardHeader>
+                    <CardTitle>Logistics Allocation - CHA-HOME</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full data-table text-sm">
+                        <thead>
+                          <tr>
+                            <th>Vendor</th>
+                            <th>Offered</th>
+                            <th>Allotted</th>
+                            <th>Transship/Direct</th>
+                            <th>Shipping Line</th>
+                            <th>Container Type</th>
+                            <th>Vessel</th>
+                            <th>ETD</th>
+                            <th>ETA</th>
+                            <th>Sea Freight (INR)</th>
+                            <th>HDO (INR)</th>
+                            <th>CFS (INR)</th>
+                            <th>Transport (INR)</th>
+                            <th>EDI (INR)</th>
+                            <th>CHA-Home (INR)</th>
+                            <th>Validity Date</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>{vendorName}</td>
+                            <td>{quote.numberOfContainers}</td>
+                            <td>
+                              <Input
+                                type="number"
+                                min="0"
+                                max={rfq.numberOfContainers}
+                                value={logisticsAllocation[quote.id]?.containersAllottedHome || 0}
+                                onChange={(e) => handleAllocationChange(
+                                  quote.id, 
+                                  "home", 
+                                  parseInt(e.target.value) || 0
+                                )}
+                                className="w-16"
+                              />
+                            </td>
+                            <td>{quote.transshipOrDirect}</td>
+                            <td>{quote.shippingLineName}</td>
+                            <td>{quote.containerType}</td>
+                            <td>{quote.vesselName}</td>
+                            <td>{new Date(quote.vesselETD).toLocaleDateString()}</td>
+                            <td>{new Date(quote.vesselETA).toLocaleDateString()}</td>
+                            <td>{(quote.seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}</td>
+                            <td>{quote.houseDeliveryOrderPerBOL.toFixed(2)}</td>
+                            <td>{quote.cfsPerContainer.toFixed(2)}</td>
+                            <td>{quote.transportationPerContainer.toFixed(2)}</td>
+                            <td>{quote.ediChargesPerBOE.toFixed(2)}</td>
+                            <td>{quote.chaChargesHome.toFixed(2)}</td>
+                            <td>{new Date(quote.quoteValidityDate).toLocaleDateString()}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="mt-4 text-right font-bold">
+                        Total: ₹{(homeTotal * (logisticsAllocation[quote.id]?.containersAllottedHome || 0)).toFixed(2)}
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader>
-                  <CardTitle>Logistics Allocation - CHA-MOOWR</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full data-table text-sm">
-                      <thead>
-                        <tr>
-                          <th>Vendor</th>
-                          <th>Offered</th>
-                          <th>Allotted</th>
-                          <th>Transship/Direct</th>
-                          <th>Shipping Line</th>
-                          <th>Container Type</th>
-                          <th>Vessel</th>
-                          <th>ETD</th>
-                          <th>ETA</th>
-                          <th>Sea Freight (INR)</th>
-                          <th>HDO (INR)</th>
-                          <th>CFS (INR)</th>
-                          <th>Transport (INR)</th>
-                          <th>EDI (INR)</th>
-                          <th>MOOWR (INR)</th>
-                          <th>CHA-MOOWR (INR)</th>
-                          <th>Validity Date</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr>
-                          <td>{vendorName}</td>
-                          <td>{quote.numberOfContainers}</td>
-                          <td>
-                            <Input
-                              type="number"
-                              min="0"
-                              max={rfq.numberOfContainers}
-                              value={logisticsAllocation[quote.id]?.containersAllottedMOOWR || 0}
-                              onChange={(e) => handleAllocationChange(
-                                quote.id, 
-                                "moowr", 
-                                parseInt(e.target.value) || 0
-                              )}
-                              className="w-16"
-                            />
-                          </td>
-                          <td>{quote.transshipOrDirect}</td>
-                          <td>{quote.shippingLineName}</td>
-                          <td>{quote.containerType}</td>
-                          <td>{quote.vesselName}</td>
-                          <td>{new Date(quote.vesselETD).toLocaleDateString()}</td>
-                          <td>{new Date(quote.vesselETA).toLocaleDateString()}</td>
-                          <td>{(quote.seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}</td>
-                          <td>{quote.houseDeliveryOrderPerBOL.toFixed(2)}</td>
-                          <td>{quote.cfsPerContainer.toFixed(2)}</td>
-                          <td>{quote.transportationPerContainer.toFixed(2)}</td>
-                          <td>{quote.ediChargesPerBOE.toFixed(2)}</td>
-                          <td>{quote.mooWRReeWarehousingCharges.toFixed(2)}</td>
-                          <td>{quote.chaChargesMOOWR.toFixed(2)}</td>
-                          <td>{new Date(quote.quoteValidityDate).toLocaleDateString()}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    <div className="mt-4 text-right font-bold">
-                      Total: ₹{(mooWRTotal * (logisticsAllocation[quote.id]?.containersAllottedMOOWR || 0)).toFixed(2)}
+                  </CardContent>
+                </Card>
+                
+                {/* Logistics CHA-MOOWR Table */}
+                <Card key={`${quote.id}-logistics-moowr`}>
+                  <CardHeader>
+                    <CardTitle>Logistics Allocation - CHA-MOOWR</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full data-table text-sm">
+                        <thead>
+                          <tr>
+                            <th>Vendor</th>
+                            <th>Offered</th>
+                            <th>Allotted</th>
+                            <th>Transship/Direct</th>
+                            <th>Shipping Line</th>
+                            <th>Container Type</th>
+                            <th>Vessel</th>
+                            <th>ETD</th>
+                            <th>ETA</th>
+                            <th>Sea Freight (INR)</th>
+                            <th>HDO (INR)</th>
+                            <th>CFS (INR)</th>
+                            <th>Transport (INR)</th>
+                            <th>EDI (INR)</th>
+                            <th>MOOWR (INR)</th>
+                            <th>CHA-MOOWR (INR)</th>
+                            <th>Validity Date</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>{vendorName}</td>
+                            <td>{quote.numberOfContainers}</td>
+                            <td>
+                              <Input
+                                type="number"
+                                min="0"
+                                max={rfq.numberOfContainers}
+                                value={logisticsAllocation[quote.id]?.containersAllottedMOOWR || 0}
+                                onChange={(e) => handleAllocationChange(
+                                  quote.id, 
+                                  "moowr", 
+                                  parseInt(e.target.value) || 0
+                                )}
+                                className="w-16"
+                              />
+                            </td>
+                            <td>{quote.transshipOrDirect}</td>
+                            <td>{quote.shippingLineName}</td>
+                            <td>{quote.containerType}</td>
+                            <td>{quote.vesselName}</td>
+                            <td>{new Date(quote.vesselETD).toLocaleDateString()}</td>
+                            <td>{new Date(quote.vesselETA).toLocaleDateString()}</td>
+                            <td>{(quote.seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}</td>
+                            <td>{quote.houseDeliveryOrderPerBOL.toFixed(2)}</td>
+                            <td>{quote.cfsPerContainer.toFixed(2)}</td>
+                            <td>{quote.transportationPerContainer.toFixed(2)}</td>
+                            <td>{quote.ediChargesPerBOE.toFixed(2)}</td>
+                            <td>{quote.mooWRReeWarehousingCharges.toFixed(2)}</td>
+                            <td>{quote.chaChargesMOOWR.toFixed(2)}</td>
+                            <td>{new Date(quote.quoteValidityDate).toLocaleDateString()}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="mt-4 text-right font-bold">
+                        Total: ₹{(mooWRTotal * (logisticsAllocation[quote.id]?.containersAllottedMOOWR || 0)).toFixed(2)}
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          );
-        })}
+                  </CardContent>
+                </Card>
+              </>
+            );
+          })}
+        </div>
       </div>
       
       {/* Net total and finalize button */}
