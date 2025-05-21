@@ -1,4 +1,3 @@
-
 import React from "react";
 import { useData } from "@/contexts/DataContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +22,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { Badge } from "@/components/ui/badge";
-import { ChartLineUp, ChartPie, ContainerIcon, FileChart, Ship } from "lucide-react";
+import { ChartLine, ChartPie, ContainerIcon, FileHeart, Ship } from "lucide-react";
 
 const AdminDashboard = () => {
   const { rfqs, quotes, allocations } = useData();
@@ -206,7 +205,7 @@ const AdminDashboard = () => {
           <CardContent>
             <div className="flex items-center justify-between">
               <div className="text-2xl font-bold">{metrics.totalRFQs}</div>
-              <FileChart className="h-5 w-5 text-muted-foreground" />
+              <FileHeart className="h-5 w-5 text-muted-foreground" />
             </div>
           </CardContent>
         </Card>
@@ -218,7 +217,7 @@ const AdminDashboard = () => {
           <CardContent>
             <div className="flex items-center justify-between">
               <div className="text-2xl font-bold">{metrics.totalQuotes}</div>
-              <ChartLineUp className="h-5 w-5 text-muted-foreground" />
+              <ChartLine className="h-5 w-5 text-muted-foreground" />
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               Avg {metrics.avgQuotePerRFQ} quotes per RFQ

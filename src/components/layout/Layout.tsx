@@ -3,9 +3,10 @@ import React from "react";
 import { Outlet, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Header } from "./Header";
+import { UserRole } from "@/types/auth.types";
 
 interface LayoutProps {
-  requiredRole?: "logistics" | "vendor";
+  requiredRole?: UserRole;
 }
 
 export function Layout({ requiredRole }: LayoutProps) {
