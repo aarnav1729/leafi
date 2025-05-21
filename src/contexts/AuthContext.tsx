@@ -79,6 +79,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         name: "Nav",
         company: "LEAFI"
       };
+    } else if (username === "aarnav" && password === "aarnav") {
+      user = {
+        id: "3",
+        username: "aarnav",
+        role: "admin" as UserRole,
+        name: "Aarnav (Admin)",
+      };
     }
 
     if (user) {
