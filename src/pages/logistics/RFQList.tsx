@@ -1,22 +1,40 @@
-
-import { useState } from "react";
+// root/src/pages/logistics/RFQList.tsx
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/common/StatusBadge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { format } from "date-fns";
-import { RFQ } from "@/types/rfq.types";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import api from "@/lib/api";
+import { RFQ } from "@/types/rfq.types";
 
-const RFQList = () => {
+interface Vendor {
+  username: string;
+  name: string;
+  company: string;
+}
+
+const RFQList: React.FC = () => {
   const { getUserRFQs, createRFQ } = useData();
   const navigate = useNavigate();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  
+
   // Form state
   const [itemDescription, setItemDescription] = useState<RFQ["itemDescription"]>("EVA");
   const [companyName, setCompanyName] = useState<RFQ["companyName"]>("PEPPL");
@@ -31,11 +49,28 @@ const RFQList = () => {
   const [initialQuoteEndTime, setInitialQuoteEndTime] = useState("");
   const [evaluationEndTime, setEvaluationEndTime] = useState("");
   const [description, setDescription] = useState("");
-  const [vendors, setVendors] = useState(["LEAFI"]);
-  
-  const rfqs = getUserRFQs().sort((a, b) => 
+
+  // Vendors selection
+  const [vendors, setVendors] = useState<string[]>([]);
+  const [vendorOptions, setVendorOptions] = useState<Vendor[]>([]);
+
+  // Load RFQs
+  const rfqs = getUserRFQs().sort((a, b) =>
     new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
+
+  // Fetch vendor list from server
+  useEffect(() => {
+    const fetchVendors = async () => {
+      try {
+        const res = await api.get<Vendor[]>("/vendors");
+        setVendorOptions(res.data);
+      } catch (err) {
+        console.error("Failed to load vendors:", err);
+      }
+    };
+    fetchVendors();
+  }, []);
 
   const handleCreateRFQ = () => {
     createRFQ({
@@ -53,9 +88,9 @@ const RFQList = () => {
       evaluationEndTime,
       description,
       vendors,
-      createdBy: "aarnav"
+      createdBy: "aarnav",
     });
-    
+
     setIsCreateModalOpen(false);
     // Reset form
     setMaterialPONumber("");
@@ -65,6 +100,7 @@ const RFQList = () => {
     setInitialQuoteEndTime("");
     setEvaluationEndTime("");
     setDescription("");
+    setVendors([]);
   };
 
   const handleFinalize = (rfqId: string) => {
@@ -87,9 +123,11 @@ const RFQList = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="itemDescription">Item Description</Label>
-                  <Select 
-                    value={itemDescription} 
-                    onValueChange={(value) => setItemDescription(value as RFQ["itemDescription"])}
+                  <Select
+                    value={itemDescription}
+                    onValueChange={(value) =>
+                      setItemDescription(value as RFQ["itemDescription"])
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select item" />
@@ -102,12 +140,14 @@ const RFQList = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="companyName">Company Name</Label>
-                  <Select 
-                    value={companyName} 
-                    onValueChange={(value) => setCompanyName(value as RFQ["companyName"])}
+                  <Select
+                    value={companyName}
+                    onValueChange={(value) =>
+                      setCompanyName(value as RFQ["companyName"])
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select company" />
@@ -119,7 +159,7 @@ const RFQList = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="materialPONumber">Material PO Number</Label>
                   <Input
@@ -129,12 +169,14 @@ const RFQList = () => {
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="supplierName">Supplier Name</Label>
-                  <Select 
-                    value={supplierName} 
-                    onValueChange={(value) => setSupplierName(value as RFQ["supplierName"])}
+                  <Select
+                    value={supplierName}
+                    onValueChange={(value) =>
+                      setSupplierName(value as RFQ["supplierName"])
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select supplier" />
@@ -148,12 +190,14 @@ const RFQList = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="portOfLoading">Port of Loading</Label>
-                  <Select 
-                    value={portOfLoading} 
-                    onValueChange={(value) => setPortOfLoading(value as RFQ["portOfLoading"])}
+                  <Select
+                    value={portOfLoading}
+                    onValueChange={(value) =>
+                      setPortOfLoading(value as RFQ["portOfLoading"])
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select port" />
@@ -165,12 +209,14 @@ const RFQList = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="portOfDestination">Port of Destination</Label>
-                  <Select 
-                    value={portOfDestination} 
-                    onValueChange={(value) => setPortOfDestination(value as RFQ["portOfDestination"])}
+                  <Select
+                    value={portOfDestination}
+                    onValueChange={(value) =>
+                      setPortOfDestination(value as RFQ["portOfDestination"])
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select port" />
@@ -182,12 +228,14 @@ const RFQList = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="containerType">Container Type</Label>
-                  <Select 
-                    value={containerType} 
-                    onValueChange={(value) => setContainerType(value as RFQ["containerType"])}
+                  <Select
+                    value={containerType}
+                    onValueChange={(value) =>
+                      setContainerType(value as RFQ["containerType"])
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select container type" />
@@ -199,7 +247,7 @@ const RFQList = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="numberOfContainers">Number of Containers</Label>
                   <Input
@@ -207,11 +255,13 @@ const RFQList = () => {
                     type="number"
                     min="1"
                     value={numberOfContainers}
-                    onChange={(e) => setNumberOfContainers(parseInt(e.target.value) || 1)}
+                    onChange={(e) =>
+                      setNumberOfContainers(parseInt(e.target.value) || 1)
+                    }
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="cargoWeight">Cargo Weight in Container (tons)</Label>
                   <Input
@@ -220,11 +270,13 @@ const RFQList = () => {
                     min="0.1"
                     step="0.1"
                     value={cargoWeight}
-                    onChange={(e) => setCargoWeight(parseFloat(e.target.value) || 0.1)}
+                    onChange={(e) =>
+                      setCargoWeight(parseFloat(e.target.value) || 0.1)
+                    }
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="cargoReadinessDate">Tentative Cargo Readiness Date</Label>
                   <Input
@@ -235,7 +287,7 @@ const RFQList = () => {
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="initialQuoteEndTime">Initial Quote End Time</Label>
                   <Input
@@ -246,7 +298,7 @@ const RFQList = () => {
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="evaluationEndTime">Evaluation End Time</Label>
                   <Input
@@ -258,7 +310,7 @@ const RFQList = () => {
                   />
                 </div>
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="description">Description (Optional)</Label>
                 <Input
@@ -267,29 +319,31 @@ const RFQList = () => {
                   onChange={(e) => setDescription(e.target.value)}
                 />
               </div>
-              
+
               <div className="space-y-2">
                 <Label>Vendors to send RFQ</Label>
                 <div className="border rounded-md p-4 space-y-2">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="vendor-leafi"
-                      checked={vendors.includes("LEAFI")}
-                      onCheckedChange={(checked) => {
-                        if (checked) {
-                          setVendors([...vendors, "LEAFI"])
-                        } else {
-                          setVendors(vendors.filter(v => v !== "LEAFI"))
-                        }
-                      }}
-                    />
-                    <label 
-                      htmlFor="vendor-leafi"
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                    >
-                      LEAFI
-                    </label>
-                  </div>
+                  {vendorOptions.map((v) => (
+                    <div key={v.company} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`vendor-${v.company}`}
+                        checked={vendors.includes(v.company)}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            setVendors((prev) => [...prev, v.company]);
+                          } else {
+                            setVendors((prev) => prev.filter((c) => c !== v.company));
+                          }
+                        }}
+                      />
+                      <label
+                        htmlFor={`vendor-${v.company}`}
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                      >
+                        {v.name} ({v.company})
+                      </label>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -297,7 +351,7 @@ const RFQList = () => {
           </DialogContent>
         </Dialog>
       </div>
-      
+
       <div className="rounded-md border">
         <div className="overflow-x-auto">
           <table className="w-full data-table">
@@ -332,16 +386,13 @@ const RFQList = () => {
                   <tr key={rfq.id}>
                     <td>
                       {rfq.status !== "closed" && (
-                        <Button 
-                          size="sm" 
-                          onClick={() => handleFinalize(rfq.id)}
-                        >
+                        <Button size="sm" onClick={() => handleFinalize(rfq.id)}>
                           Finalize
                         </Button>
                       )}
                       {rfq.status === "closed" && (
-                        <Button 
-                          size="sm" 
+                        <Button
+                          size="sm"
                           variant="outline"
                           onClick={() => handleFinalize(rfq.id)}
                         >
@@ -362,7 +413,9 @@ const RFQList = () => {
                     <td>{new Date(rfq.cargoReadinessDate).toLocaleDateString()}</td>
                     <td>{new Date(rfq.initialQuoteEndTime).toLocaleDateString()}</td>
                     <td>{new Date(rfq.evaluationEndTime).toLocaleDateString()}</td>
-                    <td><StatusBadge status={rfq.status} /></td>
+                    <td>
+                      <StatusBadge status={rfq.status} />
+                    </td>
                   </tr>
                 ))
               )}

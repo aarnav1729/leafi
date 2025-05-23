@@ -1,5 +1,6 @@
-
+// root/src/contexts/DataContext.tsx
 import React, { createContext, useContext, useState, useEffect } from "react";
+import api from "@/lib/api";
 import { toast } from "sonner";
 import { RFQ, QuoteItem, Allocation } from "@/types/rfq.types";
 import { useAuth } from "./AuthContext";
@@ -8,213 +9,157 @@ interface DataContextType {
   rfqs: RFQ[];
   quotes: QuoteItem[];
   allocations: Allocation[];
-  createRFQ: (rfq: Omit<RFQ, "id" | "rfqNumber" | "createdAt" | "status">) => void;
-  createQuote: (quote: Omit<QuoteItem, "id" | "createdAt" | "homeTotal" | "mooWRTotal">) => void;
-  finalizeRFQ: (rfqId: string, allocation: Omit<Allocation, "createdAt">) => void;
+  isLoading: boolean;
+  createRFQ: (rfq: Omit<RFQ, "id" | "rfqNumber" | "createdAt" | "status">) => Promise<void>;
+  createQuote: (quote: Omit<QuoteItem, "id" | "createdAt" | "homeTotal" | "mooWRTotal">) => Promise<void>;
+  finalizeRFQ: (rfqId: string, allocation: Omit<Allocation, "createdAt">) => Promise<void>;
   getUserRFQs: () => RFQ[];
   getVendorRFQs: () => RFQ[];
   getVendorAllottedRFQs: () => RFQ[];
   getRFQById: (id: string) => RFQ | undefined;
   getQuotesByRFQId: (rfqId: string) => QuoteItem[];
   getAllocationsByRFQId: (rfqId: string) => Allocation[];
-  isLoading: boolean;
 }
 
-const DataContext = createContext<DataContextType>({
-  rfqs: [],
-  quotes: [],
-  allocations: [],
-  createRFQ: () => {},
-  createQuote: () => {},
-  finalizeRFQ: () => {},
-  getUserRFQs: () => [],
-  getVendorRFQs: () => [],
-  getVendorAllottedRFQs: () => [],
-  getRFQById: () => undefined,
-  getQuotesByRFQId: () => [],
-  getAllocationsByRFQId: () => [],
-  isLoading: false,
-});
+export const DataContext = createContext<DataContextType>({} as DataContextType);
 
 export const useData = () => useContext(DataContext);
 
-const USD_TO_INR_RATE = 75; // Fixed conversion rate for demo
+export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, isLoading: authLoading } = useAuth();
 
-export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ 
-  children 
-}) => {
-  const { user } = useAuth();
   const [rfqs, setRFQs] = useState<RFQ[]>([]);
   const [quotes, setQuotes] = useState<QuoteItem[]>([]);
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [nextRFQNumber, setNextRFQNumber] = useState(1000);
 
-  // Load data from localStorage on component mount
   useEffect(() => {
-    const loadData = () => {
+    // wait until auth finishes
+    if (authLoading) return;
+
+    if (!user) {
+      // no user means clear data
+      setRFQs([]);
+      setQuotes([]);
+      setAllocations([]);
+      setIsLoading(false);
+      return;
+    }
+
+    const loadAll = async () => {
+      setIsLoading(true);
       try {
-        const storedRFQs = localStorage.getItem("rfqs");
-        if (storedRFQs) {
-          setRFQs(JSON.parse(storedRFQs));
-        }
+        // 1) fetch RFQs
+        const rfqRes = await api.get<RFQ[]>("/rfqs");
+        setRFQs(rfqRes.data);
 
-        const storedQuotes = localStorage.getItem("quotes");
-        if (storedQuotes) {
-          setQuotes(JSON.parse(storedQuotes));
-        }
+        // 2) fetch quotes for each RFQ
+        const quoteArrays = await Promise.all(
+          rfqRes.data.map(rfq =>
+            api.get<QuoteItem[]>(`/quotes/${rfq.id}`).then(res => res.data)
+          )
+        );
+        setQuotes(quoteArrays.flat());
 
-        const storedAllocations = localStorage.getItem("allocations");
-        if (storedAllocations) {
-          setAllocations(JSON.parse(storedAllocations));
-        }
-
-        const storedNextRFQNumber = localStorage.getItem("nextRFQNumber");
-        if (storedNextRFQNumber) {
-          setNextRFQNumber(parseInt(storedNextRFQNumber, 10));
-        }
-
-        setIsLoading(false);
-      } catch (error) {
-        console.error("Error loading data from localStorage:", error);
-        toast.error("Error loading data");
+        // 3) fetch allocations for each RFQ
+        const allocArrays = await Promise.all(
+          rfqRes.data.map(rfq =>
+            api.get<Allocation[]>(`/allocations/${rfq.id}`).then(res => res.data)
+          )
+        );
+        setAllocations(allocArrays.flat());
+      } catch (err: any) {
+        console.error("Data load error:", err);
+        toast.error("Error loading data from server");
+      } finally {
         setIsLoading(false);
       }
     };
 
-    loadData();
-  }, []);
-
-  // Save data to localStorage whenever it changes
-  useEffect(() => {
-    if (!isLoading) {
-      localStorage.setItem("rfqs", JSON.stringify(rfqs));
-      localStorage.setItem("quotes", JSON.stringify(quotes));
-      localStorage.setItem("allocations", JSON.stringify(allocations));
-      localStorage.setItem("nextRFQNumber", nextRFQNumber.toString());
-    }
-  }, [rfqs, quotes, allocations, nextRFQNumber, isLoading]);
+    loadAll();
+  }, [user, authLoading]);
 
   // Create a new RFQ
-  const createRFQ = (
-    rfqData: Omit<RFQ, "id" | "rfqNumber" | "createdAt" | "status">
-  ) => {
-    const newRFQ: RFQ = {
-      ...rfqData,
-      id: crypto.randomUUID(),
-      rfqNumber: nextRFQNumber,
-      createdAt: new Date().toISOString(),
-      status: "initial",
-    };
-
-    setRFQs([...rfqs, newRFQ]);
-    setNextRFQNumber(nextRFQNumber + 1);
-    toast.success("RFQ created successfully");
+  const createRFQ = async (rfqData: Omit<RFQ, "id" | "rfqNumber" | "createdAt" | "status">) => {
+    try {
+      await api.post("/rfqs", rfqData);
+      const rfqRes = await api.get<RFQ[]>("/rfqs");
+      setRFQs(rfqRes.data);
+      toast.success("RFQ created successfully");
+    } catch (err: any) {
+      console.error("createRFQ error:", err);
+      toast.error(err.response?.data?.message || "Failed to create RFQ");
+    }
   };
 
-  // Create a new quote for an RFQ
-  const createQuote = (
-    quoteData: Omit<QuoteItem, "id" | "createdAt" | "homeTotal" | "mooWRTotal">
-  ) => {
-    // Calculate totals
-    const seaFreightInINR = quoteData.seaFreightPerContainer * USD_TO_INR_RATE;
-    
-    const homeTotal = 
-      seaFreightInINR + 
-      quoteData.houseDeliveryOrderPerBOL + 
-      quoteData.cfsPerContainer + 
-      quoteData.transportationPerContainer + 
-      quoteData.ediChargesPerBOE + 
-      quoteData.chaChargesHome;
-    
-    const mooWRTotal = 
-      seaFreightInINR + 
-      quoteData.houseDeliveryOrderPerBOL + 
-      quoteData.cfsPerContainer + 
-      quoteData.transportationPerContainer + 
-      quoteData.ediChargesPerBOE + 
-      quoteData.mooWRReeWarehousingCharges + 
-      quoteData.chaChargesMOOWR;
-
-    const newQuote: QuoteItem = {
-      ...quoteData,
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-      homeTotal,
-      mooWRTotal
-    };
-
-    setQuotes([...quotes, newQuote]);
-    
-    // Update RFQ status to evaluation if it was in initial state
-    setRFQs(rfqs.map(rfq => 
-      rfq.id === quoteData.rfqId && rfq.status === "initial" 
-        ? { ...rfq, status: "evaluation" } 
-        : rfq
-    ));
-    
-    toast.success("Quote submitted successfully");
+  // Create a new Quote
+  const createQuote = async (quoteData: Omit<QuoteItem, "id" | "createdAt" | "homeTotal" | "mooWRTotal">) => {
+    try {
+      await api.post("/quotes", quoteData);
+      // refresh quotes for that RFQ
+      const rfqQuotesRes = await api.get<QuoteItem[]>(`/quotes/${quoteData.rfqId}`);
+      setQuotes(prev => [
+        ...prev.filter(q => q.rfqId !== quoteData.rfqId),
+        ...rfqQuotesRes.data,
+      ]);
+      // refresh RFQs
+      const rfqRes = await api.get<RFQ[]>("/rfqs");
+      setRFQs(rfqRes.data);
+      toast.success("Quote submitted successfully");
+    } catch (err: any) {
+      console.error("createQuote error:", err);
+      toast.error(err.response?.data?.message || "Failed to submit quote");
+    }
   };
 
-  // Finalize an RFQ with allocations
-  const finalizeRFQ = (rfqId: string, allocation: Omit<Allocation, "createdAt">) => {
-    const newAllocation: Allocation = {
-      ...allocation,
-      createdAt: new Date().toISOString(),
-    };
-
-    setAllocations([...allocations, newAllocation]);
-    
-    // Update RFQ status to closed
-    setRFQs(rfqs.map(rfq => 
-      rfq.id === rfqId ? { ...rfq, status: "closed" } : rfq
-    ));
-    
-    toast.success("RFQ finalized successfully");
+  // Finalize an RFQ (allocations)
+  const finalizeRFQ = async (rfqId: string, allocation: Omit<Allocation, "createdAt">) => {
+    try {
+      await api.post("/allocations", allocation);
+      // refresh allocations for that RFQ
+      const allocRes = await api.get<Allocation[]>(`/allocations/${rfqId}`);
+      setAllocations(prev => [
+        ...prev.filter(a => a.rfqId !== rfqId),
+        ...allocRes.data,
+      ]);
+      // refresh RFQs
+      const rfqRes = await api.get<RFQ[]>("/rfqs");
+      setRFQs(rfqRes.data);
+      toast.success("RFQ finalized successfully");
+    } catch (err: any) {
+      console.error("finalizeRFQ error:", err);
+      toast.error(err.response?.data?.message || "Failed to finalize RFQ");
+    }
   };
 
-  // Get RFQs for the current user (logistics role)
+  // Getters for various roles/views
   const getUserRFQs = () => {
-    if (!user || user.role !== "logistics") return [];
-    return rfqs;
+    return user?.role === "logistics" ? rfqs : [];
   };
 
-  // Get RFQs for a vendor
   const getVendorRFQs = () => {
-    if (!user || user.role !== "vendor") return [];
-    
-    // Return RFQs where the current vendor is in the vendors list
-    return rfqs.filter(rfq => 
-      rfq.vendors.includes(user.company || "")
-    );
+    if (user?.role !== "vendor") return [];
+    return rfqs.filter(r => r.vendors.includes(user.company!));
   };
 
-  // Get RFQs that have been allotted to the current vendor
   const getVendorAllottedRFQs = () => {
-    if (!user || user.role !== "vendor") return [];
-    
-    // Find RFQ ids where this vendor has allocations
+    if (user?.role !== "vendor") return [];
     const rfqIds = allocations
-      .filter(alloc => alloc.vendorName === user.company)
-      .map(alloc => alloc.rfqId);
-    
-    // Return RFQs with these IDs
-    return rfqs.filter(rfq => rfqIds.includes(rfq.id));
+      .filter(a => a.vendorName === user.company)
+      .map(a => a.rfqId);
+    return rfqs.filter(r => rfqIds.includes(r.id));
   };
 
-  // Get an RFQ by its ID
   const getRFQById = (id: string) => {
-    return rfqs.find(rfq => rfq.id === id);
+    return rfqs.find(r => r.id === id);
   };
 
-  // Get quotes for a specific RFQ
   const getQuotesByRFQId = (rfqId: string) => {
-    return quotes.filter(quote => quote.rfqId === rfqId);
+    return quotes.filter(q => q.rfqId === rfqId);
   };
 
-  // Get allocations for a specific RFQ
   const getAllocationsByRFQId = (rfqId: string) => {
-    return allocations.filter(alloc => alloc.rfqId === rfqId);
+    return allocations.filter(a => a.rfqId === rfqId);
   };
 
   return (
@@ -223,6 +168,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         rfqs,
         quotes,
         allocations,
+        isLoading,
         createRFQ,
         createQuote,
         finalizeRFQ,
@@ -232,7 +178,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
         getRFQById,
         getQuotesByRFQId,
         getAllocationsByRFQId,
-        isLoading,
       }}
     >
       {children}

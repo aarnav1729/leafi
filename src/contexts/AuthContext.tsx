@@ -1,7 +1,8 @@
-
+// root/src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { toast } from "sonner";
 import { AuthState, User, UserRole } from "@/types/auth.types";
+import { setCredentials } from "@/lib/api";
 
 interface AuthContextType extends AuthState {
   login: (username: string, password: string) => Promise<boolean>;
@@ -23,100 +24,62 @@ const AuthContext = createContext<AuthContextType>({
 
 export const useAuth = () => useContext(AuthContext);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
-  children 
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
 }) => {
   const [state, setState] = useState<AuthState>(initialState);
 
+  // On mount, rehydrate user
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const userData = localStorage.getItem("rfq_user");
-        if (userData) {
-          const user = JSON.parse(userData);
-          setState({
-            isAuthenticated: true,
-            user,
-            isLoading: false,
-            error: null,
-          });
-        } else {
-          setState({
-            ...initialState,
-            isLoading: false,
-          });
-        }
-      } catch (error) {
-        setState({
-          ...initialState,
-          isLoading: false,
-          error: "Authentication error",
-        });
-      }
-    };
-
-    checkAuth();
+    const stored = localStorage.getItem("rfq_user");
+    if (stored) {
+      const user = JSON.parse(stored) as User;
+      setState({ isAuthenticated: true, user, isLoading: false, error: null });
+      // Also restore credentials if you saved them in localStorage (optional)
+    } else {
+      setState({ ...initialState, isLoading: false });
+    }
   }, []);
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  const login = async (
+    username: string,
+    password: string
+  ): Promise<boolean> => {
     setState({ ...state, isLoading: true, error: null });
-    
-    // Hardcoded credentials for demonstration
-    let user: User | null = null;
-    
-    if (username === "aarnav" && password === "aarnav1729") {
-      user = {
-        id: "1",
-        username: "aarnav",
-        role: "logistics" as UserRole,
-        name: "Aarnav",
-      };
-    } else if (username === "nav" && password === "nav") {
-      user = {
-        id: "2",
-        username: "nav",
-        role: "vendor" as UserRole,
-        name: "Nav",
-        company: "LEAFI"
-      };
-    } else if (username === "aarnav" && password === "aarnav") {
-      user = {
-        id: "3",
-        username: "aarnav",
-        role: "admin" as UserRole,
-        name: "Aarnav (Admin)",
-      };
-    }
-
-    if (user) {
-      localStorage.setItem("rfq_user", JSON.stringify(user));
-      setState({
-        isAuthenticated: true,
-        user,
-        isLoading: false,
-        error: null,
+    try {
+      // Call the server
+      const res = await fetch("http://localhost:3337/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
       });
+      if (!res.ok) throw new Error("Invalid credentials");
+      const user: User = await res.json();
+
+      // 1) persist
+      localStorage.setItem("rfq_user", JSON.stringify(user));
+      // 2) configure API client
+      setCredentials(username, password);
+
+      setState({ isAuthenticated: true, user, isLoading: false, error: null });
       toast.success("Login successful");
       return true;
-    } else {
+    } catch (err: any) {
       setState({
         ...state,
         isLoading: false,
-        error: "Invalid credentials",
+        error: err.message || "Login failed",
       });
-      toast.error("Invalid credentials");
+      toast.error(err.message || "Login failed");
       return false;
     }
   };
 
   const logout = () => {
     localStorage.removeItem("rfq_user");
-    setState({
-      isAuthenticated: false,
-      user: null,
-      isLoading: false,
-      error: null,
-    });
+    // clear axios auth
+    setCredentials("", "");
+    setState({ isAuthenticated: false, user: null, isLoading: false, error: null });
     toast.info("Logged out");
   };
 
