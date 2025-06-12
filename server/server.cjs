@@ -21,6 +21,33 @@ const dbConfig = {
   },
 };
 
+// outlook emails
+const { Client } = require("@microsoft/microsoft-graph-client");
+const { ClientSecretCredential } = require("@azure/identity");
+
+// outlook credentials
+const CLIENT_ID = "5a58e660-dc7b-49ec-a48c-1fffac02f721";
+const CLIENT_SECRET = "6_I8Q~U7IbS~NERqNeszoCRs2kETiO1Yc3cXAaup";
+const TENANT_ID = "1c3de7f3-f8d1-41d3-8583-2517cf3ba3b1";
+const SENDER_EMAIL = "leaf@premierenergies.com";
+
+// create auth credential & Graph client
+const credential = new ClientSecretCredential(
+  TENANT_ID,
+  CLIENT_ID,
+  CLIENT_SECRET
+);
+const client = Client.initWithMiddleware({
+  authProvider: {
+    getAccessToken: async () => {
+      const tokenResponse = await credential.getToken(
+        "https://graph.microsoft.com/.default"
+      );
+      return tokenResponse.token;
+    },
+  },
+});
+
 app.use(cors());
 app.use(express.json());
 
@@ -233,12 +260,13 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
     description,
     vendors,
   } = req.body;
+
   try {
     const pool = await sql.connect(dbConfig);
-    const maxRes = await pool
-      .request()
-      .query("SELECT MAX(rfqNumber) AS maxNum FROM dbo.RFQs");
+    const maxRes = await pool.request().query("SELECT MAX(rfqNumber) AS maxNum FROM dbo.RFQs");
     const nextNum = (maxRes.recordset[0].maxNum || 1000) + 1;
+
+    // 1) Insert RFQ
     await pool
       .request()
       .input("rfqNumber", sql.Int, nextNum)
@@ -257,20 +285,78 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
       .input("description", sql.NVarChar, description)
       .input("vendors", sql.NVarChar, JSON.stringify(vendors))
       .input("status", sql.NVarChar, "initial")
-      .input("createdBy", sql.NVarChar, req.user.username).query(`
+      .input("createdBy", sql.NVarChar, req.user.username)
+      .query(`
         INSERT INTO dbo.RFQs
-        (rfqNumber,itemDescription,companyName,materialPONumber,
-         supplierName,portOfLoading,portOfDestination,containerType,
-         numberOfContainers,cargoWeight,cargoReadinessDate,
-         initialQuoteEndTime,evaluationEndTime,description,vendors,
-         status,createdBy,createdAt)
+          (rfqNumber, itemDescription, companyName, materialPONumber,
+           supplierName, portOfLoading, portOfDestination, containerType,
+           numberOfContainers, cargoWeight, cargoReadinessDate,
+           initialQuoteEndTime, evaluationEndTime, description, vendors,
+           status, createdBy, createdAt)
         VALUES
-        (@rfqNumber,@itemDescription,@companyName,@materialPONumber,
-         @supplierName,@portOfLoading,@portOfDestination,@containerType,
-         @numberOfContainers,@cargoWeight,@cargoReadinessDate,
-         @initialQuoteEndTime,@evaluationEndTime,@description,@vendors,
-         @status,@createdBy,SYSUTCDATETIME())
+          (@rfqNumber,@itemDescription,@companyName,@materialPONumber,
+           @supplierName,@portOfLoading,@portOfDestination,@containerType,
+           @numberOfContainers,@cargoWeight,@cargoReadinessDate,
+           @initialQuoteEndTime,@evaluationEndTime,@description,@vendors,
+           @status,@createdBy,SYSUTCDATETIME())
       `);
+
+    // 2) Fetch vendor emails
+    const companyParams = vendors.map((v, i) => `@company${i}`).join(", ");
+    let request = pool.request();
+    vendors.forEach((v, i) => request.input(`company${i}`, sql.NVarChar, v));
+    const emailRes = await request.query(`
+      SELECT username AS email
+      FROM dbo.Users
+      WHERE role='vendor' AND company IN (${companyParams})
+    `);
+    const emails = emailRes.recordset.map(r => r.email);
+
+    // 3) Build HTML table with RFQ details
+    const tableRows = [
+      ["RFQ Number", nextNum],
+      ["Item Description", itemDescription],
+      ["Company Name", companyName],
+      ["Material PO Number", materialPONumber],
+      ["Supplier Name", supplierName],
+      ["Port of Loading", portOfLoading],
+      ["Port of Destination", portOfDestination],
+      ["Container Type", containerType],
+      ["Number of Containers", numberOfContainers],
+      ["Cargo Weight", cargoWeight],
+      ["Cargo Readiness Date", new Date(cargoReadinessDate).toLocaleString()],
+      ["Initial Quote End Time", new Date(initialQuoteEndTime).toLocaleString()],
+      ["Evaluation End Time", new Date(evaluationEndTime).toLocaleString()],
+      ["Description", description || ""]
+    ];
+    const tableHtml = `
+      <table border="1" cellpadding="5" cellspacing="0">
+        <tr><th align="left">Field</th><th align="left">Value</th></tr>
+        ${tableRows.map(([f, v]) => `<tr><td>${f}</td><td>${v}</td></tr>`).join("")}
+      </table>
+    `;
+
+    // 4) Send email to each vendor
+    await Promise.all(emails.map(email =>
+      client.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+        message: {
+          subject: `New RFQ Created: ${nextNum}`,
+          body: {
+            contentType: "HTML",
+            content: `
+              <p>Dear Vendor,</p>
+              <p>A new RFQ has been created with the following details:</p>
+              ${tableHtml}
+              <p>View and respond here: <a href="https://leafi.premierenergiesphotovoltaic.com">leafi.premierenergiesphotovoltaic.com</a></p>
+              <p>Thanks & Regards,<br/>LEAFI Team</p>
+            `
+          },
+          toRecipients: [{ emailAddress: { address: email } }]
+        },
+        saveToSentItems: true
+      })
+    ));
+
     res.json({ message: "RFQ created", rfqNumber: nextNum });
   } catch (err) {
     console.error("Create RFQ error:", err);
@@ -395,8 +481,7 @@ app.post("/api/allocations", authenticate, async (req, res) => {
       .input("vendorName", sql.NVarChar, vendorName)
       .input("containersAllottedHome", sql.Int, containersAllottedHome)
       .input("containersAllottedMOOWR", sql.Int, containersAllottedMOOWR)
-      .input("reason", sql.NVarChar, reason)
-      .query(`
+      .input("reason", sql.NVarChar, reason).query(`
         INSERT INTO dbo.Allocations
           (rfqId, quoteId, vendorName, containersAllottedHome, containersAllottedMOOWR, reason, createdAt)
         VALUES
@@ -406,8 +491,7 @@ app.post("/api/allocations", authenticate, async (req, res) => {
     // 2) Sum total allocated so far
     const sumRes = await pool
       .request()
-      .input("rfqId", sql.UniqueIdentifier, rfqId)
-      .query(`
+      .input("rfqId", sql.UniqueIdentifier, rfqId).query(`
         SELECT SUM(containersAllottedHome + containersAllottedMOOWR) AS total
         FROM dbo.Allocations
         WHERE rfqId = @rfqId
@@ -417,8 +501,7 @@ app.post("/api/allocations", authenticate, async (req, res) => {
     // 3) Fetch RFQ’s required total
     const rfqRes = await pool
       .request()
-      .input("rfqId", sql.UniqueIdentifier, rfqId)
-      .query(`
+      .input("rfqId", sql.UniqueIdentifier, rfqId).query(`
         SELECT numberOfContainers
         FROM dbo.RFQs
         WHERE id = @rfqId
@@ -427,10 +510,7 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 
     // 4) Only close RFQ when fully allocated
     if (totalAllocated >= required) {
-      await pool
-        .request()
-        .input("rfqId", sql.UniqueIdentifier, rfqId)
-        .query(`
+      await pool.request().input("rfqId", sql.UniqueIdentifier, rfqId).query(`
           UPDATE dbo.RFQs
           SET status = 'closed'
           WHERE id = @rfqId
@@ -443,7 +523,6 @@ app.post("/api/allocations", authenticate, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-
 
 // Returns all Users with role = 'vendor'
 app.get("/api/vendors", authenticate, async (req, res) => {
