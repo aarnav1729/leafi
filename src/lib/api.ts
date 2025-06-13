@@ -2,7 +2,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: 'http://localhost:3337/api',
+  baseURL: 'http://10.0.50.16:3337/api',
 });
 
 // After login, we call this to set basic auth for future requests

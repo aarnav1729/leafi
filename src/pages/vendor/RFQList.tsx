@@ -51,7 +51,7 @@ const VendorRFQList = () => {
 
     // ★ Fetch the live rate once:
     useEffect(() => {
-      fetch("http://localhost:3337/api/rate/usdinr")
+      fetch("http://10.0.50.16:3337/api/rate/usdinr")
         .then((res) => res.json())
         .then(({ rate }) => setUsdToInr(rate))
         .catch(() => setUsdToInr(75));

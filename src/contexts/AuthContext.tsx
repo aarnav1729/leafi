@@ -48,7 +48,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     setState({ ...state, isLoading: true, error: null });
     try {
       // Call the server
-      const res = await fetch("http://localhost:3337/api/login", {
+      const res = await fetch("http://10.0.50.16:3337/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
