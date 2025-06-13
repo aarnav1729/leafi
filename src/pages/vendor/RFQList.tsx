@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useData } from "@/contexts/DataContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -12,13 +12,14 @@ import { StatusBadge } from "@/components/common/StatusBadge";
 import { format } from "date-fns";
 import { RFQ, QuoteItem } from "@/types/rfq.types";
 
-const USD_TO_INR_RATE = 75;
+
 
 const VendorRFQList = () => {
   const { user } = useAuth();
   const { getVendorRFQs, createQuote } = useData();
   const [selectedRFQ, setSelectedRFQ] = useState<RFQ | null>(null);
   const [quoteModalOpen, setQuoteModalOpen] = useState(false);
+  const [usdToInr, setUsdToInr] = useState<number>(75);
 
   // Form state
   const [numberOfContainers, setNumberOfContainers] = useState(1);
@@ -47,6 +48,14 @@ const VendorRFQList = () => {
     setNumberOfContainers(rfq.numberOfContainers);
     setQuoteModalOpen(true);
   };
+
+    // ★ Fetch the live rate once:
+    useEffect(() => {
+      fetch("http://localhost:3337/api/rate/usdinr")
+        .then((res) => res.json())
+        .then(({ rate }) => setUsdToInr(rate))
+        .catch(() => setUsdToInr(75));
+    }, []);  
 
   const handleSubmitQuote = () => {
     if (!selectedRFQ || !user?.company) return;
@@ -99,7 +108,7 @@ const VendorRFQList = () => {
 
   // Calculate totals for display in the form
   const homeTotalINR = 
-    (seaFreightPerContainer * USD_TO_INR_RATE) + 
+    (seaFreightPerContainer * usdToInr) + 
     houseDeliveryOrderPerBOL + 
     cfsPerContainer + 
     transportationPerContainer + 
@@ -107,7 +116,7 @@ const VendorRFQList = () => {
     chaChargesHome;
     
   const mooWRTotalINR = 
-    (seaFreightPerContainer * USD_TO_INR_RATE) + 
+    (seaFreightPerContainer * usdToInr) + 
     houseDeliveryOrderPerBOL + 
     cfsPerContainer + 
     transportationPerContainer + 
@@ -487,7 +496,7 @@ const VendorRFQList = () => {
                     <Label className="text-lg">Total with CHA - Home (INR)</Label>
                     <div className="text-xl font-bold">₹{homeTotalINR.toFixed(2)}</div>
                     <div className="text-sm text-muted-foreground">
-                      Sea Freight (₹{(seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}) +
+                      Sea Freight (₹{(seaFreightPerContainer * usdToInr).toFixed(2)}) +
                       House Delivery (₹{houseDeliveryOrderPerBOL.toFixed(2)}) +
                       CFS (₹{cfsPerContainer.toFixed(2)}) +
                       Transportation (₹{transportationPerContainer.toFixed(2)}) +
@@ -500,7 +509,7 @@ const VendorRFQList = () => {
                     <Label className="text-lg">Total with CHA - MOOWR (INR)</Label>
                     <div className="text-xl font-bold">₹{mooWRTotalINR.toFixed(2)}</div>
                     <div className="text-sm text-muted-foreground">
-                      Sea Freight (₹{(seaFreightPerContainer * USD_TO_INR_RATE).toFixed(2)}) +
+                      Sea Freight (₹{(seaFreightPerContainer * usdToInr).toFixed(2)}) +
                       House Delivery (₹{houseDeliveryOrderPerBOL.toFixed(2)}) +
                       CFS (₹{cfsPerContainer.toFixed(2)}) +
                       Transportation (₹{transportationPerContainer.toFixed(2)}) +

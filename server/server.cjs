@@ -1,9 +1,15 @@
-// server/server.js
+//import
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const sql = require("mssql");
+const axios = require("axios");
 
+//exchange rate API
+const EXCHANGE_API_KEY = "d2406e1855e3251be1c691b4";
+const EXCHANGE_URL = `https://v6.exchangerate-api.com/v6/${EXCHANGE_API_KEY}/pair/USD/INR`;
+
+// Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 3337;
 
@@ -263,7 +269,9 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
 
   try {
     const pool = await sql.connect(dbConfig);
-    const maxRes = await pool.request().query("SELECT MAX(rfqNumber) AS maxNum FROM dbo.RFQs");
+    const maxRes = await pool
+      .request()
+      .query("SELECT MAX(rfqNumber) AS maxNum FROM dbo.RFQs");
     const nextNum = (maxRes.recordset[0].maxNum || 1000) + 1;
 
     // 1) Insert RFQ
@@ -285,8 +293,7 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
       .input("description", sql.NVarChar, description)
       .input("vendors", sql.NVarChar, JSON.stringify(vendors))
       .input("status", sql.NVarChar, "initial")
-      .input("createdBy", sql.NVarChar, req.user.username)
-      .query(`
+      .input("createdBy", sql.NVarChar, req.user.username).query(`
         INSERT INTO dbo.RFQs
           (rfqNumber, itemDescription, companyName, materialPONumber,
            supplierName, portOfLoading, portOfDestination, containerType,
@@ -310,7 +317,7 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
       FROM dbo.Users
       WHERE role='vendor' AND company IN (${companyParams})
     `);
-    const emails = emailRes.recordset.map(r => r.email);
+    const emails = emailRes.recordset.map((r) => r.email);
 
     // 3) Build HTML table with RFQ details
     const tableRows = [
@@ -325,37 +332,44 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
       ["Number of Containers", numberOfContainers],
       ["Cargo Weight", cargoWeight],
       ["Cargo Readiness Date", new Date(cargoReadinessDate).toLocaleString()],
-      ["Initial Quote End Time", new Date(initialQuoteEndTime).toLocaleString()],
+      [
+        "Initial Quote End Time",
+        new Date(initialQuoteEndTime).toLocaleString(),
+      ],
       ["Evaluation End Time", new Date(evaluationEndTime).toLocaleString()],
-      ["Description", description || ""]
+      ["Description", description || ""],
     ];
     const tableHtml = `
       <table border="1" cellpadding="5" cellspacing="0">
         <tr><th align="left">Field</th><th align="left">Value</th></tr>
-        ${tableRows.map(([f, v]) => `<tr><td>${f}</td><td>${v}</td></tr>`).join("")}
+        ${tableRows
+          .map(([f, v]) => `<tr><td>${f}</td><td>${v}</td></tr>`)
+          .join("")}
       </table>
     `;
 
     // 4) Send email to each vendor
-    await Promise.all(emails.map(email =>
-      client.api(`/users/${SENDER_EMAIL}/sendMail`).post({
-        message: {
-          subject: `New RFQ Created: ${nextNum}`,
-          body: {
-            contentType: "HTML",
-            content: `
+    await Promise.all(
+      emails.map((email) =>
+        client.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+          message: {
+            subject: `New RFQ Created: ${nextNum}`,
+            body: {
+              contentType: "HTML",
+              content: `
               <p>Dear Vendor,</p>
               <p>A new RFQ has been created with the following details:</p>
               ${tableHtml}
               <p>View and respond here: <a href="https://leafi.premierenergiesphotovoltaic.com">leafi.premierenergiesphotovoltaic.com</a></p>
               <p>Thanks & Regards,<br/>LEAFI Team</p>
-            `
+            `,
+            },
+            toRecipients: [{ emailAddress: { address: email } }],
           },
-          toRecipients: [{ emailAddress: { address: email } }]
-        },
-        saveToSentItems: true
-      })
-    ));
+          saveToSentItems: true,
+        })
+      )
+    );
 
     res.json({ message: "RFQ created", rfqNumber: nextNum });
   } catch (err) {
@@ -386,7 +400,17 @@ app.post("/api/quotes", authenticate, async (req, res) => {
   const d = req.body;
   try {
     const pool = await sql.connect(dbConfig);
-    const USD_TO_INR = 75;
+
+    // 1) Fetch live USD→INR rate (fallback to 75 on error)
+    let USD_TO_INR;
+    try {
+      const rateRes = await axios.get(EXCHANGE_URL);
+      USD_TO_INR = rateRes.data.conversion_rate;
+    } catch (apiErr) {
+      console.error("Exchange API error:", apiErr);
+    }
+
+    // 1) Compute totals
     const seaInINR = d.seaFreightPerContainer * USD_TO_INR;
     const homeTotal =
       seaInINR +
@@ -398,6 +422,8 @@ app.post("/api/quotes", authenticate, async (req, res) => {
     const mooWRTotal =
       homeTotal + d.mooWRReeWarehousingCharges + d.chaChargesMOOWR;
 
+    // 2) Insert or update quote
+    // Here we assume INSERT for initial submission; adapt to UPSERT if needed
     await pool
       .request()
       .input("rfqId", sql.UniqueIdentifier, d.rfqId)
@@ -430,28 +456,121 @@ app.post("/api/quotes", authenticate, async (req, res) => {
       .input("homeTotal", sql.Float, homeTotal)
       .input("mooWRTotal", sql.Float, mooWRTotal).query(`
         INSERT INTO dbo.Quotes
-        (rfqId,vendorName,numberOfContainers,shippingLineName,containerType,
-         vesselName,vesselETD,vesselETA,seaFreightPerContainer,
-         houseDeliveryOrderPerBOL,cfsPerContainer,transportationPerContainer,
-         chaChargesHome,chaChargesMOOWR,ediChargesPerBOE,
-         mooWRReeWarehousingCharges,transshipOrDirect,quoteValidityDate,
-         message,createdAt,homeTotal,mooWRTotal)
+          (rfqId, vendorName, numberOfContainers, shippingLineName, containerType,
+           vesselName, vesselETD, vesselETA, seaFreightPerContainer,
+           houseDeliveryOrderPerBOL, cfsPerContainer, transportationPerContainer,
+           chaChargesHome, chaChargesMOOWR, ediChargesPerBOE,
+           mooWRReeWarehousingCharges, transshipOrDirect, quoteValidityDate,
+           message, createdAt, homeTotal, mooWRTotal)
         VALUES
-        (@rfqId,@vendorName,@numberOfContainers,@shippingLineName,@containerType,
-         @vesselName,@vesselETD,@vesselETA,@seaFreightPerContainer,
-         @houseDeliveryOrderPerBOL,@cfsPerContainer,@transportationPerContainer,
-         @chaChargesHome,@chaChargesMOOWR,@ediChargesPerBOE,
-         @mooWRReeWarehousingCharges,@transshipOrDirect,@quoteValidityDate,
-         @message,SYSUTCDATETIME(),@homeTotal,@mooWRTotal)
+          (@rfqId, @vendorName, @numberOfContainers, @shippingLineName, @containerType,
+           @vesselName, @vesselETD, @vesselETA, @seaFreightPerContainer,
+           @houseDeliveryOrderPerBOL, @cfsPerContainer, @transportationPerContainer,
+           @chaChargesHome, @chaChargesMOOWR, @ediChargesPerBOE,
+           @mooWRReeWarehousingCharges, @transshipOrDirect, @quoteValidityDate,
+           @message, SYSUTCDATETIME(), @homeTotal, @mooWRTotal)
       `);
-    // update RFQ status
+
+    // 3) Update RFQ status if initial
     await pool
       .request()
       .input("rfqId", sql.UniqueIdentifier, d.rfqId)
       .query(
         `UPDATE dbo.RFQs SET status='evaluation' WHERE id=@rfqId AND status='initial'`
       );
-    res.json({ message: "Quote submitted" });
+
+    // 4) Fetch RFQ details
+    const rfqRes = await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, d.rfqId).query(`
+        SELECT rfqNumber, itemDescription, companyName, materialPONumber,
+               supplierName, portOfLoading, portOfDestination, containerType,
+               numberOfContainers, cargoWeight, cargoReadinessDate,
+               initialQuoteEndTime, evaluationEndTime, description
+        FROM dbo.RFQs
+        WHERE id=@id
+      `);
+    const rfq = rfqRes.recordset[0];
+
+    // 5) Build HTML tables
+    const rfqRows = [
+      ["RFQ Number", rfq.rfqNumber],
+      ["Item Description", rfq.itemDescription],
+      ["Company Name", rfq.companyName],
+      ["Material PO Number", rfq.materialPONumber],
+      ["Supplier Name", rfq.supplierName],
+      ["Port of Loading", rfq.portOfLoading],
+      ["Port of Destination", rfq.portOfDestination],
+      ["Container Type", rfq.containerType],
+      ["Number of Containers", rfq.numberOfContainers],
+      ["Cargo Weight", rfq.cargoWeight],
+      [
+        "Cargo Readiness Date",
+        new Date(rfq.cargoReadinessDate).toLocaleString(),
+      ],
+      [
+        "Initial Quote End Time",
+        new Date(rfq.initialQuoteEndTime).toLocaleString(),
+      ],
+      ["Evaluation End Time", new Date(rfq.evaluationEndTime).toLocaleString()],
+      ["Description", rfq.description || ""],
+    ];
+    const quoteRows = [
+      ["Vendor", req.user.company],
+      ["Containers", d.numberOfContainers],
+      ["Shipping Line", d.shippingLineName],
+      ["Container Type", d.containerType],
+      ["Vessel Name", d.vesselName],
+      ["ETD", new Date(d.vesselETD).toLocaleString()],
+      ["ETA", new Date(d.vesselETA).toLocaleString()],
+      ["Sea Freight (per container)", d.seaFreightPerContainer],
+      ["HDO per BOL", d.houseDeliveryOrderPerBOL],
+      ["CFS per container", d.cfsPerContainer],
+      ["Transportation per container", d.transportationPerContainer],
+      ["CHA Home", d.chaChargesHome],
+      ["CHA MOOWR", d.chaChargesMOOWR],
+      ["EDI per BOE", d.ediChargesPerBOE],
+      ["Warehousing Charges", d.mooWRReeWarehousingCharges],
+      ["Transship/Direct", d.transshipOrDirect],
+      ["Quote Validity", new Date(d.quoteValidityDate).toLocaleString()],
+      ["Message", d.message || ""],
+      ["Home Total (INR)", homeTotal],
+      ["MOOWR Total (INR)", mooWRTotal],
+    ];
+    const makeTable = (rows) => `
+      <table border="1" cellpadding="5" cellspacing="0">
+        <tr><th align="left">Field</th><th align="left">Value</th></tr>
+        ${rows.map(([f, v]) => `<tr><td>${f}</td><td>${v}</td></tr>`).join("")}
+      </table>
+    `;
+    const rfqTable = makeTable(rfqRows);
+    const quoteTable = makeTable(quoteRows);
+
+    // 6) Send notification email
+    await client.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+      message: {
+        subject: `Quote Submitted for RFQ ${rfq.rfqNumber}`,
+        body: {
+          contentType: "HTML",
+          content: `
+              <p>Hello LEAFI Team,</p>
+              <p>A vendor has submitted/updated a quote. See details below:</p>
+              <h4>RFQ Details</h4>
+              ${rfqTable}
+              <h4>Quote Details</h4>
+              ${quoteTable}
+              <p>Thanks & Regards,<br/>LEAFI System</p>
+            `,
+        },
+        toRecipients: [
+          { emailAddress: { address: "leaf@premierenergies.com" } },
+        ],
+      },
+      saveToSentItems: true,
+    });
+
+    // 7) Respond
+    res.json({ message: "Quote submitted and notification sent" });
   } catch (err) {
     console.error("Submit quote error:", err);
     res.status(500).json({ message: "Server error" });
@@ -473,7 +592,7 @@ app.post("/api/allocations", authenticate, async (req, res) => {
   try {
     const pool = await sql.connect(dbConfig);
 
-    // 1) Insert this (partial) allocation
+    // 1) Insert allocation
     await pool
       .request()
       .input("rfqId", sql.UniqueIdentifier, rfqId)
@@ -498,18 +617,50 @@ app.post("/api/allocations", authenticate, async (req, res) => {
       `);
     const totalAllocated = sumRes.recordset[0].total || 0;
 
-    // 3) Fetch RFQ’s required total
+    // 3) Fetch RFQ’s required total and details
     const rfqRes = await pool
       .request()
       .input("rfqId", sql.UniqueIdentifier, rfqId).query(`
-        SELECT numberOfContainers
+        SELECT
+          rfqNumber, itemDescription, companyName, materialPONumber,
+          supplierName, portOfLoading, portOfDestination, containerType,
+          numberOfContainers, cargoWeight, cargoReadinessDate,
+          initialQuoteEndTime, evaluationEndTime, description
         FROM dbo.RFQs
         WHERE id = @rfqId
       `);
-    const required = rfqRes.recordset[0]?.numberOfContainers || 0;
+    const rfq = rfqRes.recordset[0];
 
-    // 4) Only close RFQ when fully allocated
-    if (totalAllocated >= required) {
+    // 4) Fetch this vendor’s quote details
+    const quoteRes = await pool
+      .request()
+      .input("rfqId", sql.UniqueIdentifier, rfqId)
+      .input("vendorName", sql.NVarChar, vendorName).query(`
+        SELECT
+          numberOfContainers, shippingLineName, containerType,
+          vesselName, vesselETD, vesselETA, seaFreightPerContainer,
+          houseDeliveryOrderPerBOL, cfsPerContainer, transportationPerContainer,
+          chaChargesHome, chaChargesMOOWR, ediChargesPerBOE,
+          mooWRReeWarehousingCharges, transshipOrDirect,
+          quoteValidityDate, message, homeTotal, mooWRTotal
+        FROM dbo.Quotes
+        WHERE rfqId = @rfqId AND vendorName = @vendorName
+        ORDER BY createdAt DESC
+      `);
+    const quote = quoteRes.recordset[0];
+
+    // 5) Get the vendor’s email
+    const emailRes = await pool
+      .request()
+      .input("company", sql.NVarChar, vendorName).query(`
+        SELECT username AS email
+        FROM dbo.Users
+        WHERE company = @company
+      `);
+    const vendorEmail = emailRes.recordset[0]?.email;
+
+    // 6) Close RFQ if fully allocated
+    if (totalAllocated >= rfq.numberOfContainers) {
       await pool.request().input("rfqId", sql.UniqueIdentifier, rfqId).query(`
           UPDATE dbo.RFQs
           SET status = 'closed'
@@ -517,9 +668,101 @@ app.post("/api/allocations", authenticate, async (req, res) => {
         `);
     }
 
-    res.json({ message: "Allocation recorded", totalAllocated, required });
+    // 7) Build HTML tables
+    const makeTable = (rows) => `
+      <table border="1" cellpadding="5" cellspacing="0">
+        <tr><th align="left">Field</th><th align="left">Value</th></tr>
+        ${rows.map(([f, v]) => `<tr><td>${f}</td><td>${v}</td></tr>`).join("")}
+      </table>
+    `;
+
+    const rfqRows = [
+      ["RFQ Number", rfq.rfqNumber],
+      ["Item Description", rfq.itemDescription],
+      ["Company Name", rfq.companyName],
+      ["Material PO Number", rfq.materialPONumber],
+      ["Supplier Name", rfq.supplierName],
+      ["Port of Loading", rfq.portOfLoading],
+      ["Port of Destination", rfq.portOfDestination],
+      ["Container Type", rfq.containerType],
+      ["Req’d Containers", rfq.numberOfContainers],
+      ["Cargo Weight", rfq.cargoWeight],
+      [
+        "Cargo Readiness Date",
+        new Date(rfq.cargoReadinessDate).toLocaleString(),
+      ],
+      [
+        "Initial Quote End Time",
+        new Date(rfq.initialQuoteEndTime).toLocaleString(),
+      ],
+      ["Evaluation End Time", new Date(rfq.evaluationEndTime).toLocaleString()],
+      ["Description", rfq.description || ""],
+    ];
+
+    const quoteRows = [
+      ["Vendor", vendorName],
+      ["Quoted Containers", quote.numberOfContainers],
+      ["Shipping Line", quote.shippingLineName],
+      ["Container Type", quote.containerType],
+      ["Vessel Name", quote.vesselName],
+      ["ETD", new Date(quote.vesselETD).toLocaleString()],
+      ["ETA", new Date(quote.vesselETA).toLocaleString()],
+      ["Sea Freight/Container", quote.seaFreightPerContainer],
+      ["HDO/BOL", quote.houseDeliveryOrderPerBOL],
+      ["CFS/Container", quote.cfsPerContainer],
+      ["Transport/Container", quote.transportationPerContainer],
+      ["CHA Home", quote.chaChargesHome],
+      ["CHA MOOWR", quote.chaChargesMOOWR],
+      ["EDI/BOE", quote.ediChargesPerBOE],
+      ["Warehousing", quote.mooWRReeWarehousingCharges],
+      ["Transship/Direct", quote.transshipOrDirect],
+      ["Quote Validity", new Date(quote.quoteValidityDate).toLocaleString()],
+      ["Message", quote.message || ""],
+      ["Home Total", quote.homeTotal],
+      ["MOOWR Total", quote.mooWRTotal],
+    ];
+
+    const finalRows = [
+      ["Allocated Home", containersAllottedHome],
+      ["Allocated MOOWR", containersAllottedMOOWR],
+      ["Reason", reason],
+    ];
+
+    const rfqTable = makeTable(rfqRows);
+    const quoteTable = makeTable(quoteRows);
+    const finalTable = makeTable(finalRows);
+
+    // 8) Send notification email
+    await client.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+      message: {
+        subject: `RFQ ${rfq.rfqNumber} Finalized for ${vendorName}`,
+        body: {
+          contentType: "HTML",
+          content: `
+              <p>Hello,</p>
+              <p>The following RFQ has been finalized/allocated:</p>
+              <h4>RFQ Details</h4>${rfqTable}
+              <h4>Quote Details</h4>${quoteTable}
+              <h4>Finalization Details</h4>${finalTable}
+              <p>Thanks & Regards,<br/>LEAFI Team</p>
+            `,
+        },
+        toRecipients: [
+          { emailAddress: { address: "leaf@premierenergies.com" } },
+          { emailAddress: { address: vendorEmail } },
+          { emailAddress: { address: "ramanjulu@premierenergies.com" } },
+        ],
+      },
+      saveToSentItems: true,
+    });
+
+    // 9) Respond
+    res.json({
+      message: "Allocation recorded and notifications sent",
+      totalAllocated,
+    });
   } catch (err) {
-    console.error("Allocation error:", err);
+    console.error("Allocation/finalization error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -553,6 +796,17 @@ app.get("/api/allocations/:rfqId", authenticate, async (req, res) => {
   } catch (err) {
     console.error("Fetch allocations error:", err);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/rate/usdinr", async (req, res) => {
+  try {
+    const resp = await axios.get(EXCHANGE_URL);
+    console.log("🔄 Live USD→INR fetched:", resp.data.conversion_rate);
+    return res.json({ rate: resp.data.conversion_rate });
+  } catch (err) {
+    console.error("⚠️ Exchange API error, falling back to 75 →", err.message);
+    return res.json({ rate: 75 });
   }
 });
 
