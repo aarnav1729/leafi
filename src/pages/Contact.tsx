@@ -92,9 +92,9 @@ const Contact = () => {
       
       <div className="mt-8 text-center">
         <h2 className="text-xl font-bold mb-2">Contact Information</h2>
-        <p className="text-muted-foreground mb-1">Email: support@rfqsystem.com</p>
-        <p className="text-muted-foreground mb-1">Phone: +1 (555) 123-4567</p>
-        <p className="text-muted-foreground">Address: 123 Business Ave, Suite 100, City, Country</p>
+        <p className="text-muted-foreground mb-1">Email: aarnav.singh@premierenergies.com</p>
+        <p className="text-muted-foreground mb-1">Phone: +91 (814) 302-5550</p>
+        <p className="text-muted-foreground">Address: 872 Trails End Rd, Eagan, MN 55104</p>
       </div>
     </div>
   );

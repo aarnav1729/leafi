@@ -11,7 +11,7 @@ const EXCHANGE_URL = `https://v6.exchangerate-api.com/v6/${EXCHANGE_API_KEY}/pai
 
 // Initialize Express app
 const app = express();
-const PORT = process.env.PORT || 3337;
+const PORT = process.env.PORT || 30443;
 
 // Database config
 const dbConfig = {
