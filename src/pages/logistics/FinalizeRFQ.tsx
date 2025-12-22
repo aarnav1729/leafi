@@ -571,314 +571,426 @@ const FinalizeRFQ: React.FC = () => {
     const state = isLogistics ? alloc : autoAlloc;
 
     return (
-      <table
-        className="data-table text-sm table-auto whitespace-nowrap"
-      >
-        <thead>
-          <tr>
-            <th>Vendor</th>
-            <th>Quoted Containers</th>
-            <th>Allotted ({scheme.toUpperCase()})</th>
-            <th>Line Total (INR)</th>
-            <th>Allotted Cost (INR)</th>
-
-            <th>T/D</th>
-            <th>Shipping Line</th>
-            <th>Vessel</th>
-            <th>ETD</th>
-            <th>ETA</th>
-
-            <th>Sea Freight/Container (USD)</th>
-            <th>Sea Freight/Container (INR)</th>
-            <th>HDO per BOL (INR)</th>
-            <th>CFS/Container (INR)</th>
-            <th>Transport/Container (INR)</th>
-            <th>EDI per BOE (INR)</th>
-            <th>CHA Home (INR)</th>
-            <th>CHA MOOWR (INR)</th>
-            <th>MOOWR Re-warehousing/BOE (INR)</th>
-
-            <th>Quote Validity</th>
-            <th>Message</th>
-            <th>Quote Created</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {quotes.map((q: any) => {
-            const thisAllotted =
-              state[q.id]?.[
-                scheme === "home"
-                  ? "containersAllottedHome"
-                  : "containersAllottedMOOWR"
-              ] || 0;
-
-            const existingVal =
-              existingMap[q.id]?.[
-                scheme === "home"
-                  ? "containersAllottedHome"
-                  : "containersAllottedMOOWR"
-              ] || 0;
-
-            const rowMax = computeMaxForRow(q.id);
-
-            const totalsForRow = isLogistics ? logisticsTotals : baseTotals;
-            const lineTotal =
+      <div className="grid gap-4">
+        {quotes.map((q: any) => {
+          const thisAllotted =
+            state[q.id]?.[
               scheme === "home"
-                ? totalsForRow[q.id]?.home || 0
-                : totalsForRow[q.id]?.moowr || 0;
+                ? "containersAllottedHome"
+                : "containersAllottedMOOWR"
+            ] || 0;
 
-            const allottedCost = thisAllotted * lineTotal;
+          const existingVal =
+            existingMap[q.id]?.[
+              scheme === "home"
+                ? "containersAllottedHome"
+                : "containersAllottedMOOWR"
+            ] || 0;
 
-            const seaFreightUsd = isLogistics
-              ? getQuoteValue(q, q.id, "seaFreightPerContainer")
-              : fmt.num(q.seaFreightPerContainer);
+          const rowMax = computeMaxForRow(q.id);
 
-            const seaFreightInr = seaFreightUsd * usdToInr;
+          const totalsForRow = isLogistics ? logisticsTotals : baseTotals;
+          const lineTotal =
+            scheme === "home"
+              ? totalsForRow[q.id]?.home || 0
+              : totalsForRow[q.id]?.moowr || 0;
 
-            const hdo = isLogistics
-              ? getQuoteValue(q, q.id, "houseDeliveryOrderPerBOL")
-              : fmt.num(q.houseDeliveryOrderPerBOL);
+          const allottedCost = thisAllotted * lineTotal;
 
-            const cfs = isLogistics
-              ? getQuoteValue(q, q.id, "cfsPerContainer")
-              : fmt.num(q.cfsPerContainer);
+          const seaFreightUsd = isLogistics
+            ? getQuoteValue(q, q.id, "seaFreightPerContainer")
+            : fmt.num(q.seaFreightPerContainer);
 
-            const trn = isLogistics
-              ? getQuoteValue(q, q.id, "transportationPerContainer")
-              : fmt.num(q.transportationPerContainer);
+          const seaFreightInr = seaFreightUsd * usdToInr;
 
-            const edi = isLogistics
-              ? getQuoteValue(q, q.id, "ediChargesPerBOE")
-              : fmt.num(q.ediChargesPerBOE);
+          const hdo = isLogistics
+            ? getQuoteValue(q, q.id, "houseDeliveryOrderPerBOL")
+            : fmt.num(q.houseDeliveryOrderPerBOL);
 
-            const chaHome = isLogistics
-              ? getQuoteValue(q, q.id, "chaChargesHome")
-              : fmt.num(q.chaChargesHome);
+          const cfs = isLogistics
+            ? getQuoteValue(q, q.id, "cfsPerContainer")
+            : fmt.num(q.cfsPerContainer);
 
-            const chaMoowr = isLogistics
-              ? getQuoteValue(q, q.id, "chaChargesMOOWR")
-              : fmt.num(q.chaChargesMOOWR);
+          const trn = isLogistics
+            ? getQuoteValue(q, q.id, "transportationPerContainer")
+            : fmt.num(q.transportationPerContainer);
 
-            const ware = isLogistics
-              ? getQuoteValue(q, q.id, "mooWRReeWarehousingCharges")
-              : fmt.num(q.mooWRReeWarehousingCharges);
+          const edi = isLogistics
+            ? getQuoteValue(q, q.id, "ediChargesPerBOE")
+            : fmt.num(q.ediChargesPerBOE);
 
-            return (
-              <tr key={`${q.id}-${mode}-${scheme}`}>
-                <td className="font-medium">{fmt.plain(q.vendorName)}</td>
-                <td>{fmt.plain(q.numberOfContainers)}</td>
+          const chaHome = isLogistics
+            ? getQuoteValue(q, q.id, "chaChargesHome")
+            : fmt.num(q.chaChargesHome);
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      min={existingVal}
-                      max={rowMax}
-                      value={thisAllotted}
-                      onChange={(e) =>
-                        changeAlloc(
-                          q.id,
-                          scheme,
-                          parseInt(e.currentTarget.value, 10) || 0
-                        )
-                      }
-                      className="w-24"
-                    />
-                  ) : (
-                    thisAllotted
-                  )}
-                </td>
+          const chaMoowr = isLogistics
+            ? getQuoteValue(q, q.id, "chaChargesMOOWR")
+            : fmt.num(q.chaChargesMOOWR);
 
-                <td>{fmt.money(lineTotal)}</td>
-                <td className="font-semibold">{fmt.money(allottedCost)}</td>
+          const ware = isLogistics
+            ? getQuoteValue(q, q.id, "mooWRReeWarehousingCharges")
+            : fmt.num(q.mooWRReeWarehousingCharges);
 
-                <td>{fmt.plain(q.transshipOrDirect)}</td>
-                <td>{fmt.plain(q.shippingLineName)}</td>
-                <td>{fmt.plain(q.vesselName)}</td>
-                <td>{fmt.date(q.vesselETD)}</td>
-                <td>{fmt.date(q.vesselETA)}</td>
+          const labelCls = "w-64 pr-4 text-muted-foreground";
+          const rowCls = "border-b last:border-b-0";
+          const cellCls = "py-2 align-top";
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      value={seaFreightUsd}
-                      onChange={(e) =>
-                        changePrice(
-                          q.id,
-                          "seaFreightPerContainer",
-                          parseFloat(e.currentTarget.value) || 0
-                        )
-                      }
-                      className="w-28"
-                    />
-                  ) : (
-                    seaFreightUsd.toFixed(2)
-                  )}
-                </td>
+          return (
+            <div
+              key={`${q.id}-${mode}-${scheme}`}
+              className="rounded-lg border bg-background overflow-hidden"
+            >
+              {/* Vendor header */}
+              <div className="px-4 py-3 border-b flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold truncate">
+                    {fmt.plain(q.vendorName)}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Quoted Containers:{" "}
+                    <span className="font-medium">
+                      {fmt.plain(q.numberOfContainers)}
+                    </span>
+                    {" • "}
+                    Scheme:{" "}
+                    <span className="font-medium">{scheme.toUpperCase()}</span>
+                  </div>
+                </div>
 
-                <td>{fmt.money(seaFreightInr)}</td>
+                <div className="text-right shrink-0">
+                  <div className="text-xs text-muted-foreground">
+                    Allotted Cost
+                  </div>
+                  <div className="font-bold">{fmt.money(allottedCost)}</div>
+                </div>
+              </div>
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      value={hdo}
-                      onChange={(e) =>
-                        changePrice(
-                          q.id,
-                          "houseDeliveryOrderPerBOL",
-                          parseFloat(e.currentTarget.value) || 0
-                        )
-                      }
-                      className="w-28"
-                    />
-                  ) : (
-                    fmt.money(q.houseDeliveryOrderPerBOL)
-                  )}
-                </td>
+              {/* Vertical table */}
+              <div className="p-4">
+                <table className="w-full text-sm">
+                  <tbody>
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        Allotted ({scheme.toUpperCase()})
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            min={existingVal}
+                            max={rowMax}
+                            value={thisAllotted}
+                            onChange={(e) =>
+                              changeAlloc(
+                                q.id,
+                                scheme,
+                                parseInt(e.currentTarget.value, 10) || 0
+                              )
+                            }
+                            className="w-32"
+                          />
+                        ) : (
+                          <span className="font-medium">{thisAllotted}</span>
+                        )}
+                        {existingVal > 0 && (
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Already saved:{" "}
+                            <span className="font-medium">{existingVal}</span>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      value={cfs}
-                      onChange={(e) =>
-                        changePrice(
-                          q.id,
-                          "cfsPerContainer",
-                          parseFloat(e.currentTarget.value) || 0
-                        )
-                      }
-                      className="w-28"
-                    />
-                  ) : (
-                    fmt.money(q.cfsPerContainer)
-                  )}
-                </td>
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        Line Total (INR)
+                      </td>
+                      <td className={cellCls}>{fmt.money(lineTotal)}</td>
+                    </tr>
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      value={trn}
-                      onChange={(e) =>
-                        changePrice(
-                          q.id,
-                          "transportationPerContainer",
-                          parseFloat(e.currentTarget.value) || 0
-                        )
-                      }
-                      className="w-28"
-                    />
-                  ) : (
-                    fmt.money(q.transportationPerContainer)
-                  )}
-                </td>
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>T/D</td>
+                      <td className={cellCls}>
+                        {fmt.plain(q.transshipOrDirect)}
+                      </td>
+                    </tr>
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      value={edi}
-                      onChange={(e) =>
-                        changePrice(
-                          q.id,
-                          "ediChargesPerBOE",
-                          parseFloat(e.currentTarget.value) || 0
-                        )
-                      }
-                      className="w-28"
-                    />
-                  ) : (
-                    fmt.money(q.ediChargesPerBOE)
-                  )}
-                </td>
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        Shipping Line
+                      </td>
+                      <td className={cellCls}>
+                        {fmt.plain(q.shippingLineName)}
+                      </td>
+                    </tr>
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      value={chaHome}
-                      onChange={(e) =>
-                        changePrice(
-                          q.id,
-                          "chaChargesHome",
-                          parseFloat(e.currentTarget.value) || 0
-                        )
-                      }
-                      className="w-28"
-                    />
-                  ) : (
-                    fmt.money(q.chaChargesHome)
-                  )}
-                </td>
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>Vessel</td>
+                      <td className={cellCls}>{fmt.plain(q.vesselName)}</td>
+                    </tr>
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      value={chaMoowr}
-                      onChange={(e) =>
-                        changePrice(
-                          q.id,
-                          "chaChargesMOOWR",
-                          parseFloat(e.currentTarget.value) || 0
-                        )
-                      }
-                      className="w-28"
-                    />
-                  ) : (
-                    fmt.money(q.chaChargesMOOWR)
-                  )}
-                </td>
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>ETD</td>
+                      <td className={cellCls}>{fmt.date(q.vesselETD)}</td>
+                    </tr>
 
-                <td>
-                  {isLogistics ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min={0}
-                      value={ware}
-                      onChange={(e) =>
-                        changePrice(
-                          q.id,
-                          "mooWRReeWarehousingCharges",
-                          parseFloat(e.currentTarget.value) || 0
-                        )
-                      }
-                      className="w-32"
-                    />
-                  ) : (
-                    fmt.money(q.mooWRReeWarehousingCharges)
-                  )}
-                </td>
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>ETA</td>
+                      <td className={cellCls}>{fmt.date(q.vesselETA)}</td>
+                    </tr>
 
-                <td>{fmt.date(q.quoteValidityDate)}</td>
-                <td className="min-w-[220px] whitespace-pre-wrap">
-                  {fmt.plain(q.message)}
-                </td>
-                <td>{fmt.datetime(q.createdAt)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        Sea Freight/Container (USD)
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            value={seaFreightUsd}
+                            onChange={(e) =>
+                              changePrice(
+                                q.id,
+                                "seaFreightPerContainer",
+                                parseFloat(e.currentTarget.value) || 0
+                              )
+                            }
+                            className="w-40"
+                          />
+                        ) : (
+                          <span className="font-medium">
+                            {fmt.num(seaFreightUsd).toFixed(2)}
+                          </span>
+                        )}
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Sea Freight/Container (INR):{" "}
+                          <span className="font-medium">
+                            {fmt.money(seaFreightInr)}
+                          </span>{" "}
+                          <span className="ml-2">
+                            (USD→INR:{" "}
+                            <span className="font-semibold">
+                              {usdToInr.toFixed(4)}
+                            </span>
+                            )
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        HDO per BOL (INR)
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            value={hdo}
+                            onChange={(e) =>
+                              changePrice(
+                                q.id,
+                                "houseDeliveryOrderPerBOL",
+                                parseFloat(e.currentTarget.value) || 0
+                              )
+                            }
+                            className="w-40"
+                          />
+                        ) : (
+                          fmt.money(q.houseDeliveryOrderPerBOL)
+                        )}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        CFS/Container (INR)
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            value={cfs}
+                            onChange={(e) =>
+                              changePrice(
+                                q.id,
+                                "cfsPerContainer",
+                                parseFloat(e.currentTarget.value) || 0
+                              )
+                            }
+                            className="w-40"
+                          />
+                        ) : (
+                          fmt.money(q.cfsPerContainer)
+                        )}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        Transport/Container (INR)
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            value={trn}
+                            onChange={(e) =>
+                              changePrice(
+                                q.id,
+                                "transportationPerContainer",
+                                parseFloat(e.currentTarget.value) || 0
+                              )
+                            }
+                            className="w-40"
+                          />
+                        ) : (
+                          fmt.money(q.transportationPerContainer)
+                        )}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        EDI per BOE (INR)
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            value={edi}
+                            onChange={(e) =>
+                              changePrice(
+                                q.id,
+                                "ediChargesPerBOE",
+                                parseFloat(e.currentTarget.value) || 0
+                              )
+                            }
+                            className="w-40"
+                          />
+                        ) : (
+                          fmt.money(q.ediChargesPerBOE)
+                        )}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        CHA Home (INR)
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            value={chaHome}
+                            onChange={(e) =>
+                              changePrice(
+                                q.id,
+                                "chaChargesHome",
+                                parseFloat(e.currentTarget.value) || 0
+                              )
+                            }
+                            className="w-40"
+                          />
+                        ) : (
+                          fmt.money(q.chaChargesHome)
+                        )}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        CHA MOOWR (INR)
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            value={chaMoowr}
+                            onChange={(e) =>
+                              changePrice(
+                                q.id,
+                                "chaChargesMOOWR",
+                                parseFloat(e.currentTarget.value) || 0
+                              )
+                            }
+                            className="w-40"
+                          />
+                        ) : (
+                          fmt.money(q.chaChargesMOOWR)
+                        )}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        MOOWR Re-warehousing/BOE (INR)
+                      </td>
+                      <td className={cellCls}>
+                        {isLogistics ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            value={ware}
+                            onChange={(e) =>
+                              changePrice(
+                                q.id,
+                                "mooWRReeWarehousingCharges",
+                                parseFloat(e.currentTarget.value) || 0
+                              )
+                            }
+                            className="w-44"
+                          />
+                        ) : (
+                          fmt.money(q.mooWRReeWarehousingCharges)
+                        )}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        Quote Validity
+                      </td>
+                      <td className={cellCls}>
+                        {fmt.date(q.quoteValidityDate)}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>Message</td>
+                      <td className={`${cellCls} whitespace-pre-wrap`}>
+                        {fmt.plain(q.message)}
+                      </td>
+                    </tr>
+
+                    <tr className={rowCls}>
+                      <td className={`${labelCls} ${cellCls}`}>
+                        Quote Created
+                      </td>
+                      <td className={cellCls}>{fmt.datetime(q.createdAt)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     );
   };
 

@@ -14,6 +14,25 @@ const morgan = require("morgan");
 const sql = require("mssql");
 const axios = require("axios");
 
+const crypto = require("crypto");
+
+// In-memory OTP + session (MVP; resets on server restart)
+const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+// key: username/email
+const otpStore = new Map(); // username -> { otp, expiresAt }
+
+// key: sessionToken (used as BasicAuth "password")
+const sessionStore = new Map(); // token -> { user, expiresAt }
+
+function genOtp4() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+function genSessionToken() {
+  return crypto.randomBytes(24).toString("hex"); // 48 chars
+}
+
 // Microsoft Graph
 const { Client } = require("@microsoft/microsoft-graph-client");
 const { ClientSecretCredential } = require("@azure/identity");
@@ -708,6 +727,26 @@ async function authenticate(req, res, next) {
   const creds = requireBasicAuth(req);
   if (!creds) return res.sendStatus(401);
 
+  // 1) NEW: session-token auth (token is sent as BasicAuth password)
+  const session = sessionStore.get(creds.password);
+  if (session) {
+    if (Date.now() > session.expiresAt) {
+      sessionStore.delete(creds.password);
+      return res.sendStatus(401);
+    }
+    // Ensure username matches the logged-in user
+    if (
+      String(session.user?.username || "").toLowerCase() !==
+      String(creds.username || "").toLowerCase()
+    ) {
+      return res.sendStatus(401);
+    }
+    req.user = session.user;
+    return next();
+  }
+
+  // 2) fallback legacy: username+password from DB (optional compatibility)
+
   try {
     const pool = await getPool();
     const result = await pool
@@ -736,26 +775,63 @@ async function authenticate(req, res, next) {
 // Auth route (same behavior as before, but uses pool)
 app.post("/api/login", async (req, res) => {
   const { username, password } = req.body || {};
-  if (!username || !password) {
-    return res.status(400).json({ message: "username and password required" });
+  if (!username) {
+    return res.status(400).json({ message: "username/email required" });
   }
 
   try {
     const pool = await getPool();
-    const result = await pool
+
+    // Ensure user exists
+    const userRes = await pool
       .request()
-      .input("username", sql.NVarChar, username)
-      .input("password", sql.NVarChar, password).query(`
+      .input("username", sql.NVarChar, username).query(`
         SELECT TOP 1 id, username, role, name, company
         FROM dbo.Users
-        WHERE username = @username AND password = @password
+        WHERE username = @username
       `);
 
-    if (!result.recordset.length) {
-      return res.status(401).json({ message: "Invalid credentials" });
+    if (!userRes.recordset.length) {
+      return res.status(401).json({ message: "User not found" });
     }
 
-    res.json(result.recordset[0]);
+    const user = userRes.recordset[0];
+
+    // STEP 1: request OTP (password empty)
+    if (!password) {
+      const otp = genOtp4();
+      otpStore.set(String(username).toLowerCase(), {
+        otp,
+        expiresAt: Date.now() + OTP_TTL_MS,
+      });
+
+      // MVP: show OTP in console only
+      console.log(`[OTP] ${username} -> ${otp} (valid ${OTP_TTL_MS / 1000}s)`);
+
+      return res.json({ ok: true, step: "otp_sent" });
+    }
+
+    // STEP 2: verify OTP (password is OTP)
+    const rec = otpStore.get(String(username).toLowerCase());
+    if (!rec || Date.now() > rec.expiresAt) {
+      otpStore.delete(String(username).toLowerCase());
+      return res.status(401).json({ message: "OTP expired. Request again." });
+    }
+
+    if (String(password) !== String(rec.otp)) {
+      return res.status(401).json({ message: "Invalid OTP" });
+    }
+
+    otpStore.delete(String(username).toLowerCase());
+
+    // Create session token (used as BasicAuth password for all subsequent API calls)
+    const sessionToken = genSessionToken();
+    sessionStore.set(sessionToken, {
+      user,
+      expiresAt: Date.now() + SESSION_TTL_MS,
+    });
+
+    return res.json({ ok: true, step: "authenticated", user, sessionToken });
   } catch (err) {
     console.error("[API] /api/login error:", err);
     res.status(500).json({ message: "Server error" });

@@ -1,81 +1,95 @@
-// root/src/pages/Login.tsx
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle
-} from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
 
-const Login = () => {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const { login, isLoading, error } = useAuth();
+// New login UI components
+import Header from "@/components/login/Header";
+import Footer from "@/components/login/Footer";
+import HeroContent from "@/components/login/HeroContent";
+import InteractiveGrid, { GridTheme } from "@/components/login/InteractiveGrid";
+
+type ViewState = "login" | "loading";
+
+const Login: React.FC = () => {
   const navigate = useNavigate();
+  const { requestOtp, verifyOtp } = useAuth();
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const success = await login(username, password);
-    if (success) navigate("/dashboard");
+  const [view, setView] = useState<ViewState>("login");
+  const [email, setEmail] = useState("");
+
+  const theme: GridTheme = useMemo(
+    () => ({
+      cursor: "🚢",
+      gradient: {
+        start: { r: 12, g: 65, b: 35 },
+        end: { r: 122, g: 184, b: 0 },
+      },
+      bgColor: "#FAF9F6",
+    }),
+    []
+  );
+
+  const handleSendOTP = async (inputEmail: string) => {
+    const e = inputEmail.trim();
+    if (!e) return false;
+
+    setEmail(e);
+    const ok = await requestOtp(e);
+    return ok;
+  };
+
+  const handleVerifyOTP = async (inputOtp: string) => {
+    const ok = await verifyOtp(email.trim(), inputOtp.trim());
+    if (ok) setView("loading");
+    return ok;
+  };
+
+  const handleLoadingComplete = () => {
+    navigate("/dashboard");
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-md px-4">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-primary">LEAFI</h1>
-          <p className="text-muted-foreground mt-2">Logistics Enquiry and Finalization for Inbound-Logistics</p>
+    <div
+      className="relative w-screen h-screen overflow-hidden transition-colors duration-700 text-[#1a1b4b]"
+      style={{ backgroundColor: theme.bgColor }}
+    >
+      {/* Background */}
+      <InteractiveGrid
+        isFormingShape={view === "loading"}
+        onShapeFormationComplete={handleLoadingComplete}
+        theme={theme}
+      />
+
+      {/* Foreground */}
+      <div
+        className={`absolute inset-0 flex flex-col justify-between py-6 pointer-events-none transition-opacity duration-500 ${
+          view === "login" ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        {/* Header */}
+        <div className="w-[90%] mx-auto pointer-events-auto">
+          <div className="bg-white/40 backdrop-blur-md border border-white/20 shadow-sm rounded-2xl px-6 py-3">
+            <Header />
+          </div>
         </div>
-        <Card>
-          <CardHeader>
-            <CardTitle>Login</CardTitle>
-            <CardDescription>Enter your credentials to access your account</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit}>
-              <div className="grid gap-4">
-                <div>
-                  <Label htmlFor="username">Username</Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    placeholder="Username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="Password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
-                </div>
-                {error && <p className="text-destructive text-sm">{error}</p>}
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Signing in..." : "Sign in"}
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-          <CardFooter className="mt-2 text-center text-sm text-muted-foreground">
-            <p>Demo Credentials:</p>
-            <p>Logistics: aarnav / aarnav1729</p>
-            <p>Vendor LEAFI: nav / nav</p>
-            <p>Admin: aarnav / aarnav</p>
-            <p>Vendor LEAFO: van / van</p>
-          </CardFooter>
-        </Card>
-        <div className="mt-8 text-center text-sm text-muted-foreground">
-          <a href="/terms" className="text-primary hover:underline">Terms and Conditions</a> |{" "}
-          <a href="/contact" className="text-primary hover:underline">Contact Us</a>
+
+        {/* Center */}
+        <div className="flex-1 flex items-center justify-center pointer-events-none">
+          {view === "login" && (
+            <div className="pointer-events-auto w-full flex justify-center">
+              <HeroContent
+                onSendOTP={handleSendOTP}
+                onVerifyOTP={handleVerifyOTP}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="w-[90%] mx-auto pointer-events-auto">
+          <div className="bg-white/40 backdrop-blur-md border border-white/20 shadow-sm rounded-2xl px-6 py-3">
+            <Footer />
+          </div>
         </div>
       </div>
     </div>

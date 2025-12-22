@@ -5,7 +5,8 @@ import { AuthState, User, UserRole } from "@/types/auth.types";
 import { setCredentials } from "@/lib/api";
 
 interface AuthContextType extends AuthState {
-  login: (username: string, password: string) => Promise<boolean>;
+  requestOtp: (username: string) => Promise<boolean>;
+  verifyOtp: (username: string, otp: string) => Promise<boolean>;
   logout: () => void;
 }
 
@@ -18,7 +19,9 @@ const initialState: AuthState = {
 
 const AuthContext = createContext<AuthContextType>({
   ...initialState,
-  login: async () => false,
+  requestOtp: async () => false,
+  verifyOtp: async () => false,
+
   logout: () => {},
 });
 
@@ -32,44 +35,72 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   // On mount, rehydrate user
   useEffect(() => {
     const stored = localStorage.getItem("rfq_user");
-    if (stored) {
+    const token = localStorage.getItem("rfq_session_token");
+
+    if (stored && token) {
       const user = JSON.parse(stored) as User;
+      setCredentials(user.username, token); // username=email, token=sessionToken
       setState({ isAuthenticated: true, user, isLoading: false, error: null });
-      // Also restore credentials if you saved them in localStorage (optional)
     } else {
       setState({ ...initialState, isLoading: false });
     }
   }, []);
 
-  const login = async (
-    username: string,
-    password: string
-  ): Promise<boolean> => {
-    setState({ ...state, isLoading: true, error: null });
+  const requestOtp = async (username: string): Promise<boolean> => {
+    setState((s) => ({ ...s, isLoading: true, error: null }));
     try {
-      // Call the server
       const res = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username }), // no password => OTP request
       });
-      if (!res.ok) throw new Error("Invalid credentials");
-      const user: User = await res.json();
+      if (!res.ok) throw new Error("Failed to send OTP");
+      setState((s) => ({ ...s, isLoading: false, error: null }));
+      toast.success("OTP sent (check server console)");
+      return true;
+    } catch (err: any) {
+      setState((s) => ({
+        ...s,
+        isLoading: false,
+        error: err.message || "OTP request failed",
+      }));
+      toast.error(err.message || "OTP request failed");
+      return false;
+    }
+  };
 
-      // 1) persist
+  const verifyOtp = async (username: string, otp: string): Promise<boolean> => {
+    setState((s) => ({ ...s, isLoading: true, error: null }));
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password: otp }), // OTP goes as "password" for now
+      });
+      if (!res.ok) {
+        const msg = (await res.json().catch(() => null))?.message;
+        throw new Error(msg || "Invalid OTP");
+      }
+
+      const data = await res.json();
+      const user: User = data.user;
+      const sessionToken: string = data.sessionToken;
+
       localStorage.setItem("rfq_user", JSON.stringify(user));
-      // 2) configure API client
-      setCredentials(username, password);
+      localStorage.setItem("rfq_session_token", sessionToken);
+
+      // Use BasicAuth everywhere: username + sessionToken
+      setCredentials(username, sessionToken);
 
       setState({ isAuthenticated: true, user, isLoading: false, error: null });
       toast.success("Login successful");
       return true;
     } catch (err: any) {
-      setState({
-        ...state,
+      setState((s) => ({
+        ...s,
         isLoading: false,
         error: err.message || "Login failed",
-      });
+      }));
       toast.error(err.message || "Login failed");
       return false;
     }
@@ -77,14 +108,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const logout = () => {
     localStorage.removeItem("rfq_user");
-    // clear axios auth
+    localStorage.removeItem("rfq_session_token");
     setCredentials("", "");
-    setState({ isAuthenticated: false, user: null, isLoading: false, error: null });
+    setState({
+      isAuthenticated: false,
+      user: null,
+      isLoading: false,
+      error: null,
+    });
     toast.info("Logged out");
   };
 
   return (
-    <AuthContext.Provider value={{ ...state, login, logout }}>
+    <AuthContext.Provider value={{ ...state, requestOtp, verifyOtp, logout }}>
       {children}
     </AuthContext.Provider>
   );

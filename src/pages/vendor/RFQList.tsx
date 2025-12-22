@@ -36,16 +36,17 @@ const VendorRFQList = () => {
   const [vesselName, setVesselName] = useState("");
   const [vesselETD, setVesselETD] = useState("");
   const [vesselETA, setVesselETA] = useState("");
-  const [seaFreightPerContainer, setSeaFreightPerContainer] = useState(0);
-  const [houseDeliveryOrderPerBOL, setHouseDeliveryOrderPerBOL] = useState(0);
-  const [cfsPerContainer, setCfsPerContainer] = useState(0);
+  const [seaFreightPerContainer, setSeaFreightPerContainer] = useState("");
+  const [houseDeliveryOrderPerBOL, setHouseDeliveryOrderPerBOL] = useState("");
+  const [cfsPerContainer, setCfsPerContainer] = useState("");
   const [transportationPerContainer, setTransportationPerContainer] =
-    useState(0);
-  const [chaChargesHome, setChaChargesHome] = useState(0);
-  const [chaChargesMOOWR, setChaChargesMOOWR] = useState(0);
-  const [ediChargesPerBOE, setEdiChargesPerBOE] = useState(0);
+    useState("");
+  const [chaChargesHome, setChaChargesHome] = useState("");
+  const [chaChargesMOOWR, setChaChargesMOOWR] = useState("");
+  const [ediChargesPerBOE, setEdiChargesPerBOE] = useState("");
   const [mooWRReeWarehousingCharges, setMooWRReeWarehousingCharges] =
-    useState(0);
+    useState("");
+
   const [transshipOrDirect, setTransshipOrDirect] = useState<
     "transship" | "direct"
   >("direct");
@@ -88,6 +89,9 @@ const VendorRFQList = () => {
       )[0];
 
     if (latestMine) {
+      const toStr = (v: any) =>
+        v === null || v === undefined ? "" : String(v);
+
       setNumberOfContainers(
         Number(latestMine.numberOfContainers || rfq.numberOfContainers)
       );
@@ -95,20 +99,19 @@ const VendorRFQList = () => {
       setVesselName(latestMine.vesselName || "");
       setVesselETD(toDateInputValue((latestMine as any).vesselETD));
       setVesselETA(toDateInputValue((latestMine as any).vesselETA));
-      setSeaFreightPerContainer(Number(latestMine.seaFreightPerContainer || 0));
-      setHouseDeliveryOrderPerBOL(
-        Number(latestMine.houseDeliveryOrderPerBOL || 0)
-      );
-      setCfsPerContainer(Number(latestMine.cfsPerContainer || 0));
+      setSeaFreightPerContainer(toStr(latestMine.seaFreightPerContainer));
+      setHouseDeliveryOrderPerBOL(toStr(latestMine.houseDeliveryOrderPerBOL));
+      setCfsPerContainer(toStr(latestMine.cfsPerContainer));
       setTransportationPerContainer(
-        Number(latestMine.transportationPerContainer || 0)
+        toStr(latestMine.transportationPerContainer)
       );
-      setChaChargesHome(Number(latestMine.chaChargesHome || 0));
-      setChaChargesMOOWR(Number(latestMine.chaChargesMOOWR || 0));
-      setEdiChargesPerBOE(Number(latestMine.ediChargesPerBOE || 0));
+      setChaChargesHome(toStr(latestMine.chaChargesHome));
+      setChaChargesMOOWR(toStr(latestMine.chaChargesMOOWR));
+      setEdiChargesPerBOE(toStr(latestMine.ediChargesPerBOE));
       setMooWRReeWarehousingCharges(
-        Number(latestMine.mooWRReeWarehousingCharges || 0)
+        toStr(latestMine.mooWRReeWarehousingCharges)
       );
+
       setTransshipOrDirect(
         ((latestMine as any).transshipOrDirect as "transship" | "direct") ||
           "direct"
@@ -140,14 +143,15 @@ const VendorRFQList = () => {
       vesselName,
       vesselETD,
       vesselETA,
-      seaFreightPerContainer,
-      houseDeliveryOrderPerBOL,
-      cfsPerContainer,
-      transportationPerContainer,
-      chaChargesHome,
-      chaChargesMOOWR,
-      ediChargesPerBOE,
-      mooWRReeWarehousingCharges,
+      seaFreightPerContainer: toNum(seaFreightPerContainer),
+      houseDeliveryOrderPerBOL: toNum(houseDeliveryOrderPerBOL),
+      cfsPerContainer: toNum(cfsPerContainer),
+      transportationPerContainer: toNum(transportationPerContainer),
+      chaChargesHome: toNum(chaChargesHome),
+      chaChargesMOOWR: toNum(chaChargesMOOWR),
+      ediChargesPerBOE: toNum(ediChargesPerBOE),
+      mooWRReeWarehousingCharges: toNum(mooWRReeWarehousingCharges),
+
       transshipOrDirect,
       quoteValidityDate,
       message,
@@ -164,36 +168,43 @@ const VendorRFQList = () => {
     setVesselName("");
     setVesselETD("");
     setVesselETA("");
-    setSeaFreightPerContainer(0);
-    setHouseDeliveryOrderPerBOL(0);
-    setCfsPerContainer(0);
-    setTransportationPerContainer(0);
-    setChaChargesHome(0);
-    setChaChargesMOOWR(0);
-    setEdiChargesPerBOE(0);
-    setMooWRReeWarehousingCharges(0);
+    setSeaFreightPerContainer("");
+    setHouseDeliveryOrderPerBOL("");
+    setCfsPerContainer("");
+    setTransportationPerContainer("");
+    setChaChargesHome("");
+    setChaChargesMOOWR("");
+    setEdiChargesPerBOE("");
+    setMooWRReeWarehousingCharges("");
+
     setTransshipOrDirect("direct");
     setQuoteValidityDate("");
     setMessage("");
   };
 
+  const toNum = (v: any) => {
+    if (v === "" || v === null || v === undefined) return 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   // Calculate totals for display in the form
+  const seaFreightUSD = toNum(seaFreightPerContainer);
+  const houseDO = toNum(houseDeliveryOrderPerBOL);
+  const cfs = toNum(cfsPerContainer);
+  const transport = toNum(transportationPerContainer);
+  const chaHome = toNum(chaChargesHome);
+  const chaMoowr = toNum(chaChargesMOOWR);
+  const edi = toNum(ediChargesPerBOE);
+  const moowrRewh = toNum(mooWRReeWarehousingCharges);
+
+  const seaFreightINR = seaFreightUSD * usdToInr;
+
   const homeTotalINR =
-    seaFreightPerContainer * usdToInr +
-    houseDeliveryOrderPerBOL +
-    cfsPerContainer +
-    transportationPerContainer +
-    ediChargesPerBOE +
-    chaChargesHome;
+    seaFreightINR + houseDO + cfs + transport + edi + chaHome;
 
   const mooWRTotalINR =
-    seaFreightPerContainer * usdToInr +
-    houseDeliveryOrderPerBOL +
-    cfsPerContainer +
-    transportationPerContainer +
-    ediChargesPerBOE +
-    mooWRReeWarehousingCharges +
-    chaChargesMOOWR;
+    seaFreightINR + houseDO + cfs + transport + edi + moowrRewh + chaMoowr;
 
   const isQuoteAllowed = (rfq: RFQ) => {
     // Only block quoting when RFQ is closed
@@ -676,9 +687,7 @@ const VendorRFQList = () => {
                       step="0.01"
                       value={seaFreightPerContainer}
                       onChange={(e) =>
-                        setSeaFreightPerContainer(
-                          parseFloat(e.target.value) || 0
-                        )
+                        setSeaFreightPerContainer(e.target.value)
                       }
                       required
                     />
@@ -695,9 +704,7 @@ const VendorRFQList = () => {
                       step="0.01"
                       value={houseDeliveryOrderPerBOL}
                       onChange={(e) =>
-                        setHouseDeliveryOrderPerBOL(
-                          parseFloat(e.target.value) || 0
-                        )
+                        setHouseDeliveryOrderPerBOL(e.target.value)
                       }
                       required
                     />
@@ -713,9 +720,7 @@ const VendorRFQList = () => {
                       min="0"
                       step="0.01"
                       value={cfsPerContainer}
-                      onChange={(e) =>
-                        setCfsPerContainer(parseFloat(e.target.value) || 0)
-                      }
+                      onChange={(e) => setCfsPerContainer(e.target.value)}
                       required
                     />
                   </div>
@@ -731,9 +736,7 @@ const VendorRFQList = () => {
                       step="0.01"
                       value={transportationPerContainer}
                       onChange={(e) =>
-                        setTransportationPerContainer(
-                          parseFloat(e.target.value) || 0
-                        )
+                        setTransportationPerContainer(e.target.value)
                       }
                       required
                     />
@@ -749,9 +752,7 @@ const VendorRFQList = () => {
                       min="0"
                       step="0.01"
                       value={chaChargesHome}
-                      onChange={(e) =>
-                        setChaChargesHome(parseFloat(e.target.value) || 0)
-                      }
+                      onChange={(e) => setChaChargesHome(e.target.value)}
                       required
                     />
                   </div>
@@ -766,9 +767,7 @@ const VendorRFQList = () => {
                       min="0"
                       step="0.01"
                       value={chaChargesMOOWR}
-                      onChange={(e) =>
-                        setChaChargesMOOWR(parseFloat(e.target.value) || 0)
-                      }
+                      onChange={(e) => setChaChargesMOOWR(e.target.value)}
                       required
                     />
                   </div>
@@ -783,9 +782,7 @@ const VendorRFQList = () => {
                       min="0"
                       step="0.01"
                       value={ediChargesPerBOE}
-                      onChange={(e) =>
-                        setEdiChargesPerBOE(parseFloat(e.target.value) || 0)
-                      }
+                      onChange={(e) => setEdiChargesPerBOE(e.target.value)}
                       required
                     />
                   </div>
@@ -801,9 +798,7 @@ const VendorRFQList = () => {
                       step="0.01"
                       value={mooWRReeWarehousingCharges}
                       onChange={(e) =>
-                        setMooWRReeWarehousingCharges(
-                          parseFloat(e.target.value) || 0
-                        )
+                        setMooWRReeWarehousingCharges(e.target.value)
                       }
                       required
                     />
@@ -862,13 +857,13 @@ const VendorRFQList = () => {
                       ₹{homeTotalINR.toFixed(2)}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      Sea Freight (₹
-                      {(seaFreightPerContainer * usdToInr).toFixed(2)}) + House
-                      Delivery (₹{houseDeliveryOrderPerBOL.toFixed(2)}) + CFS (₹
-                      {cfsPerContainer.toFixed(2)}) + Transportation (₹
-                      {transportationPerContainer.toFixed(2)}) + EDI (₹
-                      {ediChargesPerBOE.toFixed(2)}) + CHA-Home (₹
-                      {chaChargesHome.toFixed(2)})
+                      Sea Freight (₹{seaFreightINR.toFixed(2)}) + House Delivery
+                      (₹
+                      {houseDO.toFixed(2)}) + CFS (₹{cfs.toFixed(2)}) +
+                      Transportation (₹
+                      {transport.toFixed(2)}) + EDI (₹{edi.toFixed(2)}) +
+                      CHA-Home (₹
+                      {chaHome.toFixed(2)})
                     </div>
                   </div>
 
@@ -880,14 +875,14 @@ const VendorRFQList = () => {
                       ₹{mooWRTotalINR.toFixed(2)}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      Sea Freight (₹
-                      {(seaFreightPerContainer * usdToInr).toFixed(2)}) + House
-                      Delivery (₹{houseDeliveryOrderPerBOL.toFixed(2)}) + CFS (₹
-                      {cfsPerContainer.toFixed(2)}) + Transportation (₹
-                      {transportationPerContainer.toFixed(2)}) + EDI (₹
-                      {ediChargesPerBOE.toFixed(2)}) + MOOWR Re-Warehousing (₹
-                      {mooWRReeWarehousingCharges.toFixed(2)}) + CHA-MOOWR (₹
-                      {chaChargesMOOWR.toFixed(2)})
+                      Sea Freight (₹{seaFreightINR.toFixed(2)}) + House Delivery
+                      (₹
+                      {houseDO.toFixed(2)}) + CFS (₹{cfs.toFixed(2)}) +
+                      Transportation (₹
+                      {transport.toFixed(2)}) + EDI (₹{edi.toFixed(2)}) + MOOWR
+                      Re-Warehousing (₹
+                      {moowrRewh.toFixed(2)}) + CHA-MOOWR (₹
+                      {chaMoowr.toFixed(2)})
                     </div>
                   </div>
                 </div>

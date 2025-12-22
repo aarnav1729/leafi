@@ -200,8 +200,8 @@ const RFQList: React.FC = () => {
   };
 
   const sortIndicator = (key: string) => {
-    if (sort.key !== key) return "↕";
-    return sort.dir === "asc" ? "↑" : "↓";
+    if (sort.key !== key) return ""; // no indicator when not sorted
+    return sort.dir === "asc" ? "ASC" : "DESC";
   };
 
   const matchesColumnFilter = (rfq: RFQ) => {
@@ -792,7 +792,7 @@ const RFQList: React.FC = () => {
 
       <div className="rounded-md border">
         <div className="overflow-x-auto">
-          <table className="w-full data-table">
+          <table className="w-full data-table text-[15px] [&_th]:px-4 [&_th]:py-3 [&_td]:px-4 [&_td]:py-3">
             <thead>
               <tr>
                 <th>Actions</th>
