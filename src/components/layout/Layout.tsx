@@ -1,4 +1,3 @@
-
 import React from "react";
 import { Outlet, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -6,10 +5,11 @@ import { Header } from "./Header";
 import { UserRole } from "@/types/auth.types";
 
 interface LayoutProps {
-  requiredRole?: UserRole;
+  requiredRole?: UserRole; // backward compatible
+  requiredRoles?: UserRole[]; // NEW: allow multiple roles
 }
 
-export function Layout({ requiredRole }: LayoutProps) {
+export function Layout({ requiredRole, requiredRoles }: LayoutProps) {
   const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
@@ -27,7 +27,14 @@ export function Layout({ requiredRole }: LayoutProps) {
     return <Navigate to="/" replace />;
   }
 
-  if (requiredRole && user?.role !== requiredRole) {
+  // Role gating:
+  // - requiredRoles: user must be in list
+  // - requiredRole: user must match single role (legacy)
+  if (requiredRoles && requiredRoles.length > 0) {
+    if (!user?.role || !requiredRoles.includes(user.role)) {
+      return <Navigate to="/dashboard" replace />;
+    }
+  } else if (requiredRole && user?.role !== requiredRole) {
     return <Navigate to="/dashboard" replace />;
   }
 

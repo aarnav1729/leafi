@@ -1,5 +1,5 @@
 // root/src/pages/logistics/RFQList.tsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
@@ -30,317 +30,82 @@ interface Vendor {
   company: string;
 }
 
+type LookupRow = { id: string | number; value: string };
+
+type LookupsResponse = {
+  itemDescriptions: LookupRow[];
+  companyNames: LookupRow[];
+  suppliers: LookupRow[];
+  portsOfLoading: LookupRow[];
+  portsOfDestination: LookupRow[];
+  containerTypes: LookupRow[];
+  vendors: Vendor[]; // optional (we still use /vendors below)
+};
+
 // suppliers.ts
-export const SUPPLIERS = [
-  "HORAD AUTOMATIC TECHNOLOG",
-  "CHANGZHOU GS ENERGYAND TECH CO., LTD",
-  "BUDASOL MFG.KFT",
-  "CHANGZHOU SVECK PHOTOVOLTNEW MATERIAL CO., LTD",
-  "ZHEJIANG TWINSEL ELECTRONTECHNOLOGY CO., LTD.",
-  "ZHEJIANG ZHONGHUAN SUNTERPV TECHNOLOGY CO.,LTD",
-  "WUXI AUTOWELL SUPPLYCHAIN MANAGEMENT CO LTD",
-  "JIANGYIN HAIHONG NEWENERGY TECHNOLOGY CO., LT",
-  "JIANGYIN NEW SULV TECHNOL",
-  "COVEME SPA",
-  "WUXI LEAD INTELLIGENTEQUIPMENT CO, LTD.,",
-  "JIANGSU HIGHSTAR BATTERYMANUFACTURING CO.,LTD",
-  "PENGYANG PUMP TAIZHOU CO.",
-  "TARGRAY INTERNATIONAL INC",
-  "HANGZHOU ZHIJIANG SILICONCHEMICALS CO. LTD",
-  "GSOLAR POWER CO LTD",
-  "CENTRO ENERGY CO., LTD",
-  "DONGGUAN DALY ELECTRONICS",
-  "SHANDONG TIANQU ALUMINUM",
-  "MBC SOLAR ENERGY LIMITED",
-  "REIWA (YINGKOU) TRADING C",
-  "ENETB2C COMPANY",
-  "SHENZHEN GROWATTNEW ENERGY CO.,LIMITED",
-  "SENERGY TECHINICAL SERVIC(SHANGAI) CO. LTD",
-  "CHANGZHOU MANWE PV TECH C",
-  "JIANGYIN XINGTONG METALPRODUCTS CO.,LTD",
-  "TONGWEI SOLAR CO., LTD",
-  "QC SOLAR (SUZHOU) CORPORA",
-  "XINYI SOLAR MALAYSIA SDN",
-  "JIANGYIN JINGYING PHOTOVOMATERIALS CO.LTD.",
-  "SOL-LITE MANUFACTURING CO",
-  "HANGZHOU FIRST APPLIED MALTD.",
-  "XI'AN TELISON NEW MATERIA",
-  "COVEME ENGINEERED FILMS Z",
-  "JOLYWOOD(SUZHOU) SUNWATT",
-  "SHANGHAI SOSUN NEW ENERGYTECHNOLOGY CO.,LTD.",
-  "WEGOMA ASIA LIMITED",
-  "POWERCHINA TRADE SOLUTION",
-  "JIANGYIN TIANMU GREEN ENETECHNOLOGY CO.,LTD",
-  "CHANGZHOU FUFENG MATERIALTECHNOLOGY CO.,LTD",
-  "TAICANG JUREN INTERNATIONTRADE CO., LTD..",
-  "SHANDONG TIANQU ENGINEERI",
-  "HARTALEGA NGC SDN BHD",
-  "SHENZHEN S.C NEW ENERGYTECHNOLOGY CORPORATION",
-  "CENTROTHERM INTERNATIONAL",
-  "GARBER TRADE LIMITED",
-  "FLAT(HONG KONG)CO.,LTD",
-  "NINGBO GZX PV TECHNOLOGY",
-  "VIVA SOLAR FZC",
-  "SHANGHAI SUNTECH POWERTECHNOLOGY CO., LTD",
-  "INGENIOUS AUTOMATIC GROUP",
-  "H.A.L.M ELEKRONIK GMBH",
-  "CHANGZHOU HERSHEY-POWERNEW ENERGY CO.,LTD",
-  "SUZHOU AUTOWAY SYSTEM CO.",
-  "ZHUHAI GMEE SOLAR EQUIPME",
-  "HERAEUS MATERIALS SINGAPO",
-  "CHANGZHOU S.C SMART EQUIP",
-  "DAS ENVIRONMENTAL EXPERTS",
-  "SHANGHAI PENGQIAN TRANSMIEQUIPMENT CO.,LTD",
-  "INTERNATIONAL ELECTROTECHCOMMISSION",
-  "FREIBERG INSTRUMENTS GMBH",
-  "JIA YUE GROUP CO., LTD",
-  "DIGI-KEY ELECTRONICS",
-  "YINGKOU JINCHEN MACHINERY",
-  "TUV NORD (HANGZHOU) CO.,",
-  "HERAEUS PHOTOVOLTAICS SIN",
-  "SUZHOU ENJOYSUN TECHNOLOG",
-  "CHANGZHOU S.C EXACT EQUIP",
-  "SOLAMET ELECTRONIC MATERI(H.K) LIMITED",
-  "EVOQUA WATER TECHNOLOGIES",
-  "SHENZHEN EMBRACE GLORY ELMATERIAL CO.,LTD",
-  "ZHONGLI TALESUN HONG KONG",
-  "CHANGZHOU FUSION NEW MATECO., LTD",
-  "INSPIRED ENERGY CO LTD",
-  "NA",
-  "JIANGSU FUJIHALO NEW ENER",
-  "XINYI SOLAR (HONG KONG) L",
-  "FEEJOY TECHNOLOGY(SHANGHA",
-  "ATLAS COPCO (WUXI) COMPRE",
-  "GCL SOLAR POWER(SUZHOU)LMITED",
-  "RENA TECHNOLOGIES GMBH",
-  "SUZHOU TOPS NEW MATERIAL",
-  "ASIA NEO TECH INDUSTRIALCO., LTD",
-  "AKCOME METALS TECHNOLOGY(CO.,LTD",
-  "MAXWELL TECHNOLOGY PTE. L",
-  "ZHEJIANG AIKO SOLAR TECHNCO., LTD",
-  "WUXI RUXING TECHNOLOGYDEVELOPMENT CO. LTD",
-  "FRAUNHOFER INSTITUT FUERSOLARE ENER-GIESYSTEM",
-  "WUHAN DR LASER TECHNOLOGYCORP., LTD",
-  "WUXI HIGHLIGHT NEW ENERGY",
-  "GIGA SOLAR MATERIALS CORP",
-  "BYSOL-LITE MANUFACTURING",
-  "KOMEX INC",
-  "BRAVE C&H SUPPLY CO., LTD",
-  "GUANGZHOU BAIYUN TECHNOLOCO.,LTD.",
-  "SUNFONERGY TECHNOLOGIES (",
-  "JIANGSU HUAHENG NEW ENERGCO., LTD.",
-  "JIANGXI HONGGE TECHNOLOGY",
-  "ROBOTECHNIK INTELLIGENT TCO., LTD.",
-  "CHANGZHOU PLET INTERNATIOCO., LTD.",
-  "GENERAL SOLUTIONS & TRADI",
-  "TANGSHAN YANGTAI IMPORT&EXPORT TRADE CO. LTD.",
-  "SHENZHEN S.C NEW ENERGYTECHNOLOGY CORPORATION",
-  "SUZHOU SUNERGY TECHNOLOGY",
-  "SINGAPORE SATORI PTE.LTD",
-  "HENGDIAN GROUP DMEGC MAGN",
-  "DUMMY",
-  "JANDELENGINEERRING LIMITE",
-  "SHENZHEN BEITE PURIFICATICO., LTD",
-  "XIAMEN XIANGYU NEW ENERGY",
-  "ISRA VISION GMBH",
-  "GNBS ECO CO.,LTD",
-  "JIANGXI RISUNSOLARSALES C",
-  "WUJIANG CSG GLASS CO., LT",
-  "DAS ENVIRONMENTAL EQUIPMEPTE LTD",
-  "SHENZHEN OUBEL TECHNOLOGY",
-  "NMTORNICS (INDIA)- KERRYSEZ UNIT",
-  "DONGGUAN CSG SOLAR GLASS",
-  "CYBRID TECHNOLOGIES INC",
-  "CHIZHOU ANAN ALUMINUM CO.",
-  "XINYI PV PRODUCTS(ANHUI)LTD.",
-  "RADIATION TECHNOLOGY CO.,",
-  "SHENZHEN TOPRAY SOLAR CO.",
-  "GUANGDONG JINWAN GAOJINGENERGY TECHNOLOGY",
-  "CHUXIONG LONGI SILICON MACO.,LTD",
-  "SHANGRAO JIETAI NEW ENERG",
-  "SUZHOU SHENGCHENG SOLAR ECO., LTD",
-  "CLIMAVENETA CHAT UNION REEQUIPMENT (SHANGHAI) CO.,",
-  "SHENGCHENG TECHNOLOGY PTE",
-  "PASAN SA",
-  "BENTHAM INSTRUMENTS LTD",
-  "CHUZHOU JIETAI NEW ENERGYTECHNOLOGY CO.",
-  "TECH GATE ENGINEERING PTE",
-  "TERASOLAR ENERGY MATERIAL",
-  "JIANGSU PROVINCIAL FOREIGTRADE CORPORATION",
-  "JIANGSU HUANENG INTELLIGEENERGY SUPPLY CHAIN TECHN",
-  "SOLAR LONG PV-TECH (CAMBOCO., LTD.",
-  "AIDU ENERGY CO.,LTD",
-  "AIDU ENERGY PTE.LTD.",
-  "RE PLUS EVENTS, LLC",
-  "JIANGYIN TINZE NEW ENERGYTECHNOLOGY CO.,LTD",
-  "SHANGHAI HUITIAN NEWMATERIAL CO.,LTD.",
-  "ZHONGHUAN HONG KONGHOLDING LIMITED",
-  "SEMILAB SEMICONDUCTORPHYSICS LABORATORY CO. LT",
-  "SOLAMET ELECTONIC MATERIA(H.K) LIMITED",
-  "KINGRAYLAND TECHNOLOGY CO",
-  "HK APK LIMITED",
-  "SHANHAI SUPER SOLAR NEWENERGY TECHNOLOGY",
-  "ZEALWE TECHNICAL CO., LTD",
-  "HLA SUPPLY CHAIN SOLUTION",
-  "CYBRID TECHNOLOGIES (ZHEJ",
-  "SHANGHAI BERLING TECHNOLOCO., LTD",
-  "SHANDONG AOSHIGARMENT CO.",
-  "ZHANGJIAGANG SIMPULSE-TEC",
-  "WATERON TECHNOLOGY (HONGCO., LTD.",
-  "XIAMEN C&D COMMODITY TRAD",
-  "SINGAPORE ASAHI CHEMICALSOLDER INDUSTRIES PVT LTD",
-  "BRIGHTSPOT AUTOMATION LLP",
-  "SUZHOU  DRLINK  AUTOMATIOTECHNOLOGY CO, LTD.",
-  "NINGBO EXCITON NEWENERGY CO.,LTD",
-  "VOYAGER TRADINGPARTNERS LLC",
-  "JIANGSU PHOENTY PHOTOELECTECNOLOGY CO.,LTD",
-  "JIANGSU MINGHAO NEW MATERSCI-TECH CORPORATION",
-  "DRIP CAPITAL, INC.",
-  "CV. BALI EXPORT IMPORT",
-  "WUXI DK ELECTRONIC MATERICO., LTD",
-  "SUZHOU ISILVER MATERIALSCO., LTD.",
-  "TIANJIN AIKO SOLAR TECHOLCO., LTD.",
-  "ZHEJIANG NINGHAI KIBINGNEW ENERGY MANAGEMENT CO.",
-  "JIANGXI TOPSUN SOLAR TECHCO., LTD",
-  "PFEIFFER VACUUM SAS",
-  "ZHEJIANG RENHE PHOTOVOLTATECHNOLOGY CO.,LTD",
-  "JIANGSU MEIKE SOLAR TECHN",
-  "WUXI HIGHLIGHT NEW ENERGYTECHNOLOGY CO., LTD",
-  "JIANGYIN YUANSHUO METALTECHNOLOGY CO., LTD.",
-  "JIANGSU HOLYSUN ELECTRONITECHNOLOGY CO., LTD.",
-  "SCENERGY TECHNOLOGY LIMIT",
-  "PURITECH CO., LTD.",
-  "AIR GAS ELECTRONICMATERIALS ENTERPRISE CO.",
-  "ANHUI CSG NEW ENERGYMATERIAL TECHNOLOGY CO.,L",
-  "SUZHOU MAXWELL TECHNOLOGICO., LTD.",
-  "WUXI LERIN NEW ENERGYTECHNOLOGY CO.,LTD",
-  "WUXI U PLUSTECHNOLOGY CO.LTD",
-  "HONGYUAN NEW MATERIAL(BAOTOU) CO., LTD.",
-  "SUZHOU SHD INTELLIGENTTECHNOLOGIES CO., LTD.",
-  "SHUANGLIANG INTERNATIONAL(SHANGHAI) CO., LTD",
-  "SHANGHAI XINZHUOZHUANGPRINTING TECHNOLOGY CO.,",
-  "VOSTRO ELECTRONICTECHNOLOGY(SUZHOU)CO.,LTD",
-  "SUZHOU FLY SOLARTECHNOLOGY CO. , LTD",
-  "ZHEJIANG DOUBLE HEAD EAGLIMPORT&EXPORT CO.,LTD.",
-  "MEHTA PTE LTD.",
-  "HANG YUE TONGCOMPANY LIMITED",
-  "XIAMEN CANDOUR CO., LTD",
-  "FRINTRUP NB SPECIAL SCREETECHNOLOGY (KUNSHAN) CO.,",
-  "SOLAR N PLUS NEW ENERGYTECHNOLOGY CO., LTD.",
-  "SNL CORPORATION",
-  "DONGGUAN MIVISIONTECHNOLOGY CO., LTD",
-  "JIANGSU HAITIANMICROELECTRONICS CORP.",
-  "CHANGSHU TOPS PV MATERIAL",
-  "FUJIAN  UNITE  MATERIALTECHNOLOGY  CO., LTD.",
-  "SUZHOU QIANTONG INSTRUMENEQUIPMENT CO., LTD.",
-  "FUSION MATERIAL TECHNOLOG",
-  "TONGWEI SOLAR (MEISHAN) C",
-  "QINGDAO GAOCE TECHNOLOGY",
-  "DONGGUAN MINWEI PHOTOELECTECHNOLOGY",
-  "T-SUN NEW ENERGY LIMITED",
-  "JIANGSU TONGLING ELECTRIC",
-  "GEMUE GEBR MUELLER APPARAGMBH & CO",
-  "SICHUAN MEIKE NEW ENERGY",
-  "LONGI GREEN ENERGY TECHNO",
-  "INTRALINKS INC.",
-  "IDEAL DEPOSITION EQUIPMENAND APPLICATIONS(ZHEJIANG",
-  "FUZHOU ANTONG NEW MATERIATECHNOLOGY CO.,LTD.",
-  "JIANGSU KUNA NEW ENERGY C",
-  "SKY GLOVES",
-  "VIETNAM ADVANCE FILM MATECOMPANY LIMITED",
-  "CHANGZHOU CHENNAI NEW ENECO.,LTD",
-  "AN LAM CO., LTD",
-  "SUZHOU CHANGQING NEWMATERIAL CO., LTD.",
-  "ICB GMBH & CO. KG",
-  "C AND B INTERNATIONAL HOL",
-  "HUAIAN JIETAI NEW ENERGYTECHNOLOGY CO LTD",
-  "SUZHOU YOURBEST NEW-TYPEMATERIALS CO.,LTD",
-  "JOHNSON CONTROLS (S) PTE.",
-  "FOMEX GLOBAL JOINT STOCK",
-  "BETTERIAL ( VIET NAM ) FICOMPANY  LIMITED",
-  "SHENZHEN PARTNERAE ELECTR",
-  "EMPIRE PUMPS LTD.",
-  "JIANGSU LONGHENG NEW ENERCO., LTD",
-  "CHUZHOU AIKO SOLAR TECHNO",
-  "CE CELL ENGINEERING GMBH",
-  "SHANGHAI YANG ER IMPORT ACOMPANY LTD",
-  "GUANGZHOU YICHUANG ELECTR",
-  "SHENZHEN SOFARSOLAR CO.,",
-  "ANHUI SHIJING SOLARPOWERTECHNOLOGY CO.,LTD",
-  "SOLAR EQ TECHNOLOGY EUROP",
-  "SHAOXING TUOBANG NEWENERGY CO., LTD.",
-  "FOXESS CO., LTD.",
-  "TONGWEI SOLAR (PENGSHAN)CO., LTD.",
-  "WUXI YINGJIE INTELLIGENTEQUIPMENT CO., LTD",
-  "VIETNAM SUNERGY CELL COMP",
-  "ACE GASES MARKETING SDN B",
-  "SCZ GLOBAL L.L.C.-FZ",
-  "JIANGSU SIMAOTE TRANSMISS",
-  "ISILVER MATERIALS (MALAYS",
-  "HUNAN YUJING MACHINERY CO",
-  "BOOTH BUILDERS LLC",
-  "TAIZHOU XINGYOU SOLAR EQULIMITED COMPANY",
-  "SIW MANUFACTURING SDN BHD",
-  "SOLVAY LAITIAN (QUZHOU) C",
-  "GRUNFELD, DESIDERIO,LEBOWITZ & SILVERMAN LLP",
-  "EDWARDS LIMITED",
-  "SOLAR MEDIA LIMITED",
-  "GUANGXI CSG NEW ENERGYMATERIAL TECHNOLOGY CO.,",
-  "ACCESS SOLAR PVT LTD",
-  "SK SPECIALTY CO., LTD.",
-  "WUXI CHUANGYIDE INTELLIGEEQUIPMENT CO., LTD.",
-  "HONGYUAN NEW MATERIAL (BA",
-  "HONGYUAN NEW MATERIAL (XU",
-  "CYMAX PTE. LTD.",
-  "JIANGSU HUAZHONG GAS CO.,",
-  "GOKIN SOLAR (HONGKONG) CO",
-  "HANWHA ADVANCED MATERIALS",
-  "WAVELABS SOLAR METROLOGY",
-  "MS/ HANG YUE TONG COMPANY",
-  "HANGZHOU COBETTER FILTRATEQUIPMENT CO.,LTD",
-  "M/S. LEOSUN INTERNATIONALIMITED",
-  "PHAROS MATERIALS CO., LTD",
-  "TRANS CHIEF CHEMICAL INDU",
-  "WUXI XINDECO INTERNATIONA",
-  "INFOLINK CONSULTING CO.,",
-  "ALPHAWOOD VIETNAM JOINT S",
-  "SJ ENERGY COMPANY LIMITED",
-  "JIETAI NEW ENERGY TECHNOL",
-  "LUSHAN ADVANCED MATERIALS(MALAYSIA)SDN.BHD",
-  "YANCHENG ZHISHENGBOTECHNOLOGY CO.,LTD",
-  "TRINA SOLAR (CHANGZHOU) PEQUIPMENT CO., LTD",
-  "DR LASER SINGAPORE PTE. L",
-  "IDI LASER SERVICES PTE LT",
-  "TOYO SOLAR COMPANY LIMITE",
-  "LEOSUN INTERNATIONAL TRAD",
-  "ANHUI YUBO NEW MATERIALLTECHNOLOGY CO.,LTD",
-  "ZHEJIANG JINGSHENG MECHANELECTRICAL CO.,LTD",
-];
 
 const RFQList: React.FC = () => {
   const { getUserRFQs, createRFQ } = useData();
   const navigate = useNavigate();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [lookups, setLookups] = useState<LookupsResponse | null>(null);
 
   // Form state
   const [itemDescription, setItemDescription] =
-    useState<RFQ["itemDescription"]>("EVA");
-  const [companyName, setCompanyName] = useState<RFQ["companyName"]>("PEPPL");
+    useState<RFQ["itemDescription"]>("");
+
+  const [companyName, setCompanyName] = useState<RFQ["companyName"]>("");
   const [materialPONumber, setMaterialPONumber] = useState("");
-  const [supplierName, setSupplierName] =
-    useState<RFQ["supplierName"]>("aarnav");
-  const [portOfLoading, setPortOfLoading] =
-    useState<RFQ["portOfLoading"]>("beijing");
+  const [supplierName, setSupplierName] = useState<RFQ["supplierName"]>("");
+  const [portOfLoading, setPortOfLoading] = useState<RFQ["portOfLoading"]>("");
   const [portOfDestination, setPortOfDestination] =
-    useState<RFQ["portOfDestination"]>("chennai");
-  const [containerType, setContainerType] =
-    useState<RFQ["containerType"]>("LCL");
+    useState<RFQ["portOfDestination"]>("");
+  const [containerType, setContainerType] = useState<RFQ["containerType"]>("");
   const [numberOfContainers, setNumberOfContainers] = useState(1);
   const [cargoWeight, setCargoWeight] = useState(1);
   const [cargoReadinessDate, setCargoReadinessDate] = useState("");
-  const [initialQuoteEndTime, setInitialQuoteEndTime] = useState("");
-  const [evaluationEndTime, setEvaluationEndTime] = useState("");
+
   const [description, setDescription] = useState("");
+
+  // Attachments (optional) — stored as data URLs (base64) and sent to backend
+  type RFQAttachment = {
+    name: string;
+    type: string;
+    size: number;
+    dataUrl: string; // "data:...base64,..."
+  };
+
+  const [attachments, setAttachments] = useState<RFQAttachment[]>([]);
+
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Failed to read file"));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function addFilesAsAttachments(files: FileList | File[]) {
+    const arr = Array.from(files || []);
+    if (!arr.length) return;
+
+    const mapped = await Promise.all(
+      arr.map(async (f) => ({
+        name: f.name,
+        type: f.type || "application/octet-stream",
+        size: f.size,
+        dataUrl: await fileToDataUrl(f),
+      }))
+    );
+
+    // Append (do not overwrite)
+    setAttachments((prev) => [...prev, ...mapped]);
+  }
+
+  function removeAttachment(idx: number) {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  }
 
   // Vendors selection
   const [vendors, setVendors] = useState<string[]>([]);
@@ -350,6 +115,234 @@ const RFQList: React.FC = () => {
   const rfqs = getUserRFQs().sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
+
+  // =========================
+  // Table: search/sort/filter/pagination
+  // =========================
+
+  type SortDir = "asc" | "desc";
+  type SortConfig = { key: string; dir: SortDir };
+
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [colFilters, setColFilters] = useState<Record<string, string>>({
+    rfqNumber: "",
+    itemDescription: "",
+    companyName: "",
+    materialPONumber: "",
+    supplierName: "",
+    portOfLoading: "",
+    portOfDestination: "",
+    containerType: "",
+    numberOfContainers: "",
+    cargoWeight: "",
+    cargoReadinessDate: "",
+    status: "",
+  });
+
+  const [sort, setSort] = useState<SortConfig>({
+    key: "createdAt",
+    dir: "desc",
+  });
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  const setFilter = (key: string, value: string) => {
+    setColFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const clearAllFilters = () => {
+    setGlobalQuery("");
+    setColFilters({
+      rfqNumber: "",
+      itemDescription: "",
+      companyName: "",
+      materialPONumber: "",
+      supplierName: "",
+      portOfLoading: "",
+      portOfDestination: "",
+      containerType: "",
+      numberOfContainers: "",
+      cargoWeight: "",
+      cargoReadinessDate: "",
+      status: "",
+    });
+    setSort({ key: "createdAt", dir: "desc" });
+    setPage(1);
+  };
+
+  // Reset to page 1 whenever user changes filters/search/pageSize
+  useEffect(() => {
+    setPage(1);
+  }, [globalQuery, colFilters, pageSize, sort.key, sort.dir]);
+
+  const norm = (v: any) =>
+    String(v ?? "")
+      .trim()
+      .toLowerCase();
+
+  const formatDateKey = (d: any) => {
+    if (!d) return "";
+    const dt = new Date(d);
+    if (Number.isNaN(dt.getTime())) return "";
+    const yyyy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    // Useful for "contains" search like 2025-12-22
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const toggleSort = (key: string) => {
+    setSort((prev) => {
+      if (prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+  };
+
+  const sortIndicator = (key: string) => {
+    if (sort.key !== key) return "↕";
+    return sort.dir === "asc" ? "↑" : "↓";
+  };
+
+  const matchesColumnFilter = (rfq: RFQ) => {
+    const f = colFilters;
+
+    const statusOk = !f.status || norm(rfq.status) === norm(f.status);
+
+    const readinessKey = formatDateKey((rfq as any).cargoReadinessDate);
+
+    return (
+      statusOk &&
+      (!f.rfqNumber ||
+        norm((rfq as any).rfqNumber).includes(norm(f.rfqNumber))) &&
+      (!f.itemDescription ||
+        norm((rfq as any).itemDescription).includes(norm(f.itemDescription))) &&
+      (!f.companyName ||
+        norm((rfq as any).companyName).includes(norm(f.companyName))) &&
+      (!f.materialPONumber ||
+        norm((rfq as any).materialPONumber).includes(
+          norm(f.materialPONumber)
+        )) &&
+      (!f.supplierName ||
+        norm((rfq as any).supplierName).includes(norm(f.supplierName))) &&
+      (!f.portOfLoading ||
+        norm((rfq as any).portOfLoading).includes(norm(f.portOfLoading))) &&
+      (!f.portOfDestination ||
+        norm((rfq as any).portOfDestination).includes(
+          norm(f.portOfDestination)
+        )) &&
+      (!f.containerType ||
+        norm((rfq as any).containerType).includes(norm(f.containerType))) &&
+      (!f.numberOfContainers ||
+        norm((rfq as any).numberOfContainers).includes(
+          norm(f.numberOfContainers)
+        )) &&
+      (!f.cargoWeight ||
+        norm((rfq as any).cargoWeight).includes(norm(f.cargoWeight))) &&
+      (!f.cargoReadinessDate ||
+        readinessKey.includes(norm(f.cargoReadinessDate)))
+    );
+  };
+
+  const matchesGlobal = (rfq: RFQ) => {
+    if (!globalQuery.trim()) return true;
+    const q = norm(globalQuery);
+
+    const hay = [
+      (rfq as any).rfqNumber,
+      (rfq as any).itemDescription,
+      (rfq as any).companyName,
+      (rfq as any).materialPONumber,
+      (rfq as any).supplierName,
+      (rfq as any).portOfLoading,
+      (rfq as any).portOfDestination,
+      (rfq as any).containerType,
+      (rfq as any).numberOfContainers,
+      (rfq as any).cargoWeight,
+      formatDateKey((rfq as any).cargoReadinessDate),
+      (rfq as any).status,
+    ]
+      .map(norm)
+      .join(" | ");
+
+    return hay.includes(q);
+  };
+
+  const filteredSorted = useMemo(() => {
+    const filtered = rfqs.filter(
+      (r) => matchesGlobal(r) && matchesColumnFilter(r)
+    );
+
+    const key = sort.key;
+    const dir = sort.dir;
+
+    const getVal = (r: any) => {
+      // Treat readiness date and createdAt as dates for sorting
+      if (key === "cargoReadinessDate" || key === "createdAt") {
+        const t = new Date(r[key]).getTime();
+        return Number.isNaN(t) ? 0 : t;
+      }
+
+      // Numeric sorts
+      if (
+        key === "rfqNumber" ||
+        key === "numberOfContainers" ||
+        key === "cargoWeight"
+      ) {
+        const n = Number(r[key]);
+        return Number.isNaN(n) ? 0 : n;
+      }
+
+      // Default: string
+      return norm(r[key]);
+    };
+
+    const sorted = [...filtered].sort((a: any, b: any) => {
+      const av = getVal(a);
+      const bv = getVal(b);
+
+      let cmp = 0;
+      if (typeof av === "number" && typeof bv === "number") {
+        cmp = av - bv;
+      } else {
+        cmp = String(av).localeCompare(String(bv));
+      }
+
+      return dir === "asc" ? cmp : -cmp;
+    });
+
+    return sorted;
+  }, [rfqs, globalQuery, colFilters, sort]);
+
+  const total = filteredSorted.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+
+  const paged = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredSorted.slice(start, start + pageSize);
+  }, [filteredSorted, safePage, pageSize]);
+
+  useEffect(() => {
+    const fetchLookups = async () => {
+      try {
+        const res = await api.get<LookupsResponse>("/lookups");
+        console.log("LOOKUPS counts:", {
+          itemDescriptions: res.data?.itemDescriptions?.length,
+          companyNames: res.data?.companyNames?.length,
+          suppliers: res.data?.suppliers?.length,
+          portsOfLoading: res.data?.portsOfLoading?.length,
+          portsOfDestination: res.data?.portsOfDestination?.length,
+          containerTypes: res.data?.containerTypes?.length,
+        });
+
+        setLookups(res.data);
+      } catch (err) {
+        console.error("Failed to load lookups:", err);
+      }
+    };
+    fetchLookups();
+  }, []);
 
   // Fetch vendor list from server
   useEffect(() => {
@@ -376,10 +369,10 @@ const RFQList: React.FC = () => {
       numberOfContainers,
       cargoWeight,
       cargoReadinessDate,
-      initialQuoteEndTime,
-      evaluationEndTime,
+
       description,
       vendors,
+      attachments,
       createdBy: "aarnav",
     });
 
@@ -389,10 +382,10 @@ const RFQList: React.FC = () => {
     setNumberOfContainers(1);
     setCargoWeight(1);
     setCargoReadinessDate("");
-    setInitialQuoteEndTime("");
-    setEvaluationEndTime("");
+
     setDescription("");
     setVendors([]);
+    setAttachments([]);
   };
 
   const handleFinalize = (rfqId: string) => {
@@ -407,7 +400,7 @@ const RFQList: React.FC = () => {
           <DialogTrigger asChild>
             <Button>+ Create New</Button>
           </DialogTrigger>
-          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="w-[90vw] max-w-[90vw] max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create New RFQ</DialogTitle>
             </DialogHeader>
@@ -425,75 +418,13 @@ const RFQList: React.FC = () => {
                       <SelectValue placeholder="Select item" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Ethylene vinyl acetate sheets (EVA)">
-                        Ethylene vinyl acetate sheets (EVA)
-                      </SelectItem>
-                      <SelectItem value="Tinned Copper interconnect-Wire/Ribbon">
-                        Tinned Copper interconnect-Wire/Ribbon
-                      </SelectItem>
-                      <SelectItem value="Tinned Copper interconnect-Bus Bar">
-                        Tinned Copper interconnect-Bus Bar
-                      </SelectItem>
-                      <SelectItem value="Solar tempered glass or solar tempered (anti-reflective coated) glass">
-                        Solar tempered glass or solar tempered (anti-reflective
-                        coated) glass
-                      </SelectItem>
-                      <SelectItem value="Photovoltaic cells">
-                        Photovoltaic cells
-                      </SelectItem>
-                      <SelectItem value="Back sheet for Solar Module ( Supplier : Jolywood KFB-30PLUS(WHITE)">
-                        Back sheet for Solar Module ( upplier : Jolywood
-                        KFB-30PLUS(WHITE))
-                      </SelectItem>
-                      <SelectItem value="Back sheet- Transparent-for Solar Module (JOLYWOOD FFC JW30PLUS (TRANSPARENT)">
-                        Back sheet- Transparent-for Solar Module (JOLYWOOD FFC
-                        JW30PLUS (TRANSPARENT))
-                      </SelectItem>
-                      <SelectItem value="PET Back sheet-for Solar Module">
-                        PET Back sheet-for Solar Module
-                      </SelectItem>
-                      <SelectItem value="Aluminium Profile/Frames">
-                        Aluminium Profile/Frames
-                      </SelectItem>
-                      <SelectItem value="Junction Box (used solar  Photovoltaic Modules)">
-                        Junction Box (used solar Photovoltaic Modules)
-                      </SelectItem>
-                      <SelectItem value="Silicone Sealants used in Manufacturing of solar Photovoltaic Modules">
-                        Silicone Sealants used in Manufacturing of solar
-                        Photovoltaic Modules
-                      </SelectItem>
-                      <SelectItem value="POE (polymers of Ehtylene) Film">
-                        POE (polymers of Ehtylene) Film
-                      </SelectItem>
-                      <SelectItem value="EPE Film">EPE Film</SelectItem>
-                      <SelectItem value="Membrane Sheet">
-                        Membrane Sheet
-                      </SelectItem>
-                      <SelectItem value="Teflon sheet">Teflon sheet</SelectItem>
-                      <SelectItem value="Silver Conductor Front side Metallic Paste & Silver Conductor paste Rear Side">
-                        Silver Conductor Front side Metallic Paste & Silver
-                        Conductor paste Rear Side
-                      </SelectItem>
-                      <SelectItem value="Undefused silicon wafers">
-                        Undefused silicon wafers
-                      </SelectItem>
-                      <SelectItem value="Aluminium paste">
-                        Aluminium paste
-                      </SelectItem>
-                      <SelectItem value="Print screen">Print screen</SelectItem>
-                      <SelectItem value="Additives">Additives</SelectItem>
-                      <SelectItem value="TMA (TRIMETHYLALUMINUM)">
-                        TMA (TRIMETHYLALUMINUM)
-                      </SelectItem>
-                      <SelectItem value="APRON BLUE">APRON BLUE</SelectItem>
-                      <SelectItem value="CAP">CAP</SelectItem>
-                      <SelectItem value="NITRILE GLOVES">
-                        NITRILE GLOVES
-                      </SelectItem>
-                      <SelectItem value="BEMCOT WIPERS">
-                        BEMCOT WIPERS
-                      </SelectItem>
-                      <SelectItem value="GASES-SILANE">GASES-SILANE</SelectItem>
+                      {(lookups?.itemDescriptions || [])
+                        .filter((r) => String(r.value || "").trim() !== "")
+                        .map((r) => (
+                          <SelectItem key={r.id} value={r.value}>
+                            {r.value}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -506,105 +437,20 @@ const RFQList: React.FC = () => {
                       setCompanyName(value as RFQ["companyName"])
                     }
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="h-auto">
                       <SelectValue placeholder="Select company" />
                     </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem
-                        value={`Premier Energies Limited SURVEY NO 53 ANNARAM VILLAGAE G P ANNARAM
-JINNARAM Mandal MEDAK District, Telangana-502313 India. IEC :
-0996000402 PAN : AABCP8800D GST :36AABCP8800D1ZP`}
-                      >
-                        Premier Energies Limited SURVEY NO 53 ANNARAM VILLAGAE G
-                        P ANNARAM
-                        <br />
-                        JINNARAM Mandal MEDAK District, Telangana-502313 India.
-                        <br />
-                        IEC : 0996000402 PAN : AABCP8800D GST :36AABCP8800D1ZP
-                      </SelectItem>
 
-                      <SelectItem
-                        value={`Premier Energies Photovoltaic Private Limited Plot No. 8/B/1/ and
-8/B/2 E-City, Raviryala Village, Maheshwaram Mandal, Ranga Reddy,
-Telangana, 501359,India. IEC : AAXCS4996H PAN : AAXCS4996H GST :
-36AAXCS4996H1ZB`}
-                      >
-                        Premier Energies Photovoltaic Private Limited
-                        <br />
-                        Plot No. 8/B/1/ and 8/B/2 E-City, Raviryala Village,
-                        <br />
-                        Maheshwaram Mandal, Ranga Reddy, Telangana, 501359,
-                        India.
-                        <br />
-                        IEC : AAXCS4996H PAN : AAXCS4996H GST : 36AAXCS4996H1ZB
-                      </SelectItem>
-
-                      <SelectItem
-                        value={`Premier Energies International Private Limited- Unit 1
-Unit-I,Survey No 62 P 63P and 88 P Plot No 8/B/1 and 8/B/2,
-Raviryala Srinagar Village, Maheshwaram Mandal, Ranga Reddy
-TS,Srinagar Village, Pedda Golconda , Rangareddy,Telangana,501359,India IEC : AATCA8732D PAN: AATCA8732D GST : 36AATCA8732D1ZF`}
-                      >
-                        Premier Energies International Private Limited – Unit 1
-                        <br />
-                        Survey No 62 P63P & 88 P, Plot No 8/B/1 & 8/B/2,
-                        <br />
-                        Raviryala Srinagar Village, Maheshwaram Mandal,
-                        <br />
-                        Ranga Reddy TS, Pedda Golconda, Telangana 501359, India
-                        <br />
-                        IEC : AATCA8732D PAN : AATCA8732D GST : 36AATCA8732D1ZF
-                      </SelectItem>
-
-                      <SelectItem
-                        value={`Premier Energies International Private Limited- Unit 2
-Unit-II,Plot No S-95 S-96 S-100 S-101 S-102 S-103 S-104, Raviryala
-Srinagar Village Maheswaram, FAB City, Rangareddy, Telangana,
-501359,India IEC : AATCA8732D PAN: AATCA8732D GST :
-36AATCA8732D1ZF`}
-                      >
-                        Premier Energies International Private Limited – Unit 2
-                        <br />
-                        Plot No S-95 to S-104, Raviryala Srinagar Village,
-                        Maheswaram
-                        <br />
-                        FAB City, Rangareddy, Telangana 501359, India
-                        <br />
-                        IEC : AATCA8732D PAN : AATCA8732D GST : 36AATCA8732D1ZF
-                      </SelectItem>
-
-                      <SelectItem
-                        value={`Premier energies Global Environment Private Limited Plot No S-95,
-S-96, S-100, S-101, S-102, S-103, S-104, Raviryala, Srinagar
-Village, Maheswaram, Raviryal Industrial Area, FAB City,
-Rangareddy, Telangana – 501359,India. IEC : AALCP9141K PAN:
-AALCP9141K GST : 36AALCP9141K1ZW`}
-                      >
-                        Premier Energies Global Environment Private Limited
-                        <br />
-                        Plot No S-95 to S-104, Raviryala, Srinagar Village,
-                        <br />
-                        Maheswaram, Raviryal Industrial Area, FAB City,
-                        <br />
-                        Rangareddy, Telangana – 501359, India
-                        <br />
-                        IEC : AALCP9141K PAN : AALCP9141K GST : 36AALCP9141K1ZW
-                      </SelectItem>
-
-                      <SelectItem
-                        value={`Premier Energies Global Environment Private Limited- Unit 2 Sy No
-303 304 305 and 306/2, EMC Maheswaram, Ranga Reddy Dist,
-Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
-36AALCP9141K1ZW`}
-                      >
-                        Premier Energies Global Environment Private Limited –
-                        Unit 2<br />
-                        Sy No 303–306/2, EMC Maheswaram, Ranga Reddy Dist,
-                        <br />
-                        Telangana 501359, India
-                        <br />
-                        IEC : AALCP9141K PAN : AALCP9141K GST : 36AALCP9141K1ZW
-                      </SelectItem>
+                    <SelectContent className="max-w-[520px]">
+                      {(lookups?.companyNames || []).map((r) => (
+                        <SelectItem
+                          key={r.id}
+                          value={r.value}
+                          className="whitespace-pre-wrap break-words"
+                        >
+                          {r.value}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -631,9 +477,9 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
                       <SelectValue placeholder="Select supplier" />
                     </SelectTrigger>
                     <SelectContent>
-                      {SUPPLIERS.map((name) => (
-                        <SelectItem key={name} value={name}>
-                          {name}
+                      {(lookups?.suppliers || []).map((r) => (
+                        <SelectItem key={r.id} value={r.value}>
+                          {r.value}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -652,16 +498,11 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
                       <SelectValue placeholder="Select port" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Shanghai">Shanghai</SelectItem>
-                      <SelectItem value="Ningbo">Ningbo</SelectItem>
-                      <SelectItem value="Port klang">Port klang</SelectItem>
-                      <SelectItem value="Haiphong">Haiphong</SelectItem>
-                      <SelectItem value="Shekou">Shekou</SelectItem>
-                      <SelectItem value="Shenzhen">Shenzhen</SelectItem>
-                      <SelectItem value="Tianjin">Tianjin</SelectItem>
-                      <SelectItem value="Dalian">Dalian</SelectItem>
-                      <SelectItem value="Hamburg">Hamburg</SelectItem>
-                      <SelectItem value="Nansha">Nansha</SelectItem>
+                      {(lookups?.portsOfLoading || []).map((r) => (
+                        <SelectItem key={r.id} value={r.value}>
+                          {r.value}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -678,19 +519,11 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
                       <SelectValue placeholder="Select port" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Nhava Sheva">Nhava Sheva</SelectItem>
-                      <SelectItem value="ICD-Hyderabad">
-                        ICD-Hyderabad
-                      </SelectItem>
-                      <SelectItem value="Hyderabad Airport">
-                        Hyderabad Airport
-                      </SelectItem>
-                      <SelectItem value="Chennai Airport">
-                        Chennai Airport
-                      </SelectItem>
-                      <SelectItem value="Mumbai Airport">
-                        Mumbai Airport
-                      </SelectItem>
+                      {(lookups?.portsOfDestination || []).map((r) => (
+                        <SelectItem key={r.id} value={r.value}>
+                          {r.value}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -707,12 +540,11 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
                       <SelectValue placeholder="Select container type" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="LCL">LCL</SelectItem>
-                      <SelectItem value="20' GP">20' GP</SelectItem>
-                      <SelectItem value="40' HC">40' HC</SelectItem>
-                      <SelectItem value="40' FR">40' FR</SelectItem>
-                      <SelectItem value="20' OT">20' OT</SelectItem>
-                      <SelectItem value="40' OT">40' OT</SelectItem>
+                      {(lookups?.containerTypes || []).map((r) => (
+                        <SelectItem key={r.id} value={r.value}>
+                          {r.value}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -762,39 +594,125 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
                     required
                   />
                 </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="initialQuoteEndTime">
-                    Initial Quote End Time
-                  </Label>
-                  <Input
-                    id="initialQuoteEndTime"
-                    type="datetime-local"
-                    value={initialQuoteEndTime}
-                    onChange={(e) => setInitialQuoteEndTime(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="evaluationEndTime">Evaluation End Time</Label>
-                  <Input
-                    id="evaluationEndTime"
-                    type="datetime-local"
-                    value={evaluationEndTime}
-                    onChange={(e) => setEvaluationEndTime(e.target.value)}
-                    required
-                  />
-                </div>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="description">Description (Optional)</Label>
-                <Input
+                <Label htmlFor="description">
+                  Description (Optional) — you can paste images here
+                </Label>
+
+                {/* Keep description as text; pasted images go into attachments automatically */}
+                <textarea
                   id="description"
+                  className="min-h-[90px] w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
+                  onPaste={async (e) => {
+                    // If clipboard contains images, capture them as attachments
+                    const items = Array.from(e.clipboardData?.items || []);
+                    const imageItems = items.filter((it) =>
+                      it.type?.startsWith("image/")
+                    );
+                    if (!imageItems.length) return;
+
+                    e.preventDefault(); // prevent weird text insertion
+                    const files: File[] = [];
+
+                    for (const it of imageItems) {
+                      const f = it.getAsFile();
+                      if (f) {
+                        // give a nicer name for pasted blobs
+                        const ext = (
+                          f.type.split("/")[1] || "png"
+                        ).toLowerCase();
+                        const named = new File(
+                          [f],
+                          `pasted-${Date.now()}.${ext}`,
+                          {
+                            type: f.type,
+                          }
+                        );
+                        files.push(named);
+                      }
+                    }
+
+                    if (files.length) {
+                      await addFilesAsAttachments(files);
+
+                      // Optional: add a marker into description text so it "feels" inline
+                      setDescription((prev) => {
+                        const marker = files
+                          .map((f) => `[Image: ${f.name}]`)
+                          .join("\n");
+                        return prev ? `${prev}\n${marker}` : marker;
+                      });
+                    }
+                  }}
+                  placeholder="Type details… Paste an image here (Ctrl+V) to attach it."
                 />
+
+                <div className="grid gap-2">
+                  <Label htmlFor="rfqAttachments">Attachments (Optional)</Label>
+                  <Input
+                    id="rfqAttachments"
+                    type="file"
+                    multiple
+                    onChange={async (e) => {
+                      const files = e.target.files;
+                      if (files && files.length) {
+                        await addFilesAsAttachments(files);
+                        e.target.value = ""; // allow selecting same file again
+                      }
+                    }}
+                  />
+
+                  {attachments.length > 0 && (
+                    <div className="border rounded-md p-3 space-y-2">
+                      <div className="text-sm font-medium">
+                        Attachments ({attachments.length})
+                      </div>
+
+                      <div className="grid gap-2">
+                        {attachments.map((a, idx) => {
+                          const isImage = a.type.startsWith("image/");
+                          return (
+                            <div
+                              key={`${a.name}-${idx}`}
+                              className="flex items-start justify-between gap-3 border rounded-md p-2"
+                            >
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium break-words">
+                                  {a.name}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {a.type || "file"} •{" "}
+                                  {(a.size / 1024).toFixed(1)} KB
+                                </div>
+
+                                {isImage && (
+                                  <img
+                                    src={a.dataUrl}
+                                    alt={a.name}
+                                    className="mt-2 max-h-40 rounded-md border"
+                                  />
+                                )}
+                              </div>
+
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => removeAttachment(idx)}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -834,37 +752,323 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
         </Dialog>
       </div>
 
+      {/* Table controls */}
+      <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+        <div className="flex items-center gap-2">
+          <Input
+            value={globalQuery}
+            onChange={(e) => setGlobalQuery(e.target.value)}
+            placeholder="Search all columns…"
+            className="w-[320px] max-w-full"
+          />
+          <Button type="button" variant="outline" onClick={clearAllFilters}>
+            Clear
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">
+            Showing {total === 0 ? 0 : (safePage - 1) * pageSize + 1}–
+            {Math.min(safePage * pageSize, total)} of {total}
+          </span>
+
+          <Select
+            value={String(pageSize)}
+            onValueChange={(v) => setPageSize(Number(v))}
+          >
+            <SelectTrigger className="w-[120px]">
+              <SelectValue placeholder="Page size" />
+            </SelectTrigger>
+            <SelectContent>
+              {[10, 20, 50, 100].map((n) => (
+                <SelectItem key={n} value={String(n)}>
+                  {n} / page
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       <div className="rounded-md border">
         <div className="overflow-x-auto">
           <table className="w-full data-table">
             <thead>
               <tr>
                 <th>Actions</th>
-                <th>RFQ Number</th>
-                <th>Item Description</th>
-                <th>Company</th>
-                <th>Material PO</th>
-                <th>Supplier</th>
-                <th>Port of Loading</th>
-                <th>Port of Destination</th>
-                <th>Container Type</th>
-                <th>No. of Containers</th>
-                <th>Weight (tons)</th>
-                <th>Readiness Date</th>
-                <th>Quote End</th>
-                <th>Eval End</th>
-                <th>Status</th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("rfqNumber")}
+                  >
+                    RFQ Number {sortIndicator("rfqNumber")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("itemDescription")}
+                  >
+                    Item Description {sortIndicator("itemDescription")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("companyName")}
+                  >
+                    Company {sortIndicator("companyName")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("materialPONumber")}
+                  >
+                    Material PO {sortIndicator("materialPONumber")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("supplierName")}
+                  >
+                    Supplier {sortIndicator("supplierName")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("portOfLoading")}
+                  >
+                    Port of Loading {sortIndicator("portOfLoading")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("portOfDestination")}
+                  >
+                    Port of Destination {sortIndicator("portOfDestination")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("containerType")}
+                  >
+                    Container Type {sortIndicator("containerType")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("numberOfContainers")}
+                  >
+                    No. of Containers {sortIndicator("numberOfContainers")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("cargoWeight")}
+                  >
+                    Weight (tons) {sortIndicator("cargoWeight")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("cargoReadinessDate")}
+                  >
+                    Readiness Date {sortIndicator("cargoReadinessDate")}
+                  </button>
+                </th>
+
+                <th>
+                  <button
+                    type="button"
+                    className="font-semibold underline-offset-2 hover:underline"
+                    onClick={() => toggleSort("status")}
+                  >
+                    Status {sortIndicator("status")}
+                  </button>
+                </th>
+              </tr>
+
+              {/* Filter row */}
+              <tr>
+                <th />
+
+                <th>
+                  <Input
+                    value={colFilters.rfqNumber}
+                    onChange={(e) => setFilter("rfqNumber", e.target.value)}
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.itemDescription}
+                    onChange={(e) =>
+                      setFilter("itemDescription", e.target.value)
+                    }
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.companyName}
+                    onChange={(e) => setFilter("companyName", e.target.value)}
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.materialPONumber}
+                    onChange={(e) =>
+                      setFilter("materialPONumber", e.target.value)
+                    }
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.supplierName}
+                    onChange={(e) => setFilter("supplierName", e.target.value)}
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.portOfLoading}
+                    onChange={(e) => setFilter("portOfLoading", e.target.value)}
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.portOfDestination}
+                    onChange={(e) =>
+                      setFilter("portOfDestination", e.target.value)
+                    }
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.containerType}
+                    onChange={(e) => setFilter("containerType", e.target.value)}
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.numberOfContainers}
+                    onChange={(e) =>
+                      setFilter("numberOfContainers", e.target.value)
+                    }
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.cargoWeight}
+                    onChange={(e) => setFilter("cargoWeight", e.target.value)}
+                    placeholder="Filter…"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Input
+                    value={colFilters.cargoReadinessDate}
+                    onChange={(e) =>
+                      setFilter("cargoReadinessDate", e.target.value)
+                    }
+                    placeholder="YYYY-MM-DD"
+                    className="h-8"
+                  />
+                </th>
+
+                <th>
+                  <Select
+                    value={colFilters.status || "__ALL__"}
+                    onValueChange={(v) =>
+                      setFilter("status", v === "__ALL__" ? "" : v)
+                    }
+                  >
+                    <SelectTrigger className="h-8">
+                      <SelectValue placeholder="All" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__ALL__">All</SelectItem>
+
+                      {Array.from(
+                        new Set(rfqs.map((r: any) => String(r.status || "")))
+                      )
+                        .filter(Boolean)
+                        .sort()
+                        .map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {s}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </th>
               </tr>
             </thead>
+
             <tbody>
-              {rfqs.length === 0 ? (
+              {paged.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="text-center py-4">
+                  <td colSpan={13} className="text-center py-4">
                     No RFQs found. Create your first RFQ!
                   </td>
                 </tr>
               ) : (
-                rfqs.map((rfq) => (
+                paged.map((rfq) => (
                   <tr key={rfq.id}>
                     <td>
                       {rfq.status !== "closed" && (
@@ -887,7 +1091,10 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
                     </td>
                     <td>{rfq.rfqNumber}</td>
                     <td>{rfq.itemDescription}</td>
-                    <td>{rfq.companyName}</td>
+                    <td className="whitespace-pre-wrap break-words max-w-[320px]">
+                      {rfq.companyName}
+                    </td>
+
                     <td>{rfq.materialPONumber}</td>
                     <td>{rfq.supplierName}</td>
                     <td>{rfq.portOfLoading}</td>
@@ -898,12 +1105,7 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
                     <td>
                       {new Date(rfq.cargoReadinessDate).toLocaleDateString()}
                     </td>
-                    <td>
-                      {new Date(rfq.initialQuoteEndTime).toLocaleDateString()}
-                    </td>
-                    <td>
-                      {new Date(rfq.evaluationEndTime).toLocaleDateString()}
-                    </td>
+
                     <td>
                       <StatusBadge status={rfq.status} />
                     </td>
@@ -912,6 +1114,32 @@ Telangana, 501359 IEC : AALCP9141K PAN: AALCP9141K GST :
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+      {/* Pagination */}
+      <div className="flex items-center justify-between mt-3">
+        <div className="text-sm text-muted-foreground">
+          Page {safePage} of {totalPages}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={safePage <= 1}
+          >
+            Prev
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={safePage >= totalPages}
+          >
+            Next
+          </Button>
         </div>
       </div>
     </div>

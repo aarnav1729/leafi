@@ -27,6 +27,9 @@ import VendorAllottedRFQs from "./pages/vendor/AllottedRFQs";
 // Admin pages
 import AdminDashboard from "./pages/admin/Dashboard";
 
+import Masters from "./pages/logistics/Masters";
+
+
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -52,7 +55,10 @@ const App = () => (
               <Route element={<Layout requiredRole="logistics" />}>
                 <Route path="/logistics/rfqs" element={<RFQList />} />
                 <Route path="/logistics/finalize/:rfqId" element={<FinalizeRFQ />} />
+                <Route path="/logistics/masters" element={<Masters />} />
               </Route>
+
+              
               
               {/* Vendor Routes */}
               <Route element={<Layout requiredRole="vendor" />}>
@@ -63,6 +69,7 @@ const App = () => (
               {/* Admin Routes */}
               <Route element={<Layout requiredRole="admin" />}>
                 <Route path="/admin/dashboard" element={<AdminDashboard />} />
+                <Route path="/admin/masters" element={<Masters />} />
               </Route>
               
               {/* Catch-all Route */}

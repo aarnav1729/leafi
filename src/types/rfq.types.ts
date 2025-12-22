@@ -1,19 +1,20 @@
-
 export interface RFQ {
   id: string;
   rfqNumber: number;
-  itemDescription: "EVA" | "Photovoltaic Cells" | "TMA" | "CAP";
-  companyName: "PEPPL" | "PEIPL" | "PEGEPL";
+
+  // These must be string because UI uses long descriptive values (and many options)
+  itemDescription: string;
+  companyName: string;
   materialPONumber: string;
-  supplierName: "aarnav" | "madhur" | "akanksha" | "ashwin" | "sathvika";
-  portOfLoading: "beijing" | "shanghai" | "ningbo";
-  portOfDestination: "chennai" | "hyderabad" | "goa";
-  containerType: "LCL" | "20' OT" | "40'OT";
+  supplierName: string;
+  portOfLoading: string;
+  portOfDestination: string;
+  containerType: string;
+
   numberOfContainers: number;
   cargoWeight: number; // in tons
   cargoReadinessDate: string;
-  initialQuoteEndTime: string;
-  evaluationEndTime: string;
+
   description?: string;
   vendors: string[];
   createdAt: string;
@@ -21,13 +22,14 @@ export interface RFQ {
   createdBy: string;
 }
 
+
 export interface QuoteItem {
   id: string;
   rfqId: string;
   vendorName: string;
   numberOfContainers: number;
   shippingLineName: string;
-  containerType: "LCL" | "20' OT" | "40'OT";
+  containerType: string;
   vesselName: string;
   vesselETD: string;
   vesselETA: string;
