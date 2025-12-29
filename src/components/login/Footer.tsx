@@ -3,18 +3,21 @@ import React from "react";
 const Footer: React.FC = () => {
   return (
     <footer className="w-full flex items-center justify-between py-1">
+      <div className="flex items-center">
+        <img
+          src="/l.png"
+          alt="Leafi"
+          className="h-6 w-auto"
+          draggable={false}
+        />
+      </div>
       <div className="flex flex-col gap-1">
         <div className="text-[10px] uppercase tracking-[0.2em] text-[#1a1b4b]/40 font-bold">
-          © 2025 Leafi Digital
-        </div>
-        <div className="text-[10px] text-[#1a1b4b]/25 italic font-medium">
-          Designed by Aarnav Singh
+          © 2025 Premier Energies
         </div>
       </div>
 
-      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-[#1a1b4b]/30">
-        Internal Access Only
-      </div>
+      {/* Replace "Internal Access Only" with logo */}
     </footer>
   );
 };

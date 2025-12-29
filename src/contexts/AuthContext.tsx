@@ -5,6 +5,7 @@ import { AuthState, User, UserRole } from "@/types/auth.types";
 import { setCredentials } from "@/lib/api";
 
 interface AuthContextType extends AuthState {
+  lastOtp?: string | null;
   requestOtp: (username: string) => Promise<boolean>;
   verifyOtp: (username: string, otp: string) => Promise<boolean>;
   logout: () => void;
@@ -31,6 +32,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [state, setState] = useState<AuthState>(initialState);
+  const [lastOtp, setLastOtp] = useState<string | null>(null);
 
   // On mount, rehydrate user
   useEffect(() => {
@@ -55,8 +57,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         body: JSON.stringify({ username }), // no password => OTP request
       });
       if (!res.ok) throw new Error("Failed to send OTP");
+      const data = await res.json().catch(() => null);
+      const otp = data?.otp ? String(data.otp) : null;
+      setLastOtp(otp);
+
       setState((s) => ({ ...s, isLoading: false, error: null }));
-      toast.success("OTP sent (check server console)");
+      toast.success(otp ? `OTP: ${otp}` : "OTP sent");
+
       return true;
     } catch (err: any) {
       setState((s) => ({
@@ -94,6 +101,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
       setState({ isAuthenticated: true, user, isLoading: false, error: null });
       toast.success("Login successful");
+      setLastOtp(null);
+
       return true;
     } catch (err: any) {
       setState((s) => ({
@@ -117,10 +126,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       error: null,
     });
     toast.info("Logged out");
+    setLastOtp(null);
   };
 
   return (
-    <AuthContext.Provider value={{ ...state, requestOtp, verifyOtp, logout }}>
+    <AuthContext.Provider
+      value={{ ...state, lastOtp, requestOtp, verifyOtp, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );

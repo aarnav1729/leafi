@@ -630,6 +630,48 @@ BEGIN
   INSERT dbo.Users (username, password, role, name, company)
   VALUES ('van', 'van', 'vendor', 'LEAFO', 'LEAFO');
 END;
+
+-- ========================= NEW USERS (insert-only) =========================
+
+-- Admin additions
+IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE username = 'vishnu.hazari')
+BEGIN
+  INSERT dbo.Users (username, password, role, name, company)
+  VALUES ('vishnu.hazari', 'vishnu.hazari', 'admin', 'Vishnu Hazari (Admin)', NULL);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE username = 'vishnu.hazari@premierenergies.com')
+BEGIN
+  INSERT dbo.Users (username, password, role, name, company)
+  VALUES ('vishnu.hazari@premierenergies.com', 'vishnu.hazari@premierenergies.com', 'admin', 'Vishnu Hazari (Admin)', NULL);
+END;
+
+-- Logistics additions
+IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE username = 'ramanjulu')
+BEGIN
+  INSERT dbo.Users (username, password, role, name, company)
+  VALUES ('ramanjulu', 'ramanjulu', 'logistics', 'Ramanjulu', NULL);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE username = 'ramanjulu@premierenergies.com')
+BEGIN
+  INSERT dbo.Users (username, password, role, name, company)
+  VALUES ('ramanjulu@premierenergies.com', 'ramanjulu@premierenergies.com', 'logistics', 'Ramanjulu', NULL);
+END;
+
+-- Vendor additions
+IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE username = 'vendora')
+BEGIN
+  INSERT dbo.Users (username, password, role, name, company)
+  VALUES ('vendora', 'vendora', 'vendor', 'Vendor A', 'VENDORA');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE username = 'vendorb')
+BEGIN
+  INSERT dbo.Users (username, password, role, name, company)
+  VALUES ('vendorb', 'vendorb', 'vendor', 'Vendor B', 'VENDORB');
+END;
+
 `;
   console.log("[DB] Seeding users (insert-only)...");
   await pool.request().batch(seedSql);
@@ -665,6 +707,11 @@ function requireBasicAuth(req) {
 function requireAdminOrLogistics(req, res, next) {
   const role = req.user?.role;
   if (role !== "admin" && role !== "logistics") return res.sendStatus(403);
+  next();
+}
+function requireAdmin(req, res, next) {
+  const role = req.user?.role;
+  if (role !== "admin") return res.sendStatus(403);
   next();
 }
 
@@ -706,7 +753,37 @@ async function ensureMasterValue(pool, key, value) {
 // ─────────────────────────────────────────────────────────────────────────────
 const app = express();
 
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        baseUri: ["'self'"],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'self'"],
+
+        // model-viewer / three.js decoders can require wasm eval in some builds
+        scriptSrc: ["'self'", "'wasm-unsafe-eval'", "'unsafe-eval'"],
+
+        // if model-viewer spins up workers / blobs
+        workerSrc: ["'self'", "blob:"],
+
+        // allow model files / textures
+        imgSrc: ["'self'", "data:", "blob:"],
+        mediaSrc: ["'self'", "data:", "blob:"],
+
+        // GLB fetch
+        connectSrc: ["'self'"],
+
+        // shadcn/tailwind often ok without inline, but keep if you have inline styles
+        styleSrc: ["'self'", "'unsafe-inline'"],
+
+        fontSrc: ["'self'", "data:"],
+      },
+    },
+  })
+);
+
 app.use(
   cors({
     origin: process.env.CORS_ORIGIN || "*",
@@ -808,7 +885,7 @@ app.post("/api/login", async (req, res) => {
       // MVP: show OTP in console only
       console.log(`[OTP] ${username} -> ${otp} (valid ${OTP_TTL_MS / 1000}s)`);
 
-      return res.json({ ok: true, step: "otp_sent" });
+      return res.json({ ok: true, step: "otp_sent", otp }); // MVP: return OTP to client for display
     }
 
     // STEP 2: verify OTP (password is OTP)
@@ -1535,6 +1612,200 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 });
 
 // ========================= Admin: master keys/meta =========================
+// ========================= Admin: Users CRUD =========================
+// Admin-only users management
+
+app.get("/api/admin/users", authenticate, requireAdmin, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const result = await pool.request().query(`
+      SELECT
+        CAST(id AS NVARCHAR(36)) AS id,
+        username,
+        role,
+        name,
+        company
+      FROM dbo.Users
+      ORDER BY role ASC, username ASC
+    `);
+    return res.json(result.recordset || []);
+  } catch (err) {
+    console.error("[API] GET /api/admin/users error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.post("/api/admin/users", authenticate, requireAdmin, async (req, res) => {
+  const { username, password, role, name, company } = req.body || {};
+
+  const u = String(username || "").trim();
+  const p = String(password || "").trim();
+  const r = String(role || "").trim();
+  const n = String(name || "").trim();
+  const c = company == null ? null : String(company || "").trim();
+
+  if (!u) return res.status(400).json({ message: "username required" });
+  if (!n) return res.status(400).json({ message: "name required" });
+  if (!p) return res.status(400).json({ message: "password required" });
+  if (!["admin", "logistics", "vendor"].includes(r)) {
+    return res.status(400).json({ message: "invalid role" });
+  }
+  if (r === "vendor" && !c) {
+    return res.status(400).json({ message: "company required for vendor" });
+  }
+
+  try {
+    const pool = await getPool();
+
+    // Unique username check
+    const exists = await pool
+      .request()
+      .input("username", sql.NVarChar(50), u)
+      .query(`SELECT TOP 1 1 AS ok FROM dbo.Users WHERE username = @username`);
+    if (exists.recordset?.length) {
+      return res.status(409).json({ message: "username already exists" });
+    }
+
+    await pool
+      .request()
+      .input("username", sql.NVarChar(50), u)
+      .input("password", sql.NVarChar(255), p)
+      .input("role", sql.NVarChar(20), r)
+      .input("name", sql.NVarChar(100), n)
+      .input("company", sql.NVarChar(150), c).query(`
+        INSERT INTO dbo.Users (username, password, role, name, company)
+        VALUES (@username, @password, @role, @name, @company)
+      `);
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[API] POST /api/admin/users error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.put(
+  "/api/admin/users/:id",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    const { id } = req.params;
+    const { password, role, name, company } = req.body || {};
+
+    const hasPassword = typeof password === "string" && String(password).trim();
+    const hasRole = typeof role === "string" && String(role).trim();
+    const hasName = typeof name === "string" && String(name).trim();
+    const hasCompany = "company" in (req.body || {});
+
+    if (!hasPassword && !hasRole && !hasName && !hasCompany) {
+      return res.status(400).json({ message: "Nothing to update" });
+    }
+
+    try {
+      const pool = await getPool();
+
+      // Ensure user exists
+      const existing = await pool
+        .request()
+        .input("id", sql.UniqueIdentifier, id)
+        .query(`SELECT TOP 1 username, role FROM dbo.Users WHERE id = @id`);
+      if (!existing.recordset?.length) return res.sendStatus(404);
+
+      const updates = [];
+      const r = pool.request().input("id", sql.UniqueIdentifier, id);
+
+      if (hasName) {
+        r.input("name", sql.NVarChar(100), String(name).trim());
+        updates.push("name = @name");
+      }
+      if (hasRole) {
+        const rr = String(role).trim();
+        if (!["admin", "logistics", "vendor"].includes(rr)) {
+          return res.status(400).json({ message: "invalid role" });
+        }
+        r.input("role", sql.NVarChar(20), rr);
+        updates.push("role = @role");
+      }
+      if (hasCompany) {
+        const c = company == null ? null : String(company || "").trim() || null;
+        r.input("company", sql.NVarChar(150), c);
+        updates.push("company = @company");
+      }
+      if (hasPassword) {
+        r.input("password", sql.NVarChar(255), String(password).trim());
+        updates.push("password = @password");
+      }
+
+      // If role is vendor, company must be set (enforce after role change)
+      // We'll validate by checking incoming role or existing role.
+      const effectiveRole = hasRole
+        ? String(role).trim()
+        : String(existing.recordset[0].role || "").trim();
+
+      if (effectiveRole === "vendor") {
+        const effectiveCompany = hasCompany
+          ? company == null
+            ? ""
+            : String(company || "").trim()
+          : null;
+
+        if (hasCompany && !effectiveCompany) {
+          return res
+            .status(400)
+            .json({ message: "company required for vendor" });
+        }
+      }
+
+      await r.query(`
+      UPDATE dbo.Users
+      SET ${updates.join(", ")}
+      WHERE id = @id
+    `);
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[API] PUT /api/admin/users/:id error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+app.delete(
+  "/api/admin/users/:id",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    const { id } = req.params;
+
+    try {
+      const pool = await getPool();
+
+      // Prevent self-delete
+      const meIdRes = await pool
+        .request()
+        .input("username", sql.NVarChar(50), req.user.username)
+        .query(`SELECT TOP 1 id FROM dbo.Users WHERE username = @username`);
+      const meId = meIdRes.recordset?.[0]?.id;
+      if (meId && String(meId).toLowerCase() === String(id).toLowerCase()) {
+        return res.status(400).json({ message: "Cannot delete your own user" });
+      }
+
+      const delRes = await pool
+        .request()
+        .input("id", sql.UniqueIdentifier, id)
+        .query(`DELETE FROM dbo.Users WHERE id = @id`);
+
+      // Note: mssql returns rowsAffected
+      if (!delRes.rowsAffected?.[0]) return res.sendStatus(404);
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[API] DELETE /api/admin/users/:id error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
 // CMD+F: // Admin CRUD for master dropdowns
 app.get(
   "/api/admin/masters",
@@ -1741,7 +2012,21 @@ app.use("/api", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 if (fs.existsSync(FRONTEND_DIST_PATH)) {
   console.log("[FE] Serving static files from:", FRONTEND_DIST_PATH);
-  app.use(express.static(FRONTEND_DIST_PATH));
+  app.use(
+    express.static(FRONTEND_DIST_PATH, {
+      setHeaders(res, filePath) {
+        if (filePath.endsWith(".glb")) {
+          res.setHeader("Content-Type", "model/gltf-binary");
+        }
+      },
+    })
+  );
+
+  // Ensure GLB is served (avoid SPA fallback returning index.html)
+  app.get("/fs.glb", (req, res) => {
+    const p = path.join(FRONTEND_DIST_PATH, "fs.glb");
+    return res.sendFile(p);
+  });
 
   // Serve index at root
   app.get("/", (req, res) => {

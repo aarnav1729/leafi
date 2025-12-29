@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Maximize2, X } from "lucide-react";
+import { Maximize2, X, ChevronDown } from "lucide-react";
 
 const API_BASE_URL = `${window.location.origin}/api`;
 
@@ -41,7 +41,8 @@ type PriceField =
 
 type PriceDraft = Partial<Record<PriceField, number>>;
 
-type TableMode = "leafi" | "logistics";
+type TableMode = "leafi" | "logistics" | "combined";
+
 type Scheme = "home" | "moowr";
 
 const fmt = {
@@ -86,7 +87,7 @@ const FinalizeRFQ: React.FC = () => {
   const [usdToInr, setUsdToInr] = useState<number>(75);
 
   useEffect(() => {
-    fetch(`${API_BASE_URL}/rate/usdinr`)
+    fetch(`${API_BASE_URL}/rate/usdinr`, { credentials: "include" })
       .then((r) => r.json())
       .then((d) => {
         const rate = Number(d?.rate);
@@ -137,6 +138,8 @@ const FinalizeRFQ: React.FC = () => {
 
   const [reasonModal, setReasonModal] = useState(false);
   const [deviationReason, setDeviationReason] = useState("");
+  // Collapsible: Vendor submission + LEAFI (collapsed by default)
+  const [vendorLeafiOpen, setVendorLeafiOpen] = useState(false);
 
   // Fullscreen table dialog
   const [tableFs, setTableFs] = useState<{
@@ -261,18 +264,34 @@ const FinalizeRFQ: React.FC = () => {
 
     for (const { quoteId, scheme } of slots) {
       if (remaining === 0) break;
-      const offered = quotes.find(
-        (q: any) => q.id === quoteId
-      )!.numberOfContainers;
-      const take = Math.min(offered, remaining);
+
+      const qRef = quotes.find((q: any) => q.id === quoteId);
+      const offered = fmt.num(qRef?.numberOfContainers);
+
       if (!draft[quoteId]) {
         draft[quoteId] = {
           containersAllottedHome: 0,
           containersAllottedMOOWR: 0,
         };
       }
+
+      // ✅ shared vendor capacity across HOME + MOOWR
+      const alreadyTaken =
+        fmt.num(draft[quoteId].containersAllottedHome) +
+        fmt.num(draft[quoteId].containersAllottedMOOWR);
+
+      const remainingCapacityForThisVendor = Math.max(
+        0,
+        offered - alreadyTaken
+      );
+      if (remainingCapacityForThisVendor === 0) continue;
+
+      const take = Math.min(remainingCapacityForThisVendor, remaining);
+      if (take <= 0) continue;
+
       if (scheme === "home") draft[quoteId].containersAllottedHome += take;
       else draft[quoteId].containersAllottedMOOWR += take;
+
       remaining -= take;
     }
 
@@ -293,6 +312,35 @@ const FinalizeRFQ: React.FC = () => {
       ),
     [alloc]
   );
+  const schemeAllocated = useMemo(() => {
+    const home = Object.values(alloc).reduce(
+      (s, a) => s + fmt.num(a.containersAllottedHome),
+      0
+    );
+    const moowr = Object.values(alloc).reduce(
+      (s, a) => s + fmt.num(a.containersAllottedMOOWR),
+      0
+    );
+    return { home, moowr };
+  }, [alloc]);
+
+  const schemeLogisticsPrice = useMemo(() => {
+    const home = Object.entries(alloc).reduce((sum, [qid, a]) => {
+      return (
+        sum +
+        fmt.num(a.containersAllottedHome) * (logisticsTotals[qid]?.home || 0)
+      );
+    }, 0);
+
+    const moowr = Object.entries(alloc).reduce((sum, [qid, a]) => {
+      return (
+        sum +
+        fmt.num(a.containersAllottedMOOWR) * (logisticsTotals[qid]?.moowr || 0)
+      );
+    }, 0);
+
+    return { home, moowr };
+  }, [alloc, logisticsTotals]);
 
   const vendorAutoTotal = useMemo(
     () =>
@@ -314,6 +362,81 @@ const FinalizeRFQ: React.FC = () => {
       ),
     [autoAlloc, baseTotals]
   );
+  /* ─────────────── LEAFI COMPARABLE (same count as current allocation) ─────────────── */
+  const leafiComparable = useMemo(() => {
+    if (!rfq || !quotes.length) return { total: 0, price: 0 };
+
+    const target = Math.max(0, fmt.num(totalAllocated || 0));
+    if (target === 0) return { total: 0, price: 0 };
+
+    type Slot = { quoteId: string; scheme: "home" | "moowr"; price: number };
+    const slots: Slot[] = [];
+
+    for (const q of quotes as any[]) {
+      slots.push({
+        quoteId: q.id,
+        scheme: "home",
+        price: baseTotals[q.id]?.home || 0,
+      });
+      slots.push({
+        quoteId: q.id,
+        scheme: "moowr",
+        price: baseTotals[q.id]?.moowr || 0,
+      });
+    }
+
+    slots.sort((a, b) => a.price - b.price);
+
+    let remaining = target;
+    const draft: Record<string, AllocDraft> = {};
+
+    for (const { quoteId, scheme } of slots) {
+      if (remaining === 0) break;
+
+      const qRef = quotes.find((q: any) => q.id === quoteId);
+      const offered = fmt.num(qRef?.numberOfContainers);
+
+      if (!draft[quoteId]) {
+        draft[quoteId] = {
+          containersAllottedHome: 0,
+          containersAllottedMOOWR: 0,
+        };
+      }
+
+      const alreadyTaken =
+        fmt.num(draft[quoteId].containersAllottedHome) +
+        fmt.num(draft[quoteId].containersAllottedMOOWR);
+
+      const remainingCapacityForThisVendor = Math.max(
+        0,
+        offered - alreadyTaken
+      );
+      if (remainingCapacityForThisVendor === 0) continue;
+
+      const take = Math.min(remainingCapacityForThisVendor, remaining);
+      if (take <= 0) continue;
+
+      if (scheme === "home") draft[quoteId].containersAllottedHome += take;
+      else draft[quoteId].containersAllottedMOOWR += take;
+
+      remaining -= take;
+    }
+
+    const total = Object.values(draft).reduce(
+      (s, a) => s + a.containersAllottedHome + a.containersAllottedMOOWR,
+      0
+    );
+
+    const price = Object.entries(draft).reduce((sum, [qid, a]) => {
+      return (
+        sum +
+        a.containersAllottedHome * (baseTotals[qid]?.home || 0) +
+        a.containersAllottedMOOWR * (baseTotals[qid]?.moowr || 0)
+      );
+    }, 0);
+
+    return { total, price };
+  }, [rfq, quotes, baseTotals, totalAllocated]);
 
   const logisticsTotalPrice = useMemo(() => {
     return Object.entries(alloc).reduce((sum, [qid, a]) => {
@@ -325,23 +448,60 @@ const FinalizeRFQ: React.FC = () => {
     }, 0);
   }, [alloc, logisticsTotals]);
 
+  const leafiRefPrice = useMemo(() => {
+    // If fully allocated, compare against full LEAFI recommendation.
+    if (rfq && totalAllocated === rfq.numberOfContainers)
+      return vendorAutoPrice;
+    // Otherwise compare against LEAFI cheapest for the SAME allocated count.
+    return leafiComparable.price;
+  }, [rfq, totalAllocated, vendorAutoPrice, leafiComparable.price]);
+
   const priceDeltaVsLeafi = useMemo(
-    () => logisticsTotalPrice - vendorAutoPrice,
-    [logisticsTotalPrice, vendorAutoPrice]
+    () => logisticsTotalPrice - leafiRefPrice,
+    [logisticsTotalPrice, leafiRefPrice]
   );
 
   const allocationValid = rfq != null && totalAllocated > 0;
 
-  const computeMaxForRow = (quoteId: string) => {
+  const computeMaxForRow = (quoteId: string, scheme: Scheme) => {
     if (!rfq) return 0;
+
     const prev = alloc[quoteId] || {
       containersAllottedHome: 0,
       containersAllottedMOOWR: 0,
     };
-    const others =
-      totalAllocated -
-      (prev.containersAllottedHome + prev.containersAllottedMOOWR);
-    return Math.max(0, rfq.numberOfContainers - others);
+
+    const offered =
+      fmt.num(quotes.find((q: any) => q.id === quoteId)?.numberOfContainers) ||
+      0;
+
+    const otherSchemeVal =
+      scheme === "home"
+        ? fmt.num(prev.containersAllottedMOOWR)
+        : fmt.num(prev.containersAllottedHome);
+
+    // total allocated in OTHER rows (exclude this row total)
+    const currentRowTotal =
+      fmt.num(prev.containersAllottedHome) +
+      fmt.num(prev.containersAllottedMOOWR);
+    const others = totalAllocated - currentRowTotal;
+
+    // cap by RFQ remaining given other rows + the other scheme in this row
+    const maxByRFQ = Math.max(
+      0,
+      rfq.numberOfContainers - others - otherSchemeVal
+    );
+
+    // cap by vendor offer (shared across HOME+MOOWR)
+    const maxByOffer = Math.max(0, offered - otherSchemeVal);
+
+    // keep >= already-saved minimum for this scheme (so max never < min)
+    const existingVal =
+      existingMap[quoteId]?.[
+        scheme === "home" ? "containersAllottedHome" : "containersAllottedMOOWR"
+      ] || 0;
+
+    return Math.max(existingVal, Math.min(maxByRFQ, maxByOffer));
   };
 
   const changeAlloc = (
@@ -360,7 +520,8 @@ const FinalizeRFQ: React.FC = () => {
         scheme === "home" ? "containersAllottedHome" : "containersAllottedMOOWR"
       ] || 0;
 
-    const maxForRow = computeMaxForRow(quoteId);
+    const maxForRow = computeMaxForRow(quoteId, scheme);
+
     const clamped = Math.min(Math.max(0, raw), maxForRow);
     const newValue = Math.max(existingValue, clamped);
 
@@ -420,7 +581,7 @@ const FinalizeRFQ: React.FC = () => {
       return;
     }
 
-    navigate("/dashboard");
+    navigate("/app");
   };
 
   const isAllocEqualToAuto = useMemo(() => {
@@ -454,16 +615,6 @@ const FinalizeRFQ: React.FC = () => {
 
   const onFinalizeClick = () => {
     if (!rfq) return;
-
-    const full = totalAllocated === rfq.numberOfContainers;
-    const deviatesAlloc = !isAllocEqualToAuto;
-    const deviatesPrice = hasAnyPriceEdits;
-
-    if (full && (deviatesAlloc || deviatesPrice)) {
-      setReasonModal(true);
-      return;
-    }
-
     storeFinalisation();
   };
 
@@ -471,9 +622,7 @@ const FinalizeRFQ: React.FC = () => {
     return (
       <div className="text-center py-20">
         <h2 className="text-2xl font-bold mb-4">RFQ not found</h2>
-        <Button onClick={() => navigate("/dashboard")}>
-          Return to Dashboard
-        </Button>
+        <Button onClick={() => navigate("/app")}>Return to Dashboard</Button>
       </div>
     );
   }
@@ -483,7 +632,7 @@ const FinalizeRFQ: React.FC = () => {
         <h2 className="text-2xl font-bold mb-4">
           No quotes submitted for this RFQ yet
         </h2>
-        <Button onClick={() => navigate("/dashboard")}>Back</Button>
+        <Button onClick={() => navigate("/app")}>Back</Button>
       </div>
     );
   }
@@ -544,14 +693,7 @@ const FinalizeRFQ: React.FC = () => {
           <div className="text-muted-foreground">Readiness Date</div>
           <div className="font-medium">{fmt.date(rfq.cargoReadinessDate)}</div>
         </div>
-        <div>
-          <div className="text-muted-foreground">Quote End</div>
-          <div className="font-medium">{fmt.date(rfq.initialQuoteEndTime)}</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground">Eval End</div>
-          <div className="font-medium">{fmt.date(rfq.evaluationEndTime)}</div>
-        </div>
+
         <div className="md:col-span-2">
           <div className="text-muted-foreground">Description</div>
           <div className="font-medium whitespace-pre-wrap">
@@ -567,12 +709,624 @@ const FinalizeRFQ: React.FC = () => {
   );
 
   const renderTableBody = (mode: TableMode, scheme: Scheme) => {
-    const isLogistics = mode === "logistics";
-    const state = isLogistics ? alloc : autoAlloc;
+    const isLogisticsOnly = mode === "logistics";
+    const isCombined = mode === "combined";
 
-    return (
-      <div className="grid gap-4">
-        {quotes.map((q: any) => {
+    // For old modes: state is either alloc (logistics) or autoAlloc (leafi)
+    const state = isLogisticsOnly ? alloc : autoAlloc;
+
+    type RowDef = {
+      key: string;
+      label?: string;
+      kind?: "section";
+      render?: (q: any) => React.ReactNode;
+    };
+
+    const fieldThCls =
+      "text-left font-semibold p-3 border-b min-w-[280px] sticky left-0 bg-background z-20";
+    const vendorThCls = "text-left font-semibold p-3 border-b min-w-[260px]";
+    const fieldTdCls =
+      "p-3 align-top text-muted-foreground font-medium whitespace-nowrap sticky left-0 bg-background z-10";
+    const vendorTdCls = "p-3 align-top";
+    const standoutFieldTdCls =
+      "p-3 align-top font-semibold text-foreground whitespace-nowrap sticky left-0 bg-background z-10 border-l-4 border-primary";
+
+    const standoutVendorTdCls = "p-3 align-top bg-primary/5";
+
+    // ----------------------------
+    // Combined: Quote-fields rows + Logistics editable rows (same vendor columns)
+    // ----------------------------
+    if (isCombined) {
+      const rowsTop: RowDef[] = [
+        // ---------------- Quote fields ----------------
+        {
+          key: "quotedContainers",
+          label: "Quoted Containers",
+          render: (q) => fmt.plain(q.numberOfContainers),
+        },
+        {
+          key: "td",
+          label: "T/D",
+          render: (q) => fmt.plain(q.transshipOrDirect),
+        },
+        {
+          key: "shippingLine",
+          label: "Shipping Line",
+          render: (q) => fmt.plain(q.shippingLineName),
+        },
+        {
+          key: "vessel",
+          label: "Vessel",
+          render: (q) => fmt.plain(q.vesselName),
+        },
+        { key: "etd", label: "ETD", render: (q) => fmt.date(q.vesselETD) },
+        { key: "eta", label: "ETA", render: (q) => fmt.date(q.vesselETA) },
+
+        {
+          key: "seaUsd_vendor",
+          label: "Sea Freight/Container (USD)",
+          render: (q) => (
+            <span className="font-medium">
+              {fmt.num(q.seaFreightPerContainer).toFixed(2)}
+            </span>
+          ),
+        },
+        {
+          key: "seaInr_vendor",
+          label: "Sea Freight/Container (INR)",
+          render: (q) =>
+            fmt.money(fmt.num(q.seaFreightPerContainer) * usdToInr),
+        },
+        {
+          key: "hdo_vendor",
+          label: "HDO per BOL (INR)",
+          render: (q) => fmt.money(q.houseDeliveryOrderPerBOL),
+        },
+        {
+          key: "cfs_vendor",
+          label: "CFS/Container (INR)",
+          render: (q) => fmt.money(q.cfsPerContainer),
+        },
+        {
+          key: "trn_vendor",
+          label: "Transport/Container (INR)",
+          render: (q) => fmt.money(q.transportationPerContainer),
+        },
+        {
+          key: "edi_vendor",
+          label: "EDI per BOE (INR)",
+          render: (q) => fmt.money(q.ediChargesPerBOE),
+        },
+        {
+          key: "chaHome_vendor",
+          label: "CHA Home (INR)",
+          render: (q) => fmt.money(q.chaChargesHome),
+        },
+        {
+          key: "chaMoowr_vendor",
+          label: "CHA MOOWR (INR)",
+          render: (q) => fmt.money(q.chaChargesMOOWR),
+        },
+        {
+          key: "ware_vendor",
+          label: "MOOWR Re-warehousing/BOE (INR)",
+          render: (q) => fmt.money(q.mooWRReeWarehousingCharges),
+        },
+
+        {
+          key: "validity",
+          label: "Quote Validity",
+          render: (q) => fmt.date(q.quoteValidityDate),
+        },
+        {
+          key: "message",
+          label: "Message",
+          render: (q) => (
+            <div className="min-w-[220px] whitespace-pre-wrap">
+              {fmt.plain(q.message)}
+            </div>
+          ),
+        },
+        {
+          key: "createdAt",
+          label: "Quote Created",
+          render: (q) => fmt.datetime(q.createdAt),
+        },
+
+        // ---------------- LEAFI (read-only) ----------------
+        {
+          key: "allotted_leafi",
+          label: `Allotted (${scheme.toUpperCase()}) - LEAFI`,
+          render: (q) => {
+            const v =
+              autoAlloc[q.id]?.[
+                scheme === "home"
+                  ? "containersAllottedHome"
+                  : "containersAllottedMOOWR"
+              ] || 0;
+            return <span className="font-medium">{v}</span>;
+          },
+        },
+        {
+          key: "lineTotal_leafi",
+          label: `Line Total (${scheme.toUpperCase()}) - LEAFI`,
+          render: (q) => {
+            const lineTotal =
+              scheme === "home"
+                ? baseTotals[q.id]?.home || 0
+                : baseTotals[q.id]?.moowr || 0;
+            return fmt.money(lineTotal);
+          },
+        },
+        {
+          key: "allottedCost_leafi",
+          label: `Allotted Cost (${scheme.toUpperCase()}) - LEAFI`,
+          render: (q) => {
+            const a =
+              autoAlloc[q.id]?.[
+                scheme === "home"
+                  ? "containersAllottedHome"
+                  : "containersAllottedMOOWR"
+              ] || 0;
+            const lt =
+              scheme === "home"
+                ? baseTotals[q.id]?.home || 0
+                : baseTotals[q.id]?.moowr || 0;
+            return <span className="font-semibold">{fmt.money(a * lt)}</span>;
+          },
+        },
+      ];
+
+      const rowsLog: RowDef[] = [
+        // ---------------- Logistics finalisation (editable) ----------------
+        {
+          key: "allotted_log",
+          label: `Allotted (${scheme.toUpperCase()}) - Logistics`,
+          render: (q) => {
+            const thisAllotted =
+              alloc[q.id]?.[
+                scheme === "home"
+                  ? "containersAllottedHome"
+                  : "containersAllottedMOOWR"
+              ] || 0;
+
+            const existingVal =
+              existingMap[q.id]?.[
+                scheme === "home"
+                  ? "containersAllottedHome"
+                  : "containersAllottedMOOWR"
+              ] || 0;
+
+            const rowMax = computeMaxForRow(q.id, scheme);
+
+            return (
+              <div className="flex flex-col gap-1">
+                <Input
+                  type="number"
+                  min={existingVal}
+                  max={rowMax}
+                  value={thisAllotted}
+                  onChange={(e) =>
+                    changeAlloc(
+                      q.id,
+                      scheme,
+                      parseInt(e.currentTarget.value, 10) || 0
+                    )
+                  }
+                  className="w-28 h-10 text-base font-semibold border-2 border-primary focus-visible:ring-2 focus-visible:ring-primary"
+                />
+
+                {existingVal > 0 && (
+                  <div className="text-[11px] text-muted-foreground">
+                    Saved:{" "}
+                    <span className="font-semibold text-foreground">
+                      {existingVal}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          },
+        },
+
+        {
+          key: "seaUsd_log",
+          label: "Sea Freight/Container (USD) - Logistics",
+          render: (q) => {
+            const v = getQuoteValue(q, q.id, "seaFreightPerContainer");
+            return (
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={v}
+                onChange={(e) =>
+                  changePrice(
+                    q.id,
+                    "seaFreightPerContainer",
+                    parseFloat(e.currentTarget.value) || 0
+                  )
+                }
+                className="w-32"
+              />
+            );
+          },
+        },
+        {
+          key: "hdo_log",
+          label: "HDO per BOL (INR) - Logistics",
+          render: (q) => {
+            const v = getQuoteValue(q, q.id, "houseDeliveryOrderPerBOL");
+            return (
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={v}
+                onChange={(e) =>
+                  changePrice(
+                    q.id,
+                    "houseDeliveryOrderPerBOL",
+                    parseFloat(e.currentTarget.value) || 0
+                  )
+                }
+                className="w-32"
+              />
+            );
+          },
+        },
+        {
+          key: "cfs_log",
+          label: "CFS/Container (INR) - Logistics",
+          render: (q) => {
+            const v = getQuoteValue(q, q.id, "cfsPerContainer");
+            return (
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={v}
+                onChange={(e) =>
+                  changePrice(
+                    q.id,
+                    "cfsPerContainer",
+                    parseFloat(e.currentTarget.value) || 0
+                  )
+                }
+                className="w-32"
+              />
+            );
+          },
+        },
+        {
+          key: "trn_log",
+          label: "Transport/Container (INR) - Logistics",
+          render: (q) => {
+            const v = getQuoteValue(q, q.id, "transportationPerContainer");
+            return (
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={v}
+                onChange={(e) =>
+                  changePrice(
+                    q.id,
+                    "transportationPerContainer",
+                    parseFloat(e.currentTarget.value) || 0
+                  )
+                }
+                className="w-32"
+              />
+            );
+          },
+        },
+        {
+          key: "edi_log",
+          label: "EDI per BOE (INR) - Logistics",
+          render: (q) => {
+            const v = getQuoteValue(q, q.id, "ediChargesPerBOE");
+            return (
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={v}
+                onChange={(e) =>
+                  changePrice(
+                    q.id,
+                    "ediChargesPerBOE",
+                    parseFloat(e.currentTarget.value) || 0
+                  )
+                }
+                className="w-32"
+              />
+            );
+          },
+        },
+        {
+          key: "chaHome_log",
+          label: "CHA Home (INR) - Logistics",
+          render: (q) => {
+            const v = getQuoteValue(q, q.id, "chaChargesHome");
+            return (
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={v}
+                onChange={(e) =>
+                  changePrice(
+                    q.id,
+                    "chaChargesHome",
+                    parseFloat(e.currentTarget.value) || 0
+                  )
+                }
+                className="w-32"
+              />
+            );
+          },
+        },
+        {
+          key: "chaMoowr_log",
+          label: "CHA MOOWR (INR) - Logistics",
+          render: (q) => {
+            const v = getQuoteValue(q, q.id, "chaChargesMOOWR");
+            return (
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={v}
+                onChange={(e) =>
+                  changePrice(
+                    q.id,
+                    "chaChargesMOOWR",
+                    parseFloat(e.currentTarget.value) || 0
+                  )
+                }
+                className="w-32"
+              />
+            );
+          },
+        },
+        {
+          key: "ware_log",
+          label: "MOOWR Re-warehousing/BOE (INR) - Logistics",
+          render: (q) => {
+            const v = getQuoteValue(q, q.id, "mooWRReeWarehousingCharges");
+            return (
+              <Input
+                type="number"
+                step="0.01"
+                min={0}
+                value={v}
+                onChange={(e) =>
+                  changePrice(
+                    q.id,
+                    "mooWRReeWarehousingCharges",
+                    parseFloat(e.currentTarget.value) || 0
+                  )
+                }
+                className="w-36"
+              />
+            );
+          },
+        },
+
+        {
+          key: "lineTotal_log",
+          label: `Line Total (${scheme.toUpperCase()}) - Logistics`,
+          render: (q) => {
+            const lt =
+              scheme === "home"
+                ? logisticsTotals[q.id]?.home || 0
+                : logisticsTotals[q.id]?.moowr || 0;
+            return fmt.money(lt);
+          },
+        },
+        {
+          key: "allottedCost_log",
+          label: `Allotted Cost (${scheme.toUpperCase()}) - Logistics`,
+          render: (q) => {
+            const a =
+              alloc[q.id]?.[
+                scheme === "home"
+                  ? "containersAllottedHome"
+                  : "containersAllottedMOOWR"
+              ] || 0;
+            const lt =
+              scheme === "home"
+                ? logisticsTotals[q.id]?.home || 0
+                : logisticsTotals[q.id]?.moowr || 0;
+            return <span className="font-semibold">{fmt.money(a * lt)}</span>;
+          },
+        },
+      ];
+
+      const renderMatrix = (rowsToRender: RowDef[], headerLabel?: string) => (
+        <div className="w-full">
+          {headerLabel && (
+            <div className="px-3 pb-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {headerLabel}
+              </div>
+            </div>
+          )}
+
+          <table className="w-max min-w-full text-sm border-collapse">
+            <thead className="sticky top-0 bg-background z-30">
+              <tr>
+                <th className={fieldThCls}>Field</th>
+                {quotes.map((q: any) => (
+                  <th
+                    key={q.id}
+                    className={vendorThCls}
+                    title={fmt.plain(q.vendorName)}
+                  >
+                    <div className="font-semibold truncate max-w-[240px]">
+                      {fmt.plain(q.vendorName)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Offered:{" "}
+                      <span className="font-medium">
+                        {fmt.plain(q.numberOfContainers)}
+                      </span>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+
+            <tbody>
+              {rowsToRender.map((r) => {
+                const isAllottedLog = r.key === "allotted_log";
+                return (
+                  <tr
+                    key={r.key}
+                    className={`border-b last:border-b-0 ${
+                      isAllottedLog ? "bg-primary/5" : ""
+                    }`}
+                  >
+                    <td
+                      className={
+                        isAllottedLog ? standoutFieldTdCls : fieldTdCls
+                      }
+                    >
+                      {r.label}
+                      {isAllottedLog && (
+                        <div className="text-[11px] font-normal text-muted-foreground">
+                          Priority field
+                        </div>
+                      )}
+                    </td>
+                    {quotes.map((q: any) => (
+                      <td
+                        key={`${r.key}-${q.id}`}
+                        className={
+                          isAllottedLog ? standoutVendorTdCls : vendorTdCls
+                        }
+                      >
+                        {r.render?.(q)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      );
+
+      return (
+        <div className="w-full space-y-4">
+          {/* Bottom: Logistics highlighted container */}
+          <div className="rounded-xl border-2 bg-muted/20">
+            <div className="px-4 pt-4 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-semibold">
+                    Logistics finalisation (editable)
+                  </div>
+                  <Badge variant="default" className="shrink-0">
+                    Editable
+                  </Badge>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Update allocation + cost fields below. Totals update
+                  instantly.
+                </div>
+              </div>
+
+              <div className="flex flex-col items-end gap-2 shrink-0">
+                <div className="flex items-center gap-2">
+                  {hasAnyPriceEdits && (
+                    <Badge variant="default" className="shrink-0">
+                      Price edited
+                    </Badge>
+                  )}
+                  <Badge variant="secondary" className="shrink-0">
+                    {scheme.toUpperCase()} Alloc:{" "}
+                    <span className="ml-1 font-semibold">
+                      {schemeAllocated[scheme]}
+                    </span>
+                  </Badge>
+                </div>
+
+                <div className="text-xs text-muted-foreground text-right">
+                  Scheme cost:{" "}
+                  <span className="font-semibold">
+                    {fmt.money(schemeLogisticsPrice[scheme])}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 pt-3">
+              <div className="rounded-lg border bg-background">
+                <div className="p-4">{renderMatrix(rowsLog)}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Top: Vendor submission + LEAFI (collapsible; collapsed by default) */}
+          <div className="rounded-lg border bg-background">
+            <div className="px-4 pt-4 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">
+                  Vendor submission + LEAFI recommendation
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Vendor inputs are read-only here; LEAFI allocation/cost shown
+                  for comparison.
+                </div>
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0"
+                onClick={() => {
+                  setVendorLeafiOpen((s) => !s);
+                }}
+                aria-expanded={vendorLeafiOpen}
+              >
+                <ChevronDown
+                  className={`h-4 w-4 mr-2 transition-transform ${
+                    vendorLeafiOpen ? "rotate-180" : ""
+                  }`}
+                />
+                {vendorLeafiOpen ? "Hide" : "Show"}
+              </Button>
+            </div>
+
+            {vendorLeafiOpen ? (
+              <div className="p-4">{renderMatrix(rowsTop)}</div>
+            ) : (
+              <div className="px-4 pb-4 pt-3 text-xs text-muted-foreground">
+                Collapsed (click <span className="font-medium">Show</span> to
+                view vendor fields + LEAFI recommendation).
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ----------------------------
+    // Existing behavior for non-combined (your current matrix, unchanged)
+    // ----------------------------
+    const rows: RowDef[] = [
+      {
+        key: "quotedContainers",
+        label: "Quoted Containers",
+        render: (q) => fmt.plain(q.numberOfContainers),
+      },
+      {
+        key: "allotted",
+        label: `Allotted (${scheme.toUpperCase()})`,
+        render: (q) => {
           const thisAllotted =
             state[q.id]?.[
               scheme === "home"
@@ -587,409 +1341,81 @@ const FinalizeRFQ: React.FC = () => {
                 : "containersAllottedMOOWR"
             ] || 0;
 
-          const rowMax = computeMaxForRow(q.id);
+          const rowMax = computeMaxForRow(q.id, scheme);
 
-          const totalsForRow = isLogistics ? logisticsTotals : baseTotals;
-          const lineTotal =
-            scheme === "home"
-              ? totalsForRow[q.id]?.home || 0
-              : totalsForRow[q.id]?.moowr || 0;
-
-          const allottedCost = thisAllotted * lineTotal;
-
-          const seaFreightUsd = isLogistics
-            ? getQuoteValue(q, q.id, "seaFreightPerContainer")
-            : fmt.num(q.seaFreightPerContainer);
-
-          const seaFreightInr = seaFreightUsd * usdToInr;
-
-          const hdo = isLogistics
-            ? getQuoteValue(q, q.id, "houseDeliveryOrderPerBOL")
-            : fmt.num(q.houseDeliveryOrderPerBOL);
-
-          const cfs = isLogistics
-            ? getQuoteValue(q, q.id, "cfsPerContainer")
-            : fmt.num(q.cfsPerContainer);
-
-          const trn = isLogistics
-            ? getQuoteValue(q, q.id, "transportationPerContainer")
-            : fmt.num(q.transportationPerContainer);
-
-          const edi = isLogistics
-            ? getQuoteValue(q, q.id, "ediChargesPerBOE")
-            : fmt.num(q.ediChargesPerBOE);
-
-          const chaHome = isLogistics
-            ? getQuoteValue(q, q.id, "chaChargesHome")
-            : fmt.num(q.chaChargesHome);
-
-          const chaMoowr = isLogistics
-            ? getQuoteValue(q, q.id, "chaChargesMOOWR")
-            : fmt.num(q.chaChargesMOOWR);
-
-          const ware = isLogistics
-            ? getQuoteValue(q, q.id, "mooWRReeWarehousingCharges")
-            : fmt.num(q.mooWRReeWarehousingCharges);
-
-          const labelCls = "w-64 pr-4 text-muted-foreground";
-          const rowCls = "border-b last:border-b-0";
-          const cellCls = "py-2 align-top";
+          if (!isLogisticsOnly)
+            return <span className="font-medium">{thisAllotted}</span>;
 
           return (
-            <div
-              key={`${q.id}-${mode}-${scheme}`}
-              className="rounded-lg border bg-background overflow-hidden"
-            >
-              {/* Vendor header */}
-              <div className="px-4 py-3 border-b flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-semibold truncate">
+            <div className="flex flex-col gap-1">
+              <Input
+                type="number"
+                min={existingVal}
+                max={rowMax}
+                value={thisAllotted}
+                onChange={(e) =>
+                  changeAlloc(
+                    q.id,
+                    scheme,
+                    parseInt(e.currentTarget.value, 10) || 0
+                  )
+                }
+                className="w-28"
+              />
+              {existingVal > 0 && (
+                <div className="text-[11px] text-muted-foreground">
+                  Saved: <span className="font-medium">{existingVal}</span>
+                </div>
+              )}
+            </div>
+          );
+        },
+      },
+    ];
+
+    return (
+      <div className="w-full">
+        <table className="w-max min-w-full text-sm border-collapse">
+          <thead className="sticky top-0 bg-background z-10">
+            <tr>
+              <th className="text-left font-semibold p-3 border-b min-w-[260px]">
+                Field
+              </th>
+              {quotes.map((q: any) => (
+                <th
+                  key={q.id}
+                  className="text-left font-semibold p-3 border-b min-w-[260px]"
+                  title={fmt.plain(q.vendorName)}
+                >
+                  <div className="font-semibold truncate max-w-[240px]">
                     {fmt.plain(q.vendorName)}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Quoted Containers:{" "}
+                    Offered:{" "}
                     <span className="font-medium">
                       {fmt.plain(q.numberOfContainers)}
                     </span>
-                    {" • "}
-                    Scheme:{" "}
-                    <span className="font-medium">{scheme.toUpperCase()}</span>
                   </div>
-                </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
 
-                <div className="text-right shrink-0">
-                  <div className="text-xs text-muted-foreground">
-                    Allotted Cost
-                  </div>
-                  <div className="font-bold">{fmt.money(allottedCost)}</div>
-                </div>
-              </div>
-
-              {/* Vertical table */}
-              <div className="p-4">
-                <table className="w-full text-sm">
-                  <tbody>
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        Allotted ({scheme.toUpperCase()})
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            min={existingVal}
-                            max={rowMax}
-                            value={thisAllotted}
-                            onChange={(e) =>
-                              changeAlloc(
-                                q.id,
-                                scheme,
-                                parseInt(e.currentTarget.value, 10) || 0
-                              )
-                            }
-                            className="w-32"
-                          />
-                        ) : (
-                          <span className="font-medium">{thisAllotted}</span>
-                        )}
-                        {existingVal > 0 && (
-                          <div className="text-xs text-muted-foreground mt-1">
-                            Already saved:{" "}
-                            <span className="font-medium">{existingVal}</span>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        Line Total (INR)
-                      </td>
-                      <td className={cellCls}>{fmt.money(lineTotal)}</td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>T/D</td>
-                      <td className={cellCls}>
-                        {fmt.plain(q.transshipOrDirect)}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        Shipping Line
-                      </td>
-                      <td className={cellCls}>
-                        {fmt.plain(q.shippingLineName)}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>Vessel</td>
-                      <td className={cellCls}>{fmt.plain(q.vesselName)}</td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>ETD</td>
-                      <td className={cellCls}>{fmt.date(q.vesselETD)}</td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>ETA</td>
-                      <td className={cellCls}>{fmt.date(q.vesselETA)}</td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        Sea Freight/Container (USD)
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min={0}
-                            value={seaFreightUsd}
-                            onChange={(e) =>
-                              changePrice(
-                                q.id,
-                                "seaFreightPerContainer",
-                                parseFloat(e.currentTarget.value) || 0
-                              )
-                            }
-                            className="w-40"
-                          />
-                        ) : (
-                          <span className="font-medium">
-                            {fmt.num(seaFreightUsd).toFixed(2)}
-                          </span>
-                        )}
-                        <div className="text-xs text-muted-foreground mt-1">
-                          Sea Freight/Container (INR):{" "}
-                          <span className="font-medium">
-                            {fmt.money(seaFreightInr)}
-                          </span>{" "}
-                          <span className="ml-2">
-                            (USD→INR:{" "}
-                            <span className="font-semibold">
-                              {usdToInr.toFixed(4)}
-                            </span>
-                            )
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        HDO per BOL (INR)
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min={0}
-                            value={hdo}
-                            onChange={(e) =>
-                              changePrice(
-                                q.id,
-                                "houseDeliveryOrderPerBOL",
-                                parseFloat(e.currentTarget.value) || 0
-                              )
-                            }
-                            className="w-40"
-                          />
-                        ) : (
-                          fmt.money(q.houseDeliveryOrderPerBOL)
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        CFS/Container (INR)
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min={0}
-                            value={cfs}
-                            onChange={(e) =>
-                              changePrice(
-                                q.id,
-                                "cfsPerContainer",
-                                parseFloat(e.currentTarget.value) || 0
-                              )
-                            }
-                            className="w-40"
-                          />
-                        ) : (
-                          fmt.money(q.cfsPerContainer)
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        Transport/Container (INR)
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min={0}
-                            value={trn}
-                            onChange={(e) =>
-                              changePrice(
-                                q.id,
-                                "transportationPerContainer",
-                                parseFloat(e.currentTarget.value) || 0
-                              )
-                            }
-                            className="w-40"
-                          />
-                        ) : (
-                          fmt.money(q.transportationPerContainer)
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        EDI per BOE (INR)
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min={0}
-                            value={edi}
-                            onChange={(e) =>
-                              changePrice(
-                                q.id,
-                                "ediChargesPerBOE",
-                                parseFloat(e.currentTarget.value) || 0
-                              )
-                            }
-                            className="w-40"
-                          />
-                        ) : (
-                          fmt.money(q.ediChargesPerBOE)
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        CHA Home (INR)
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min={0}
-                            value={chaHome}
-                            onChange={(e) =>
-                              changePrice(
-                                q.id,
-                                "chaChargesHome",
-                                parseFloat(e.currentTarget.value) || 0
-                              )
-                            }
-                            className="w-40"
-                          />
-                        ) : (
-                          fmt.money(q.chaChargesHome)
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        CHA MOOWR (INR)
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min={0}
-                            value={chaMoowr}
-                            onChange={(e) =>
-                              changePrice(
-                                q.id,
-                                "chaChargesMOOWR",
-                                parseFloat(e.currentTarget.value) || 0
-                              )
-                            }
-                            className="w-40"
-                          />
-                        ) : (
-                          fmt.money(q.chaChargesMOOWR)
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        MOOWR Re-warehousing/BOE (INR)
-                      </td>
-                      <td className={cellCls}>
-                        {isLogistics ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min={0}
-                            value={ware}
-                            onChange={(e) =>
-                              changePrice(
-                                q.id,
-                                "mooWRReeWarehousingCharges",
-                                parseFloat(e.currentTarget.value) || 0
-                              )
-                            }
-                            className="w-44"
-                          />
-                        ) : (
-                          fmt.money(q.mooWRReeWarehousingCharges)
-                        )}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        Quote Validity
-                      </td>
-                      <td className={cellCls}>
-                        {fmt.date(q.quoteValidityDate)}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>Message</td>
-                      <td className={`${cellCls} whitespace-pre-wrap`}>
-                        {fmt.plain(q.message)}
-                      </td>
-                    </tr>
-
-                    <tr className={rowCls}>
-                      <td className={`${labelCls} ${cellCls}`}>
-                        Quote Created
-                      </td>
-                      <td className={cellCls}>{fmt.datetime(q.createdAt)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          );
-        })}
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-b last:border-b-0">
+                <td className="p-3 align-top text-muted-foreground font-medium whitespace-nowrap">
+                  {r.label}
+                </td>
+                {quotes.map((q: any) => (
+                  <td key={`${r.key}-${q.id}`} className="p-3 align-top">
+                    {r.render?.(q)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     );
   };
@@ -1016,7 +1442,9 @@ const FinalizeRFQ: React.FC = () => {
                 variant="outline"
                 size="sm"
                 className="h-8"
-                onClick={() => openFullscreen(title, mode, scheme)}
+                onClick={() => {
+                  openFullscreen(title, mode, scheme);
+                }}
                 title="Open table in full screen"
               >
                 <Maximize2 className="h-4 w-4 mr-2" />
@@ -1060,58 +1488,77 @@ const FinalizeRFQ: React.FC = () => {
 
   return (
     <div className="space-y-6 max-w-full overflow-x-hidden">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h1 className="text-2xl font-bold">Finalize RFQ #{rfq.rfqNumber}</h1>
-        <Button variant="outline" onClick={() => navigate("/dashboard")}>
-          Back
-        </Button>
+
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => navigate("/app")}>
+            Back
+          </Button>
+        </div>
       </div>
 
       {rfqInfoGrid}
 
       {/* Vendor (LEAFI) Allocation */}
+      {/* Allocation (2 tables only) */}
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-xl font-bold">Vendor Allocation</h2>
-        <Badge variant="secondary" className="font-semibold">
-          LEAFI (read-only)
+        <h2 className="text-xl font-bold">Allocation Comparison</h2>
+        <Badge
+          variant={hasAnyPriceEdits ? "default" : "secondary"}
+          className="font-semibold"
+        >
+          LEAFI + Logistics {hasAnyPriceEdits ? "(price edited)" : ""}
         </Badge>
       </div>
 
-      {/* one below the other (no side-by-side) */}
       <div className="grid gap-6">
-        {renderTable("Vendor CHA-HOME", "leafi", "home")}
-        {renderTable("Vendor CHA-MOOWR", "leafi", "moowr")}
+        {renderTable("CHA-HOME (All Vendors)", "combined", "home")}
+        {renderTable("CHA-MOOWR (All Vendors)", "combined", "moowr")}
       </div>
+
+      {/* one below the other (no side-by-side) 
+      <Card className="w-full max-w-full">
+        <CardHeader className="space-y-1">
+          <CardTitle className="flex items-center gap-2">
+            Vendor Allocation (LEAFI)
+            <Badge variant="secondary">HOME + MOOWR</Badge>
+          </CardTitle>
+          <div className="text-xs text-muted-foreground">
+            Two views under one section for easier comparison.
+          </div>
+        </CardHeader>
+
+        <CardContent className="grid gap-6">
+          {renderTable("Vendor CHA-HOME", "leafi", "home")}
+          {renderTable("Vendor CHA-MOOWR", "leafi", "moowr")}
+        </CardContent>
+      </Card>
 
       <Card className="w-full max-w-full">
         <CardContent className="pt-6">
           <div className="flex flex-col gap-1 text-right">
             <div className="font-bold">
-              LEAFI total vehicles: {vendorAutoTotal}
+              LEAFI total vehicles:{" "}
+              {rfq && totalAllocated === rfq.numberOfContainers
+                ? vendorAutoTotal
+                : leafiComparable.total}
             </div>
             <div className="font-bold">
-              LEAFI total price: {fmt.money(vendorAutoPrice)}
+              LEAFI total price:{" "}
+              {rfq && totalAllocated === rfq.numberOfContainers
+                ? fmt.money(vendorAutoPrice)
+                : fmt.money(leafiComparable.price)}
             </div>
+
+            {rfq && totalAllocated !== rfq.numberOfContainers && (
+              <div className="text-xs text-muted-foreground">
+                (Comparable for current allocation: {totalAllocated} containers)
+              </div>
+            )}
           </div>
         </CardContent>
-      </Card>
-
-      {/* Logistics Allocation */}
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-xl font-bold">Logistics Allocation</h2>
-        <Badge
-          variant={hasAnyPriceEdits ? "default" : "secondary"}
-          className="font-semibold"
-        >
-          Logistics {hasAnyPriceEdits ? "(price edited)" : ""}
-        </Badge>
-      </div>
-
-      {/* one below the other (no side-by-side) */}
-      <div className="grid gap-6">
-        {renderTable("Logistics CHA-HOME", "logistics", "home")}
-        {renderTable("Logistics CHA-MOOWR", "logistics", "moowr")}
-      </div>
+      </Card>*/}
 
       <Card className="w-full max-w-full">
         <CardContent className="pt-6">
@@ -1142,7 +1589,11 @@ const FinalizeRFQ: React.FC = () => {
                 {fmt.diffMoney(priceDeltaVsLeafi)}
               </div>
               <div className="text-xs text-muted-foreground">
-                (Logistics − LEAFI)
+                (Logistics − LEAFI
+                {rfq && totalAllocated !== rfq.numberOfContainers
+                  ? " (comparable)"
+                  : ""}
+                )
               </div>
             </div>
           </div>
@@ -1237,6 +1688,12 @@ const FinalizeRFQ: React.FC = () => {
             <div className="grid gap-2 md:grid-cols-3">
               <div className="rounded border p-3">
                 <div className="text-xs text-muted-foreground">LEAFI total</div>
+                {rfq && totalAllocated !== rfq.numberOfContainers && (
+                  <div className="text-[11px] text-muted-foreground">
+                    Comparable for {totalAllocated} containers
+                  </div>
+                )}
+
                 <div className="font-semibold">
                   {fmt.money(vendorAutoPrice)}
                 </div>
