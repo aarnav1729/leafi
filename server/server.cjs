@@ -1576,29 +1576,36 @@ app.post("/api/allocations", authenticate, async (req, res) => {
         </table>
       `;
 
-      await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
-        message: {
-          subject: `RFQ ${rfq.rfqNumber} Finalized for ${vendorName}`,
-          body: {
-            contentType: "HTML",
-            content: `
-              <p>Hello,</p>
-              <h4>RFQ Details</h4>${makeTbl(rfqRows)}
-              <h4>Quote Details</h4>${makeTbl(quoteRows2)}
-              <h4>Finalization Details</h4>${makeTbl(finalRows)}
-              <p>Regards,<br/>LEAFI Team</p>
-            `,
+      try {
+        await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+          message: {
+            subject: `RFQ ${rfq.rfqNumber} Finalized for ${vendorName}`,
+            body: {
+              contentType: "HTML",
+              content: `
+                <p>Hello,</p>
+                <h4>RFQ Details</h4>${makeTbl(rfqRows)}
+                <h4>Quote Details</h4>${makeTbl(quoteRows2)}
+                <h4>Finalization Details</h4>${makeTbl(finalRows)}
+                <p>Regards,<br/>LEAFI Team</p>
+              `,
+            },
+            toRecipients: [
+              { emailAddress: { address: SENDER_EMAIL } },
+              ...(vendorEmail
+                ? [{ emailAddress: { address: vendorEmail } }]
+                : []),
+              { emailAddress: { address: "ramanjulu@premierenergies.com" } },
+            ],
           },
-          toRecipients: [
-            { emailAddress: { address: SENDER_EMAIL } },
-            ...(vendorEmail
-              ? [{ emailAddress: { address: vendorEmail } }]
-              : []),
-            { emailAddress: { address: "ramanjulu@premierenergies.com" } },
-          ],
-        },
-        saveToSentItems: true,
-      });
+          saveToSentItems: true,
+        });
+      } catch (e) {
+        console.error(
+          "[GRAPH] Finalization email failed (ignored):",
+          e?.message || e
+        );
+      }
     }
 
     res.json({

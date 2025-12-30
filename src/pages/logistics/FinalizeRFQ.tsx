@@ -14,6 +14,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
 import { Badge } from "@/components/ui/badge";
 import { Maximize2, X, ChevronDown } from "lucide-react";
 
@@ -229,8 +238,11 @@ const FinalizeRFQ: React.FC = () => {
       const ware = getQuoteValue(q, quoteId, "mooWRReeWarehousingCharges");
 
       // Mirror server formula with edited values
+      // HOME scheme (explicit — no MOOWR costs)
       const home = seaInINR + hdo + cfs + trn + edi + chaHome;
-      const moowr = home + ware + chaMoowr;
+
+      // MOOWR scheme (HOME base + MOOWR-only costs)
+      const moowr = seaInINR + hdo + cfs + trn + edi + chaMoowr + ware;
 
       t[quoteId] = { home, moowr };
     });
@@ -723,15 +735,18 @@ const FinalizeRFQ: React.FC = () => {
     };
 
     const fieldThCls =
-      "text-left font-semibold p-3 border-b min-w-[280px] sticky left-0 bg-background z-20";
-    const vendorThCls = "text-left font-semibold p-3 border-b min-w-[260px]";
-    const fieldTdCls =
-      "p-3 align-top text-muted-foreground font-medium whitespace-nowrap sticky left-0 bg-background z-10";
-    const vendorTdCls = "p-3 align-top";
-    const standoutFieldTdCls =
-      "p-3 align-top font-semibold text-foreground whitespace-nowrap sticky left-0 bg-background z-10 border-l-4 border-primary";
+      "text-left font-semibold p-2 border-b min-w-[200px] sticky left-0 bg-background z-20";
 
-    const standoutVendorTdCls = "p-3 align-top bg-primary/5";
+    const vendorThCls = "text-left font-semibold p-2 border-b min-w-[180px]";
+
+    const fieldTdCls =
+      "p-2 align-top text-muted-foreground font-medium whitespace-nowrap sticky left-0 bg-background z-10";
+
+    const vendorTdCls = "p-2 align-top";
+    const standoutFieldTdCls =
+      "p-2 align-top font-semibold text-foreground whitespace-nowrap sticky left-0 bg-background z-10 border-l-4 border-primary";
+
+    const standoutVendorTdCls = "p-2 align-top bg-primary/5";
 
     // ----------------------------
     // Combined: Quote-fields rows + Logistics editable rows (same vendor columns)
@@ -877,6 +892,9 @@ const FinalizeRFQ: React.FC = () => {
         },
       ];
 
+      const isHome = scheme === "home";
+      const isMoowr = scheme === "moowr";
+
       const rowsLog: RowDef[] = [
         // ---------------- Logistics finalisation (editable) ----------------
         {
@@ -947,7 +965,7 @@ const FinalizeRFQ: React.FC = () => {
                     parseFloat(e.currentTarget.value) || 0
                   )
                 }
-                className="w-32"
+                className="w-24"
               />
             );
           },
@@ -970,7 +988,7 @@ const FinalizeRFQ: React.FC = () => {
                     parseFloat(e.currentTarget.value) || 0
                   )
                 }
-                className="w-32"
+                className="w-24"
               />
             );
           },
@@ -993,7 +1011,7 @@ const FinalizeRFQ: React.FC = () => {
                     parseFloat(e.currentTarget.value) || 0
                   )
                 }
-                className="w-32"
+                className="w-24"
               />
             );
           },
@@ -1016,7 +1034,7 @@ const FinalizeRFQ: React.FC = () => {
                     parseFloat(e.currentTarget.value) || 0
                   )
                 }
-                className="w-32"
+                className="w-24"
               />
             );
           },
@@ -1039,12 +1057,12 @@ const FinalizeRFQ: React.FC = () => {
                     parseFloat(e.currentTarget.value) || 0
                   )
                 }
-                className="w-32"
+                className="w-24"
               />
             );
           },
         },
-        {
+        isHome && {
           key: "chaHome_log",
           label: "CHA Home (INR) - Logistics",
           render: (q) => {
@@ -1062,12 +1080,13 @@ const FinalizeRFQ: React.FC = () => {
                     parseFloat(e.currentTarget.value) || 0
                   )
                 }
-                className="w-32"
+                className="w-24"
               />
             );
           },
         },
-        {
+
+        isMoowr && {
           key: "chaMoowr_log",
           label: "CHA MOOWR (INR) - Logistics",
           render: (q) => {
@@ -1085,12 +1104,13 @@ const FinalizeRFQ: React.FC = () => {
                     parseFloat(e.currentTarget.value) || 0
                   )
                 }
-                className="w-32"
+                className="w-24"
               />
             );
           },
         },
-        {
+
+        isMoowr && {
           key: "ware_log",
           label: "MOOWR Re-warehousing/BOE (INR) - Logistics",
           render: (q) => {
@@ -1108,7 +1128,7 @@ const FinalizeRFQ: React.FC = () => {
                     parseFloat(e.currentTarget.value) || 0
                   )
                 }
-                className="w-36"
+                className="w-28"
               />
             );
           },
@@ -1142,7 +1162,7 @@ const FinalizeRFQ: React.FC = () => {
             return <span className="font-semibold">{fmt.money(a * lt)}</span>;
           },
         },
-      ];
+      ].filter((r): r is RowDef => Boolean(r));
 
       const renderMatrix = (rowsToRender: RowDef[], headerLabel?: string) => (
         <div className="w-full">
@@ -1164,7 +1184,7 @@ const FinalizeRFQ: React.FC = () => {
                     className={vendorThCls}
                     title={fmt.plain(q.vendorName)}
                   >
-                    <div className="font-semibold truncate max-w-[240px]">
+                    <div className="font-semibold truncate max-w-[160px]">
                       {fmt.plain(q.vendorName)}
                     </div>
                     <div className="text-xs text-muted-foreground">
@@ -1387,7 +1407,7 @@ const FinalizeRFQ: React.FC = () => {
                   className="text-left font-semibold p-3 border-b min-w-[260px]"
                   title={fmt.plain(q.vendorName)}
                 >
-                  <div className="font-semibold truncate max-w-[240px]">
+                  <div className="font-semibold truncate max-w-[160px]">
                     {fmt.plain(q.vendorName)}
                   </div>
                   <div className="text-xs text-muted-foreground">
@@ -1455,12 +1475,12 @@ const FinalizeRFQ: React.FC = () => {
 
           {isLogistics ? (
             <div className="text-xs text-muted-foreground">
-              You can edit both allocation and pricing fields below. Totals
-              update instantly.
+              LEAFI recommendation (read-only).
             </div>
           ) : (
             <div className="text-xs text-muted-foreground">
-              LEAFI recommendation (read-only).
+              You can edit both allocation and pricing fields below. Totals
+              update instantly.
             </div>
           )}
         </CardHeader>
@@ -1499,6 +1519,79 @@ const FinalizeRFQ: React.FC = () => {
       </div>
 
       {rfqInfoGrid}
+
+      {/* Vendor Quote Summary (one row per vendor) */}
+      <Card className="w-full max-w-full">
+        <CardHeader className="space-y-1">
+          <CardTitle>Vendor Quote Summary</CardTitle>
+          <div className="text-xs text-muted-foreground">
+            Quick comparison of key non-price fields across vendor submissions.
+          </div>
+        </CardHeader>
+
+        <CardContent className="p-0">
+          <div
+            className="w-full overflow-auto"
+            style={{
+              maxHeight: "min(50vh, 520px)",
+              WebkitOverflowScrolling: "touch",
+              scrollbarGutter: "stable" as any,
+            }}
+          >
+            <div className="min-w-[1200px] p-4">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="min-w-[160px]">Vendor</TableHead>
+                    <TableHead className="min-w-[160px]">
+                      Number of Containers
+                    </TableHead>
+                    <TableHead className="min-w-[180px]">
+                      Shipping Line Name
+                    </TableHead>
+                    <TableHead className="min-w-[140px]">
+                      Container Type
+                    </TableHead>
+                    <TableHead className="min-w-[180px]">Vessel Name</TableHead>
+                    <TableHead className="min-w-[140px]">Vessel ETD</TableHead>
+                    <TableHead className="min-w-[140px]">Vessel ETA</TableHead>
+                    <TableHead className="min-w-[160px]">
+                      Transship or Direct
+                    </TableHead>
+                    <TableHead className="min-w-[160px]">
+                      Quote Validity Date
+                    </TableHead>
+                    <TableHead className="min-w-[320px]">
+                      Message (Optional)
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody>
+                  {quotes.map((q: any) => (
+                    <TableRow key={q.id}>
+                      <TableCell className="font-semibold">
+                        {fmt.plain(q.vendorName)}
+                      </TableCell>
+                      <TableCell>{fmt.plain(q.numberOfContainers)}</TableCell>
+                      <TableCell>{fmt.plain(q.shippingLineName)}</TableCell>
+                      <TableCell>{fmt.plain(q.containerType)}</TableCell>
+                      <TableCell>{fmt.plain(q.vesselName)}</TableCell>
+                      <TableCell>{fmt.date(q.vesselETD)}</TableCell>
+                      <TableCell>{fmt.date(q.vesselETA)}</TableCell>
+                      <TableCell>{fmt.plain(q.transshipOrDirect)}</TableCell>
+                      <TableCell>{fmt.date(q.quoteValidityDate)}</TableCell>
+                      <TableCell className="whitespace-pre-wrap">
+                        {fmt.plain(q.message)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Vendor (LEAFI) Allocation */}
       {/* Allocation (2 tables only) */}
