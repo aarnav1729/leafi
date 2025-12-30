@@ -280,6 +280,42 @@ BEGIN
   CREATE UNIQUE NONCLUSTERED INDEX UQ_Master_ContainerTypes_value ON dbo.Master_ContainerTypes(value);
 END;
 
+-- Transporter Master (Vendor list used as freight options)
+IF OBJECT_ID('dbo.Master_Transporters','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.Master_Transporters (
+    id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Master_Transporters PRIMARY KEY DEFAULT NEWID(),
+    vendorCode NVARCHAR(150) NOT NULL,     -- what shows as "vendor/company" option (e.g., VENDORA)
+    vendorName NVARCHAR(255) NOT NULL,     -- display name
+    vendorEmail NVARCHAR(255) NULL,        -- for notifications
+    isActive BIT NOT NULL CONSTRAINT DF_Master_Transporters_isActive DEFAULT (1),
+    createdAt DATETIME2 NOT NULL CONSTRAINT DF_Master_Transporters_createdAt DEFAULT SYSUTCDATETIME(),
+    updatedAt DATETIME2 NULL
+  );
+
+  CREATE UNIQUE NONCLUSTERED INDEX UQ_Master_Transporters_vendorCode
+  ON dbo.Master_Transporters(vendorCode);
+END;
+
+-- Seed Transporter Master from existing vendor users (insert-only)
+IF OBJECT_ID('dbo.Users','U') IS NOT NULL
+BEGIN
+  INSERT INTO dbo.Master_Transporters(vendorCode, vendorName, vendorEmail, isActive, createdAt)
+  SELECT DISTINCT
+    ISNULL(NULLIF(LTRIM(RTRIM(u.company)), ''), u.username) AS vendorCode,
+    ISNULL(NULLIF(LTRIM(RTRIM(u.name)), ''), u.username) AS vendorName,
+    CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END AS vendorEmail,
+    1,
+    SYSUTCDATETIME()
+  FROM dbo.Users u
+  WHERE u.role = 'vendor'
+    AND ISNULL(NULLIF(LTRIM(RTRIM(u.company)), ''), u.username) IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM dbo.Master_Transporters t
+      WHERE t.vendorCode = ISNULL(NULLIF(LTRIM(RTRIM(u.company)), ''), u.username)
+    );
+END;
+
 -- ─────────────────────────────────────────────
 -- Seed master values from existing RFQs (insert-only)
 -- ─────────────────────────────────────────────
@@ -1119,14 +1155,31 @@ VALUES
       `);
 
     // fetch vendor emails
-    const companyParams = vendors.map((_, i) => `@c${i}`).join(", ");
+    // fetch vendor emails (prefer Master_Transporters.vendorEmail)
+    const codesCte = vendors
+      .map((_, i) => `SELECT @c${i} AS code`)
+      .join(" UNION ALL ");
     let req2 = pool.request();
     vendors.forEach((c, i) => req2.input(`c${i}`, sql.NVarChar, c));
+
     const emRes = await req2.query(`
-      SELECT username AS email
-      FROM dbo.Users
-      WHERE role = 'vendor' AND company IN (${companyParams})
-    `);
+  ;WITH V AS (${codesCte})
+  SELECT DISTINCT
+    COALESCE(
+      NULLIF(LTRIM(RTRIM(t.vendorEmail)), ''),
+      CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END
+    ) AS email
+  FROM V
+  LEFT JOIN dbo.Master_Transporters t
+    ON t.vendorCode = V.code AND ISNULL(t.isActive, 1) = 1
+  LEFT JOIN dbo.Users u
+    ON u.company = V.code AND u.role = 'vendor'
+  WHERE COALESCE(
+    NULLIF(LTRIM(RTRIM(t.vendorEmail)), ''),
+    CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END
+  ) IS NOT NULL
+`);
+
     const emails = (emRes.recordset || []).map((r) => r.email).filter(Boolean);
 
     // build HTML table
@@ -1504,10 +1557,21 @@ app.post("/api/allocations", authenticate, async (req, res) => {
     const emailRes = await pool
       .request()
       .input("company", sql.NVarChar, vendorName).query(`
-        SELECT TOP 1 username AS email
-        FROM dbo.Users
-        WHERE company = @company
-      `);
+      SELECT TOP 1
+        COALESCE(
+          NULLIF(LTRIM(RTRIM(t.vendorEmail)), ''),
+          CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END
+        ) AS email
+      FROM dbo.Master_Transporters t
+      FULL OUTER JOIN dbo.Users u
+        ON u.company = t.vendorCode AND u.role = 'vendor'
+      WHERE (t.vendorCode = @company OR u.company = @company)
+        AND COALESCE(
+          NULLIF(LTRIM(RTRIM(t.vendorEmail)), ''),
+          CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END
+        ) IS NOT NULL
+    `);
+
     const vendorEmail = emailRes.recordset[0]?.email;
 
     if (rfq && totalAllocated >= Number(rfq.numberOfContainers || 0)) {
@@ -1620,6 +1684,173 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 
 // ========================= Admin: master keys/meta =========================
 // ========================= Admin: Users CRUD =========================
+// ========================= Admin: Transporters CRUD =========================
+app.get(
+  "/api/admin/transporters",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    try {
+      const pool = await getPool();
+      const r = await pool.request().query(`
+        SELECT id, vendorCode, vendorName, vendorEmail, isActive, createdAt, updatedAt
+        FROM dbo.Master_Transporters
+        ORDER BY vendorName ASC
+      `);
+      res.json(r.recordset || []);
+    } catch (err) {
+      console.error("[API] GET /api/admin/transporters error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+app.post(
+  "/api/admin/transporters",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const vendorCode = String(req.body?.vendorCode || "").trim();
+    const vendorName = String(req.body?.vendorName || "").trim();
+    const vendorEmailRaw = req.body?.vendorEmail;
+    const vendorEmail =
+      vendorEmailRaw == null
+        ? null
+        : String(vendorEmailRaw || "").trim() || null;
+    const isActive =
+      typeof req.body?.isActive === "boolean" ? req.body.isActive : true;
+
+    if (!vendorCode)
+      return res.status(400).json({ message: "vendorCode required" });
+    if (!vendorName)
+      return res.status(400).json({ message: "vendorName required" });
+
+    try {
+      const pool = await getPool();
+
+      const exists = await pool
+        .request()
+        .input("vendorCode", sql.NVarChar(150), vendorCode)
+        .query(
+          `SELECT TOP 1 1 AS ok FROM dbo.Master_Transporters WHERE vendorCode = @vendorCode`
+        );
+
+      if (exists.recordset?.length) {
+        return res.status(409).json({ message: "vendorCode already exists" });
+      }
+
+      await pool
+        .request()
+        .input("vendorCode", sql.NVarChar(150), vendorCode)
+        .input("vendorName", sql.NVarChar(255), vendorName)
+        .input("vendorEmail", sql.NVarChar(255), vendorEmail)
+        .input("isActive", sql.Bit, isActive).query(`
+          INSERT INTO dbo.Master_Transporters (vendorCode, vendorName, vendorEmail, isActive, createdAt)
+          VALUES (@vendorCode, @vendorName, @vendorEmail, @isActive, SYSUTCDATETIME())
+        `);
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[API] POST /api/admin/transporters error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+app.put(
+  "/api/admin/transporters/:id",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const { id } = req.params;
+
+    const hasVendorCode = typeof req.body?.vendorCode === "string";
+    const hasVendorName = typeof req.body?.vendorName === "string";
+    const hasVendorEmail = "vendorEmail" in (req.body || {});
+    const hasIsActive = typeof req.body?.isActive === "boolean";
+
+    if (!hasVendorCode && !hasVendorName && !hasVendorEmail && !hasIsActive) {
+      return res.status(400).json({ message: "Nothing to update" });
+    }
+
+    try {
+      const pool = await getPool();
+
+      const sets = [];
+      const r = pool.request().input("id", sql.UniqueIdentifier, id);
+
+      if (hasVendorCode) {
+        const vendorCode = String(req.body.vendorCode || "").trim();
+        if (!vendorCode)
+          return res
+            .status(400)
+            .json({ message: "vendorCode cannot be empty" });
+        r.input("vendorCode", sql.NVarChar(150), vendorCode);
+        sets.push("vendorCode = @vendorCode");
+      }
+
+      if (hasVendorName) {
+        const vendorName = String(req.body.vendorName || "").trim();
+        if (!vendorName)
+          return res
+            .status(400)
+            .json({ message: "vendorName cannot be empty" });
+        r.input("vendorName", sql.NVarChar(255), vendorName);
+        sets.push("vendorName = @vendorName");
+      }
+
+      if (hasVendorEmail) {
+        const vendorEmailRaw = req.body.vendorEmail;
+        const vendorEmail =
+          vendorEmailRaw == null
+            ? null
+            : String(vendorEmailRaw || "").trim() || null;
+        r.input("vendorEmail", sql.NVarChar(255), vendorEmail);
+        sets.push("vendorEmail = @vendorEmail");
+      }
+
+      if (hasIsActive) {
+        r.input("isActive", sql.Bit, req.body.isActive);
+        sets.push("isActive = @isActive");
+      }
+
+      sets.push("updatedAt = SYSUTCDATETIME()");
+
+      await r.query(`
+        UPDATE dbo.Master_Transporters
+        SET ${sets.join(", ")}
+        WHERE id = @id
+      `);
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[API] PUT /api/admin/transporters/:id error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+app.delete(
+  "/api/admin/transporters/:id",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const { id } = req.params;
+    try {
+      const pool = await getPool();
+      await pool.request().input("id", sql.UniqueIdentifier, id).query(`
+        UPDATE dbo.Master_Transporters
+        SET isActive = 0, updatedAt = SYSUTCDATETIME()
+        WHERE id = @id
+      `);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[API] DELETE /api/admin/transporters/:id error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
 // Admin-only users management
 
 app.get("/api/admin/users", authenticate, requireAdmin, async (req, res) => {
@@ -1968,15 +2199,40 @@ app.delete(
 );
 
 // Vendor list
+// Vendor list (freight options) - backed by Transporter Master
 app.get("/api/vendors", authenticate, async (req, res) => {
   try {
     const pool = await getPool();
-    const result = await pool.request().query(`
-      SELECT username, name, company
-      FROM dbo.Users
-      WHERE role = 'vendor'
-    `);
-    res.json(result.recordset);
+
+    try {
+      const r = await pool.request().query(`
+        SELECT
+          vendorEmail AS username,
+          vendorName AS name,
+          vendorCode AS company
+        FROM dbo.Master_Transporters
+        WHERE ISNULL(isActive, 1) = 1
+        ORDER BY vendorName ASC
+      `);
+
+      // Keep response shape compatible with existing frontend:
+      // { username, name, company }
+      return res.json(
+        (r.recordset || []).map((x) => ({
+          username: x.username || "", // may be empty until set
+          name: x.name,
+          company: x.company,
+        }))
+      );
+    } catch (e) {
+      // Fallback if table not present for some reason
+      const result = await pool.request().query(`
+        SELECT username, name, company
+        FROM dbo.Users
+        WHERE role = 'vendor'
+      `);
+      return res.json(result.recordset || []);
+    }
   } catch (err) {
     console.error("[API] Fetch vendors error:", err);
     res.status(500).json({ message: "Server error" });

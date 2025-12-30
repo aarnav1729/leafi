@@ -45,6 +45,15 @@ type MasterMeta = {
   multiline?: boolean;
   maxHint?: string;
 };
+type TransporterRow = {
+  id: string;
+  vendorCode: string;
+  vendorName: string;
+  vendorEmail: string | null;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string | null;
+};
 
 const FALLBACK_META: MasterMeta[] = [
   {
@@ -100,6 +109,18 @@ function normalizeValue(v: string) {
 
 const Masters: React.FC = () => {
   const [meta, setMeta] = useState<MasterMeta[]>(FALLBACK_META);
+  const [transporters, setTransporters] = useState<TransporterRow[]>([]);
+  const [transportersLoading, setTransportersLoading] = useState(false);
+  const [transportersQuery, setTransportersQuery] = useState("");
+
+  const [transporterAddOpen, setTransporterAddOpen] = useState(false);
+  const [newTransporterCode, setNewTransporterCode] = useState("");
+  const [newTransporterName, setNewTransporterName] = useState("");
+  const [newTransporterEmail, setNewTransporterEmail] = useState("");
+  const [newTransporterIsActive, setNewTransporterIsActive] = useState(true);
+
+  const [editingTransporter, setEditingTransporter] =
+    useState<TransporterRow | null>(null);
 
   const [rowsByKey, setRowsByKey] = useState<Record<string, MasterRow[]>>({});
   const [loadingByKey, setLoadingByKey] = useState<Record<string, boolean>>({});
@@ -164,6 +185,34 @@ const Masters: React.FC = () => {
     }
   }, []);
 
+  const fetchTransporters = useCallback(async () => {
+    setTransportersLoading(true);
+    try {
+      const res = await api.get<TransporterRow[]>("/admin/transporters");
+      setTransporters(res.data || []);
+    } catch (err: any) {
+      console.error("Failed to load transporters", err);
+      toast({
+        title: "Failed to load",
+        description: "Could not load transporter master",
+        variant: "destructive",
+      });
+    } finally {
+      setTransportersLoading(false);
+    }
+  }, []);
+
+  const filteredTransporters = useMemo(() => {
+    const q = transportersQuery.trim().toLowerCase();
+    if (!q) return transporters;
+    return transporters.filter((t) => {
+      const a = `${t.vendorCode} ${t.vendorName} ${
+        t.vendorEmail || ""
+      }`.toLowerCase();
+      return a.includes(q);
+    });
+  }, [transporters, transportersQuery]);
+
   const refreshAll = useCallback(async () => {
     await Promise.all(meta.map((m) => fetchRows(m.key)));
   }, [meta, fetchRows]);
@@ -172,6 +221,7 @@ const Masters: React.FC = () => {
     fetchMeta().finally(() => {
       // load everything once
       Promise.all(FALLBACK_META.map((m) => fetchRows(m.key))).catch(() => {});
+      fetchTransporters().catch(() => {});
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -348,6 +398,433 @@ const Masters: React.FC = () => {
       </div>
 
       <Accordion type="multiple" defaultValue={[]}>
+        <AccordionItem value="transporters">
+          <AccordionTrigger>
+            <div className="flex items-center justify-between w-full pr-3">
+              <div className="text-left">
+                <div className="font-semibold">Transporter Master</div>
+                <div className="text-xs text-muted-foreground">
+                  Freight vendor options (code + name + email for notifications)
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground hidden sm:block">
+                Used in RFQ → vendor selection + email notifications
+              </div>
+            </div>
+          </AccordionTrigger>
+
+          <AccordionContent>
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex-1 min-w-[220px]">
+                  <Label className="sr-only">Search</Label>
+                  <Input
+                    placeholder="Search code / name / email..."
+                    value={transportersQuery}
+                    onChange={(e) => setTransportersQuery(e.target.value)}
+                  />
+                </div>
+
+                <Dialog
+                  open={transporterAddOpen}
+                  onOpenChange={setTransporterAddOpen}
+                >
+                  <DialogTrigger asChild>
+                    <Button
+                      onClick={() => {
+                        setNewTransporterCode("");
+                        setNewTransporterName("");
+                        setNewTransporterEmail("");
+                        setNewTransporterIsActive(true);
+                        setTransporterAddOpen(true);
+                      }}
+                    >
+                      + Add
+                    </Button>
+                  </DialogTrigger>
+
+                  <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                      <DialogTitle>Add Transporter</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <Label>Vendor Code</Label>
+                          <Input
+                            value={newTransporterCode}
+                            onChange={(e) =>
+                              setNewTransporterCode(e.target.value)
+                            }
+                            placeholder="e.g., VENDORA"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            This is what gets stored in RFQ vendors array.
+                          </p>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Vendor Name</Label>
+                          <Input
+                            value={newTransporterName}
+                            onChange={(e) =>
+                              setNewTransporterName(e.target.value)
+                            }
+                            placeholder="e.g., Vendor A Logistics"
+                          />
+                        </div>
+
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label>Vendor Email (optional)</Label>
+                          <Input
+                            value={newTransporterEmail}
+                            onChange={(e) =>
+                              setNewTransporterEmail(e.target.value)
+                            }
+                            placeholder="e.g., vendora@premierenergies.com"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Used for RFQ notifications. Leave empty if not
+                            needed.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between border rounded-md p-3">
+                        <div>
+                          <div className="font-medium text-sm">Active</div>
+                          <div className="text-xs text-muted-foreground">
+                            Only active transporters appear as options
+                          </div>
+                        </div>
+                        <Switch
+                          checked={newTransporterIsActive}
+                          onCheckedChange={setNewTransporterIsActive}
+                        />
+                      </div>
+
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => setTransporterAddOpen(false)}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={async () => {
+                            const vendorCode = newTransporterCode.trim();
+                            const vendorName = newTransporterName.trim();
+                            const vendorEmail = newTransporterEmail.trim();
+
+                            if (!vendorCode || !vendorName) {
+                              toast({
+                                title: "Missing fields",
+                                description:
+                                  "Vendor Code and Vendor Name are required.",
+                                variant: "destructive",
+                              });
+                              return;
+                            }
+
+                            try {
+                              await api.post("/admin/transporters", {
+                                vendorCode,
+                                vendorName,
+                                vendorEmail: vendorEmail || null,
+                                isActive: newTransporterIsActive,
+                              });
+                              toast({
+                                title: "Created",
+                                description: "Transporter added.",
+                              });
+                              setTransporterAddOpen(false);
+                              await fetchTransporters();
+                            } catch (err: any) {
+                              const msg =
+                                err?.response?.data?.message ||
+                                err?.message ||
+                                "Failed to create transporter";
+                              toast({
+                                title: "Create failed",
+                                description: msg,
+                                variant: "destructive",
+                              });
+                            }
+                          }}
+                        >
+                          Create
+                        </Button>
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+
+                <Button
+                  variant="outline"
+                  onClick={fetchTransporters}
+                  disabled={transportersLoading}
+                >
+                  {transportersLoading ? "Loading..." : "Refresh"}
+                </Button>
+              </div>
+
+              <div className="rounded-md border overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b">
+                    <tr className="text-left">
+                      <th className="p-3 w-[160px]">Code</th>
+                      <th className="p-3">Name</th>
+                      <th className="p-3">Email</th>
+                      <th className="p-3 w-[120px]">Active</th>
+                      <th className="p-3 w-[220px]">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {transportersLoading ? (
+                      <tr>
+                        <td className="p-3" colSpan={5}>
+                          Loading...
+                        </td>
+                      </tr>
+                    ) : filteredTransporters.length === 0 ? (
+                      <tr>
+                        <td className="p-3 text-muted-foreground" colSpan={5}>
+                          No transporters found.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredTransporters.map((t) => {
+                        const isEditing = editingTransporter?.id === t.id;
+                        const et = isEditing ? editingTransporter! : t;
+
+                        return (
+                          <tr
+                            key={t.id}
+                            className="border-b last:border-b-0 align-top"
+                          >
+                            <td className="p-3">
+                              {isEditing ? (
+                                <Input
+                                  value={et.vendorCode}
+                                  onChange={(e) =>
+                                    setEditingTransporter((p) =>
+                                      p
+                                        ? { ...p, vendorCode: e.target.value }
+                                        : p
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <div className="font-mono">{t.vendorCode}</div>
+                              )}
+                            </td>
+
+                            <td className="p-3">
+                              {isEditing ? (
+                                <Input
+                                  value={et.vendorName}
+                                  onChange={(e) =>
+                                    setEditingTransporter((p) =>
+                                      p
+                                        ? { ...p, vendorName: e.target.value }
+                                        : p
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <div className="break-words">
+                                  {t.vendorName}
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="p-3">
+                              {isEditing ? (
+                                <Input
+                                  value={et.vendorEmail || ""}
+                                  onChange={(e) =>
+                                    setEditingTransporter((p) =>
+                                      p
+                                        ? {
+                                            ...p,
+                                            vendorEmail: e.target.value || null,
+                                          }
+                                        : p
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <div className="break-words text-muted-foreground">
+                                  {t.vendorEmail || "—"}
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="p-3">
+                              {isEditing ? (
+                                <Switch
+                                  checked={!!et.isActive}
+                                  onCheckedChange={(v) =>
+                                    setEditingTransporter((p) =>
+                                      p ? { ...p, isActive: v } : p
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <div
+                                    className={`h-2.5 w-2.5 rounded-full ${
+                                      t.isActive
+                                        ? "bg-green-500"
+                                        : "bg-gray-400"
+                                    }`}
+                                  />
+                                  <span>{t.isActive ? "Yes" : "No"}</span>
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="p-3">
+                              {isEditing ? (
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    onClick={async () => {
+                                      try {
+                                        await api.put(
+                                          `/admin/transporters/${et.id}`,
+                                          {
+                                            vendorCode: et.vendorCode.trim(),
+                                            vendorName: et.vendorName.trim(),
+                                            vendorEmail:
+                                              (et.vendorEmail || "").trim() ||
+                                              null,
+                                            isActive: !!et.isActive,
+                                          }
+                                        );
+                                        toast({
+                                          title: "Saved",
+                                          description: "Transporter updated.",
+                                        });
+                                        setEditingTransporter(null);
+                                        await fetchTransporters();
+                                      } catch (err: any) {
+                                        const msg =
+                                          err?.response?.data?.message ||
+                                          err?.message ||
+                                          "Failed to update transporter";
+                                        toast({
+                                          title: "Update failed",
+                                          description: msg,
+                                          variant: "destructive",
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    Save
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setEditingTransporter(null)}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="flex gap-2 flex-wrap">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setEditingTransporter(t)}
+                                  >
+                                    Edit
+                                  </Button>
+
+                                  {t.isActive ? (
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={async () => {
+                                        const ok = window.confirm(
+                                          "Disable this transporter?"
+                                        );
+                                        if (!ok) return;
+                                        try {
+                                          await api.delete(
+                                            `/admin/transporters/${t.id}`
+                                          );
+                                          toast({
+                                            title: "Disabled",
+                                            description:
+                                              "Transporter disabled.",
+                                          });
+                                          await fetchTransporters();
+                                        } catch (err: any) {
+                                          const msg =
+                                            err?.response?.data?.message ||
+                                            err?.message ||
+                                            "Failed to disable transporter";
+                                          toast({
+                                            title: "Disable failed",
+                                            description: msg,
+                                            variant: "destructive",
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      Disable
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      onClick={async () => {
+                                        try {
+                                          await api.put(
+                                            `/admin/transporters/${t.id}`,
+                                            { isActive: true }
+                                          );
+                                          toast({
+                                            title: "Enabled",
+                                            description: "Transporter enabled.",
+                                          });
+                                          await fetchTransporters();
+                                        } catch (err: any) {
+                                          const msg =
+                                            err?.response?.data?.message ||
+                                            err?.message ||
+                                            "Failed to enable transporter";
+                                          toast({
+                                            title: "Enable failed",
+                                            description: msg,
+                                            variant: "destructive",
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      Enable
+                                    </Button>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Tip: Set Vendor Email for VENDORA/VENDORB so RFQ notifications
+                go to the right transporter inbox.
+              </p>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
         {meta.map((m) => {
           const counts = totalCounts[m.key] || { total: 0, active: 0 };
           const rows = filteredRows(m.key);
