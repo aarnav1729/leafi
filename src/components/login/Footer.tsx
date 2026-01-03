@@ -13,10 +13,9 @@ const Footer: React.FC = () => {
       </div>
       <div className="flex flex-col gap-1">
         <div className="text-[10px] uppercase tracking-[0.2em] text-[#1a1b4b]/40 font-bold">
-          © 2025 Premier Energies
+          © 2025 LEAFi: logistics enquiry and finalization. Premier Energies
         </div>
       </div>
-
       {/* Replace "Internal Access Only" with logo */}
     </footer>
   );

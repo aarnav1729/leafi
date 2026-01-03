@@ -1,4 +1,3 @@
-
 import { cn } from "@/lib/utils";
 
 interface StatusBadgeProps {
@@ -7,7 +6,7 @@ interface StatusBadgeProps {
 
 export function StatusBadge({ status }: StatusBadgeProps) {
   return (
-    <span 
+    <span
       className={cn(
         "px-2 py-1 text-xs font-medium rounded-full",
         status === "initial" && "bg-status-initial text-white",
@@ -15,9 +14,11 @@ export function StatusBadge({ status }: StatusBadgeProps) {
         status === "closed" && "bg-status-closed text-white"
       )}
     >
-      {status === "initial" ? "Initial" : 
-       status === "evaluation" ? "Evaluation" : 
-       "Closed"}
+      {status === "initial"
+        ? "Initial"
+        : status === "evaluation"
+        ? "Evaluation"
+        : "Closed"}
     </span>
   );
 }

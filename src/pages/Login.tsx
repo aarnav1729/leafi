@@ -1,3 +1,4 @@
+// root/src/pages/Login.tsx
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -11,6 +12,7 @@ const Login: React.FC = () => {
   const navigate = useNavigate();
   const { requestOtp, verifyOtp } = useAuth();
 
+  // Email is stored only to verify OTP later
   const [email, setEmail] = useState("");
 
   const theme: GridTheme = useMemo(
@@ -25,17 +27,27 @@ const Login: React.FC = () => {
     []
   );
 
+  /**
+   * STEP 1: Request OTP
+   * - OTP is sent ONLY via email
+   * - Nothing is displayed or logged on screen
+   */
   const handleSendOTP = async (inputEmail: string) => {
     const e = inputEmail.trim();
     if (!e) return false;
+
     setEmail(e);
     return await requestOtp(e);
   };
 
+  /**
+   * STEP 2: Verify OTP
+   * - On success, immediately redirect to /app
+   * - No intermediate animations or logo formation
+   */
   const handleVerifyOTP = async (inputOtp: string) => {
     const ok = await verifyOtp(email.trim(), inputOtp.trim());
     if (ok) {
-      // ✅ go straight to app (no particle/logo animation)
       navigate("/app", { replace: true });
     }
     return ok;
@@ -46,17 +58,19 @@ const Login: React.FC = () => {
       className="relative w-screen h-screen overflow-hidden transition-colors duration-700 text-[#1a1b4b]"
       style={{ backgroundColor: theme.bgColor }}
     >
-      {/* Background (kept), but logo formation is NEVER triggered */}
+      {/* Background grid — decorative only */}
       <InteractiveGrid isFormingShape={false} theme={theme} />
 
       {/* Foreground */}
       <div className="absolute inset-0 flex flex-col justify-between py-6 pointer-events-none">
+        {/* Header */}
         <div className="w-[90%] mx-auto pointer-events-auto">
           <div className="bg-white/40 backdrop-blur-md border border-white/20 shadow-sm rounded-2xl px-6 py-3">
             <Header />
           </div>
         </div>
 
+        {/* Login card */}
         <div className="flex-1 flex items-center justify-center pointer-events-none">
           <div className="pointer-events-auto w-full flex justify-center">
             <HeroContent
@@ -66,6 +80,7 @@ const Login: React.FC = () => {
           </div>
         </div>
 
+        {/* Footer */}
         <div className="w-[90%] mx-auto pointer-events-auto">
           <div className="bg-white/40 backdrop-blur-md border border-white/20 shadow-sm rounded-2xl px-6 py-3">
             <Footer />

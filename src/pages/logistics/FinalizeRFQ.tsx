@@ -22,7 +22,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-
 import { Badge } from "@/components/ui/badge";
 import { Maximize2, X, ChevronDown } from "lucide-react";
 
@@ -560,6 +559,13 @@ const FinalizeRFQ: React.FC = () => {
   };
 
   const storeFinalisation = async () => {
+    if (requiresDeviationReason && !deviationReason.trim()) {
+      toast.error(
+        "Please provide a reason for deviation from LEAFI allocation."
+      );
+      return;
+    }
+
     if (!rfq) return;
 
     for (const [qid, a] of Object.entries(alloc)) {
@@ -625,9 +631,29 @@ const FinalizeRFQ: React.FC = () => {
     return true;
   }, [autoAlloc, alloc]);
 
+  const requiresDeviationReason = useMemo(() => {
+    if (!rfq) return false;
+
+    return (
+      !isAllocEqualToAuto || // allocation differs from LEAFI
+      hasAnyPriceEdits || // logistics edited pricing
+      Math.abs(priceDeltaVsLeafi) > 0 // total price differs
+    );
+  }, [rfq, isAllocEqualToAuto, hasAnyPriceEdits, priceDeltaVsLeafi]);
+
   const onFinalizeClick = () => {
     if (!rfq) return;
+
+    // If deviation exists → force reason modal
+    if (requiresDeviationReason) {
+      setReasonModal(true);
+      return;
+    }
+
+    // Otherwise proceed directly
     storeFinalisation();
+    setDeviationReason("");
+    setReasonModal(false);
   };
 
   if (!rfq) {

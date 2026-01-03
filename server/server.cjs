@@ -33,6 +33,32 @@ function genSessionToken() {
   return crypto.randomBytes(24).toString("hex"); // 48 chars
 }
 
+function normalizeEmailForOtp(usernameOrEmail) {
+  const raw = String(usernameOrEmail || "").trim();
+  if (!raw) return "";
+  if (raw.includes("@")) return raw.toLowerCase();
+  // convenience: allow login with short usernames
+  return `${raw.toLowerCase()}@premierenergies.com`;
+}
+
+async function sendOtpEmail({ toEmail, otp }) {
+  const html = otpEmailTemplate({
+    otp,
+    ttlSeconds: Math.floor(OTP_TTL_MS / 1000),
+    appName: "LEAFI",
+    toEmail,
+  });
+
+  await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+    message: {
+      subject: `Your LEAFI OTP: ${otp}`,
+      body: { contentType: "HTML", content: html },
+      toRecipients: [{ emailAddress: { address: toEmail } }],
+    },
+    saveToSentItems: true,
+  });
+}
+
 // Microsoft Graph
 const { Client } = require("@microsoft/microsoft-graph-client");
 const { ClientSecretCredential } = require("@azure/identity");
@@ -725,6 +751,848 @@ function safeJsonParse(str, fallback) {
   }
 }
 
+function rfqCreationEmailTemplate({
+  rfqNumber,
+  itemDescription,
+  companyName,
+  materialPONumber,
+  supplierName,
+  portOfLoading,
+  portOfDestination,
+  containerType,
+  numberOfContainers,
+  cargoWeight,
+  cargoReadinessDate,
+  description,
+  attachmentsCount,
+  createdBy,
+}) {
+  const fmtDate = (d) =>
+    d ? new Date(d).toLocaleString("en-IN", { hour12: true }) : "—";
+
+  const row = (label, value) => `
+    <tr>
+      <td style="padding:10px 12px;font-weight:600;color:#1a1b4b;">${label}</td>
+      <td style="padding:10px 12px;color:#111827;">${value || "—"}</td>
+    </tr>
+  `;
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Inter,Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#22c55e,#16a34a);padding:20px 24px;color:white;">
+              <div style="font-size:20px;font-weight:700;">LEAFI</div>
+              <div style="opacity:0.9;font-size:13px;margin-top:4px;">
+                New RFQ Notification
+              </div>
+            </td>
+          </tr>
+
+          <!-- RFQ Number -->
+          <tr>
+            <td style="padding:24px 24px 8px;">
+              <div style="font-size:14px;color:#6b7280;">RFQ Number</div>
+              <div style="font-size:28px;font-weight:800;color:#1a1b4b;">
+                ${rfqNumber}
+              </div>
+            </td>
+          </tr>
+
+          <!-- Message -->
+          <tr>
+            <td style="padding:0 24px 20px;color:#374151;font-size:14px;line-height:1.6;">
+              A new Request for Quotation has been created and requires your quotation.
+            </td>
+          </tr>
+
+          <!-- Details table -->
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                ${row("Item Description", itemDescription)}
+                ${row("Company Name", companyName)}
+                ${row("Material PO Number", materialPONumber)}
+                ${row("Supplier Name", supplierName)}
+                ${row("Port of Loading", portOfLoading)}
+                ${row("Port of Destination", portOfDestination)}
+                ${row("Container Type", containerType)}
+                ${row("Number of Containers", numberOfContainers)}
+                ${row("Cargo Weight (tons)", cargoWeight)}
+                ${row("Cargo Readiness Date", fmtDate(cargoReadinessDate))}
+                ${row(
+                  "Attachments",
+                  attachmentsCount ? `${attachmentsCount} file(s)` : "None"
+                )}
+                ${description ? row("Additional Notes", description) : ""}
+              </table>
+            </td>
+          </tr>
+
+          <!-- CTA -->
+          <tr>
+            <td align="center" style="padding:0 24px 32px;">
+              <a href="https://leafi.premierenergies.com"
+                 style="display:inline-block;padding:12px 22px;border-radius:10px;
+                        background:#22c55e;color:white;font-weight:600;
+                        text-decoration:none;font-size:14px;">
+                View & Submit Quote
+              </a>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;">
+              Created by <strong>${createdBy}</strong><br/>
+              This is an automated message from LEAFI. Please do not reply.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
+function otpEmailTemplate({ otp, ttlSeconds, appName = "LEAFI", toEmail }) {
+  const mins = Math.round((ttlSeconds || 300) / 60);
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Inter,Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table width="100%" cellpadding="0" cellspacing="0"
+          style="max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#22c55e,#16a34a);padding:20px 24px;color:white;">
+              <div style="font-size:18px;font-weight:900;letter-spacing:0.2px;">${appName}</div>
+              <div style="opacity:0.95;font-size:13px;margin-top:4px;">
+                Secure One-Time Password (OTP)
+              </div>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:22px 24px 8px;">
+              <div style="font-size:14px;color:#334155;line-height:1.7;">
+                Use the code below to sign in to <strong>${appName}</strong>.
+                This OTP is valid for <strong>${mins} minutes</strong>.
+              </div>
+            </td>
+          </tr>
+
+          <!-- OTP Box -->
+          <tr>
+            <td style="padding:14px 24px 18px;">
+              <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center;">
+                <div style="font-size:12px;color:#64748b;letter-spacing:0.08em;text-transform:uppercase;">
+                  Your OTP
+                </div>
+                <div style="margin-top:8px;font-size:34px;font-weight:900;letter-spacing:0.25em;color:#0f172a;">
+                  ${String(otp || "").trim()}
+                </div>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Safety note -->
+          <tr>
+            <td style="padding:0 24px 18px;color:#475569;font-size:13px;line-height:1.7;">
+              If you did not request this code, you can safely ignore this email.
+              For security, please do not share this OTP with anyone.
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;line-height:1.6;">
+              Sent to <strong>${toEmail || "your email"}</strong><br/>
+              This is an automated message from ${appName}. Please do not reply.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
+function allocationEmailTemplate({
+  rfq,
+  quote,
+  vendorName,
+  vendorEmail,
+  allocatedHome,
+  allocatedMoowr,
+  reason,
+}) {
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? `₹${n.toFixed(2)}` : "₹0.00";
+  };
+  const fmtNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const fmtDateTime = (d) =>
+    d ? new Date(d).toLocaleString("en-IN", { hour12: true }) : "—";
+
+  const scheme =
+    fmtNum(allocatedMoowr) > 0 && fmtNum(allocatedHome) === 0
+      ? "moowr"
+      : fmtNum(allocatedHome) > 0 && fmtNum(allocatedMoowr) === 0
+      ? "home"
+      : "mixed";
+
+  const schemeBadge =
+    scheme === "home"
+      ? "CHA-HOME"
+      : scheme === "moowr"
+      ? "MOOWR"
+      : "HOME + MOOWR";
+
+  // ---- Cost rows (dynamic like FinalizeRFQ logic) ----
+  // NOTE: Sea Freight is stored in USD; other charges are INR as per your existing schema.
+  // We only INCLUDE the relevant scheme-specific lines as requested.
+  const baseRows = [
+    [
+      "Sea Freight / Container (USD)",
+      `${fmtNum(quote?.seaFreightPerContainer).toFixed(2)} USD`,
+    ],
+    ["HDO / BOL (INR)", fmtMoney(quote?.houseDeliveryOrderPerBOL)],
+    ["CFS / Container (INR)", fmtMoney(quote?.cfsPerContainer)],
+    [
+      "Transportation / Container (INR)",
+      fmtMoney(quote?.transportationPerContainer),
+    ],
+    ["EDI / BOE (INR)", fmtMoney(quote?.ediChargesPerBOE)],
+  ];
+
+  const homeOnlyRows = [["CHA-HOME (INR)", fmtMoney(quote?.chaChargesHome)]];
+
+  const moowrOnlyRows = [
+    ["CHA-MOOWR (INR)", fmtMoney(quote?.chaChargesMOOWR)],
+    [
+      "MOOWR Re-warehousing / BOE (INR)",
+      fmtMoney(quote?.mooWRReeWarehousingCharges),
+    ],
+  ];
+
+  let costRows = [...baseRows];
+  if (scheme === "home") costRows = [...costRows, ...homeOnlyRows];
+  if (scheme === "moowr") costRows = [...costRows, ...moowrOnlyRows];
+  if (scheme === "mixed")
+    costRows = [...costRows, ...homeOnlyRows, ...moowrOnlyRows]; // safe + transparent
+
+  const costTable = `
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      <tr style="background:#f9fafb;">
+        <th align="left" style="padding:10px 12px;font-size:12px;color:#374151;border-bottom:1px solid #e5e7eb;">Charge</th>
+        <th align="right" style="padding:10px 12px;font-size:12px;color:#374151;border-bottom:1px solid #e5e7eb;">Value</th>
+      </tr>
+      ${costRows
+        .map(
+          ([k, v]) => `
+          <tr>
+            <td style="padding:10px 12px;font-size:13px;color:#111827;border-bottom:1px solid #f1f5f9;">${k}</td>
+            <td align="right" style="padding:10px 12px;font-size:13px;color:#111827;border-bottom:1px solid #f1f5f9;">${v}</td>
+          </tr>
+        `
+        )
+        .join("")}
+      <tr style="background:#f9fafb;">
+        <td style="padding:10px 12px;font-size:13px;color:#111827;font-weight:700;">Quoted Total (${schemeBadge})</td>
+        <td align="right" style="padding:10px 12px;font-size:13px;color:#111827;font-weight:800;">
+          ${
+            scheme === "home"
+              ? fmtMoney(quote?.homeTotal)
+              : scheme === "moowr"
+              ? fmtMoney(quote?.mooWRTotal)
+              : `${fmtMoney(quote?.homeTotal)} / ${fmtMoney(quote?.mooWRTotal)}`
+          }
+        </td>
+      </tr>
+    </table>
+  `;
+
+  const rfqMetaTable = (rows) => `
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      ${rows
+        .map(
+          ([k, v]) => `
+        <tr>
+          <td style="padding:10px 12px;font-weight:600;color:#1f2937;border-bottom:1px solid #f1f5f9;width:220px;background:#fafafa;">${k}</td>
+          <td style="padding:10px 12px;color:#111827;border-bottom:1px solid #f1f5f9;">${
+            v || "—"
+          }</td>
+        </tr>
+      `
+        )
+        .join("")}
+    </table>
+  `;
+
+  const rfqRows = [
+    ["RFQ Number", rfq?.rfqNumber],
+    ["Item Description", rfq?.itemDescription],
+    ["Company Name", rfq?.companyName],
+    ["Supplier Name", rfq?.supplierName],
+    ["Port of Loading", rfq?.portOfLoading],
+    ["Port of Destination", rfq?.portOfDestination],
+    ["Container Type", rfq?.containerType],
+    ["Req’d Containers", rfq?.numberOfContainers],
+    ["Cargo Readiness Date", fmtDateTime(rfq?.cargoReadinessDate)],
+  ];
+
+  const allocRows = [
+    ["Allocated Scheme", schemeBadge],
+    [
+      "Allocated HOME",
+      fmtNum(allocatedHome) ? String(fmtNum(allocatedHome)) : "0",
+    ],
+    [
+      "Allocated MOOWR",
+      fmtNum(allocatedMoowr) ? String(fmtNum(allocatedMoowr)) : "0",
+    ],
+    ["Reason / Notes", reason ? String(reason) : "—"],
+    ["Vendor", vendorName],
+    ["Vendor Email", vendorEmail || "—"],
+  ];
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Inter,Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="max-width:720px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.08);">
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#0ea5e9,#2563eb);padding:20px 24px;color:white;">
+              <div style="font-size:18px;font-weight:800;letter-spacing:0.2px;">LEAFI</div>
+              <div style="opacity:0.95;font-size:13px;margin-top:4px;">
+                Allocation Notification • <span style="font-weight:700;">${schemeBadge}</span>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Title -->
+          <tr>
+            <td style="padding:22px 24px 8px;">
+              <div style="font-size:12px;color:#6b7280;">RFQ</div>
+              <div style="font-size:26px;font-weight:900;color:#0f172a;">
+                ${rfq?.rfqNumber || "—"}
+              </div>
+              <div style="margin-top:6px;font-size:13px;color:#334155;line-height:1.6;">
+                Containers have been allocated to your quote. Please find the details below.
+              </div>
+            </td>
+          </tr>
+
+          <!-- Allocation Summary -->
+          <tr>
+            <td style="padding:0 24px 18px;">
+              <div style="font-size:13px;font-weight:800;color:#0f172a;margin:10px 0 10px;">
+                Allocation Summary
+              </div>
+              ${rfqMetaTable(allocRows)}
+            </td>
+          </tr>
+
+          <!-- RFQ Details -->
+          <tr>
+            <td style="padding:0 24px 18px;">
+              <div style="font-size:13px;font-weight:800;color:#0f172a;margin:10px 0 10px;">
+                RFQ Details
+              </div>
+              ${rfqMetaTable(rfqRows)}
+            </td>
+          </tr>
+
+          <!-- Cost Breakdown -->
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <div style="font-size:13px;font-weight:800;color:#0f172a;margin:10px 0 10px;">
+                Quote Cost Breakdown (Dynamic)
+              </div>
+              <div style="font-size:12px;color:#64748b;margin-bottom:10px;line-height:1.5;">
+                Line items are shown based on the allocated scheme (CHA-HOME vs MOOWR).
+              </div>
+              ${costTable}
+            </td>
+          </tr>
+
+          <!-- CTA -->
+          <tr>
+            <td align="center" style="padding:0 24px 28px;">
+              <a href="https://leafi.premierenergies.com"
+                 style="display:inline-block;padding:12px 22px;border-radius:10px;
+                        background:#2563eb;color:white;font-weight:700;
+                        text-decoration:none;font-size:14px;">
+                Open LEAFI
+              </a>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;line-height:1.5;">
+              This is an automated email from LEAFI. Please do not reply to this message.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
+function allocationDeviationInternalTemplate({
+  rfq,
+  quote,
+  vendorName,
+  leafiHome,
+  leafiMoowr,
+  logisticsHome,
+  logisticsMoowr,
+  reason,
+}) {
+  const fmtNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? `₹${n.toFixed(2)}` : "₹0.00";
+  };
+
+  const fmtDateTime = (d) =>
+    d ? new Date(d).toLocaleString("en-IN", { hour12: true }) : "—";
+
+  const deltaHome = fmtNum(logisticsHome) - fmtNum(leafiHome);
+  const deltaMoowr = fmtNum(logisticsMoowr) - fmtNum(leafiMoowr);
+
+  const leafiTotal = fmtNum(leafiHome) + fmtNum(leafiMoowr);
+  const logisticsTotal = fmtNum(logisticsHome) + fmtNum(logisticsMoowr);
+  const deltaTotal = logisticsTotal - leafiTotal;
+
+  const metaTable = (rows) => `
+    <table width="100%" cellpadding="0" cellspacing="0"
+      style="border-collapse:separate;border-spacing:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      ${rows
+        .map(
+          ([k, v]) => `
+        <tr>
+          <td style="padding:10px 12px;font-weight:600;color:#1f2937;border-bottom:1px solid #f1f5f9;width:220px;background:#fafafa;">${k}</td>
+          <td style="padding:10px 12px;color:#111827;border-bottom:1px solid #f1f5f9;">${
+            v == null || v === "" ? "—" : v
+          }</td>
+        </tr>
+      `
+        )
+        .join("")}
+    </table>
+  `;
+
+  const rfqRows = [
+    ["RFQ Number", rfq?.rfqNumber],
+    ["Item Description", rfq?.itemDescription],
+    ["Company Name", rfq?.companyName],
+    ["Material PO Number", rfq?.materialPONumber],
+    ["Supplier Name", rfq?.supplierName],
+    ["Port of Loading", rfq?.portOfLoading],
+    ["Port of Destination", rfq?.portOfDestination],
+    ["Container Type", rfq?.containerType],
+    ["Req’d Containers", rfq?.numberOfContainers],
+    ["Cargo Weight (tons)", rfq?.cargoWeight],
+    ["Cargo Readiness Date", fmtDateTime(rfq?.cargoReadinessDate)],
+  ];
+
+  const quoteRows = [
+    ["Vendor", vendorName],
+    ["Quoted Containers", fmtNum(quote?.numberOfContainers)],
+    ["Shipping Line", quote?.shippingLineName || "—"],
+    ["Container Type", quote?.containerType || "—"],
+    ["Vessel Name", quote?.vesselName || "—"],
+    ["ETD", fmtDateTime(quote?.vesselETD)],
+    ["ETA", fmtDateTime(quote?.vesselETA)],
+    ["Transship / Direct", quote?.transshipOrDirect || "—"],
+    ["Quote Validity", fmtDateTime(quote?.quoteValidityDate)],
+    ["Quote Submitted At", fmtDateTime(quote?.createdAt)],
+    ["Message", quote?.message ? String(quote.message) : "—"],
+    ["HOME Total (INR)", fmtMoney(quote?.homeTotal)],
+    ["MOOWR Total (INR)", fmtMoney(quote?.mooWRTotal)],
+  ];
+
+  const leafiAllocRows = [
+    ["Vendor", vendorName],
+    ["LEAFI HOME (Auto)", fmtNum(leafiHome)],
+    ["LEAFI MOOWR (Auto)", fmtNum(leafiMoowr)],
+    ["LEAFI TOTAL (Auto)", leafiTotal],
+  ];
+
+  const logisticsAllocRows = [
+    ["Vendor", vendorName],
+    ["Logistics HOME (Manual)", fmtNum(logisticsHome)],
+    ["Logistics MOOWR (Manual)", fmtNum(logisticsMoowr)],
+    ["Logistics TOTAL (Manual)", logisticsTotal],
+    ["Reason / Notes", reason ? String(reason) : "—"],
+  ];
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Inter,Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table width="100%" cellpadding="0" cellspacing="0"
+          style="max-width:820px;background:#fff;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,0.08);overflow:hidden;">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#ef4444,#b91c1c);padding:20px 24px;color:white;">
+              <div style="font-size:18px;font-weight:900;">LEAFI</div>
+              <div style="font-size:13px;opacity:0.95;margin-top:4px;">
+                Allocation Deviation Alert • RFQ <span style="font-weight:900;">${
+                  rfq?.rfqNumber || "—"
+                }</span>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Top Summary -->
+          <tr>
+            <td style="padding:18px 24px 8px;">
+              <div style="font-size:14px;color:#475569;">
+                Vendor: <strong>${vendorName || "—"}</strong>
+              </div>
+              <div style="margin-top:8px;font-size:13px;color:#334155;line-height:1.6;">
+                Logistics allocation differs from LEAFI auto allocation. Full context is attached below (RFQ + Quote + both allocations).
+              </div>
+            </td>
+          </tr>
+
+          <!-- LEAFI Allocation -->
+<tr>
+  <td style="padding:0 24px 18px;">
+    <div style="font-size:13px;font-weight:900;color:#0f172a;margin:10px 0;">
+      LEAFI Allocation (Auto Baseline)
+    </div>
+    ${metaTable(leafiAllocRows)}
+  </td>
+</tr>
+
+
+          <!-- Logistics Allocation -->
+<tr>
+  <td style="padding:0 24px 18px;">
+    <div style="font-size:13px;font-weight:900;color:#0f172a;margin:10px 0;">
+      Logistics Allocation (Manual)
+    </div>
+    ${metaTable(logisticsAllocRows)}
+  </td>
+</tr>
+
+
+          <!-- RFQ Details -->
+          <tr>
+            <td style="padding:0 24px 18px;">
+              <div style="font-size:13px;font-weight:900;color:#0f172a;margin:10px 0 10px;">
+                RFQ Details
+              </div>
+              ${metaTable(rfqRows)}
+            </td>
+          </tr>
+
+          <!-- Quote Details -->
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <div style="font-size:13px;font-weight:900;color:#0f172a;margin:10px 0 10px;">
+                Quote Details (Latest Quote Used)
+              </div>
+              ${metaTable(quoteRows)}
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;line-height:1.5;">
+              Internal LEAFI audit notification • Do not reply
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
+function quoteSubmissionEmailTemplate({
+  rfq,
+  vendorName,
+  quoteInput,
+  computed,
+}) {
+  const fmtDateTime = (d) =>
+    d ? new Date(d).toLocaleString("en-IN", { hour12: true }) : "—";
+
+  const fmtNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? `₹${n.toFixed(2)}` : "₹0.00";
+  };
+
+  const fmtUSD = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? `${n.toFixed(2)} USD` : "0.00 USD";
+  };
+
+  const metaTable = (rows) => `
+    <table width="100%" cellpadding="0" cellspacing="0"
+      style="border-collapse:separate;border-spacing:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      ${rows
+        .map(
+          ([k, v]) => `
+        <tr>
+          <td style="padding:10px 12px;font-weight:600;color:#1f2937;border-bottom:1px solid #f1f5f9;width:220px;background:#fafafa;">${k}</td>
+          <td style="padding:10px 12px;color:#111827;border-bottom:1px solid #f1f5f9;">${
+            v == null || v === "" ? "—" : v
+          }</td>
+        </tr>
+      `
+        )
+        .join("")}
+    </table>
+  `;
+
+  const costRows = [
+    ["USD→INR Rate Used", fmtNum(computed?.usdToInr).toFixed(4)],
+    ["Sea Freight / Container", fmtUSD(quoteInput?.seaFreightPerContainer)],
+    [
+      "Sea Freight / Container (INR)",
+      fmtMoney(computed?.seaFreightPerContainerInINR),
+    ],
+    ["HDO / BOL (INR)", fmtMoney(quoteInput?.houseDeliveryOrderPerBOL)],
+    ["CFS / Container (INR)", fmtMoney(quoteInput?.cfsPerContainer)],
+    [
+      "Transportation / Container (INR)",
+      fmtMoney(quoteInput?.transportationPerContainer),
+    ],
+    ["EDI / BOE (INR)", fmtMoney(quoteInput?.ediChargesPerBOE)],
+    ["CHA-HOME (INR)", fmtMoney(quoteInput?.chaChargesHome)],
+    ["CHA-MOOWR (INR)", fmtMoney(quoteInput?.chaChargesMOOWR)],
+    [
+      "MOOWR Re-warehousing / BOE (INR)",
+      fmtMoney(quoteInput?.mooWRReeWarehousingCharges),
+    ],
+  ];
+
+  const costTable = `
+    <table width="100%" cellpadding="0" cellspacing="0"
+      style="border-collapse:separate;border-spacing:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      <tr style="background:#f9fafb;">
+        <th align="left" style="padding:10px 12px;font-size:12px;color:#374151;border-bottom:1px solid #e5e7eb;">Charge</th>
+        <th align="right" style="padding:10px 12px;font-size:12px;color:#374151;border-bottom:1px solid #e5e7eb;">Value</th>
+      </tr>
+      ${costRows
+        .map(
+          ([k, v]) => `
+          <tr>
+            <td style="padding:10px 12px;font-size:13px;color:#111827;border-bottom:1px solid #f1f5f9;">${k}</td>
+            <td align="right" style="padding:10px 12px;font-size:13px;color:#111827;border-bottom:1px solid #f1f5f9;">${v}</td>
+          </tr>
+        `
+        )
+        .join("")}
+      <tr style="background:#f9fafb;">
+        <td style="padding:10px 12px;font-size:13px;color:#111827;font-weight:800;">HOME Total (INR)</td>
+        <td align="right" style="padding:10px 12px;font-size:13px;color:#111827;font-weight:900;">
+          ${fmtMoney(computed?.homeTotal)}
+        </td>
+      </tr>
+      <tr style="background:#f9fafb;">
+        <td style="padding:10px 12px;font-size:13px;color:#111827;font-weight:800;">MOOWR Total (INR)</td>
+        <td align="right" style="padding:10px 12px;font-size:13px;color:#111827;font-weight:900;">
+          ${fmtMoney(computed?.mooWRTotal)}
+        </td>
+      </tr>
+    </table>
+  `;
+
+  const rfqRows = [
+    ["RFQ Number", rfq?.rfqNumber],
+    ["Item Description", rfq?.itemDescription],
+    ["Company Name", rfq?.companyName],
+    ["Material PO Number", rfq?.materialPONumber],
+    ["Supplier Name", rfq?.supplierName],
+    ["Port of Loading", rfq?.portOfLoading],
+    ["Port of Destination", rfq?.portOfDestination],
+    ["Container Type", rfq?.containerType],
+    ["Req’d Containers", rfq?.numberOfContainers],
+    ["Cargo Weight (tons)", rfq?.cargoWeight],
+    ["Cargo Readiness Date", fmtDateTime(rfq?.cargoReadinessDate)],
+  ];
+
+  const quoteRows = [
+    ["Vendor", vendorName],
+    ["Quoted Containers", fmtNum(quoteInput?.numberOfContainers)],
+    ["Shipping Line", quoteInput?.shippingLineName || "—"],
+    ["Container Type", quoteInput?.containerType || "—"],
+    ["Vessel Name", quoteInput?.vesselName || "—"],
+    ["ETD", fmtDateTime(quoteInput?.vesselETD)],
+    ["ETA", fmtDateTime(quoteInput?.vesselETA)],
+    ["Transship / Direct", quoteInput?.transshipOrDirect || "—"],
+    ["Quote Validity", fmtDateTime(quoteInput?.quoteValidityDate)],
+    ["Message", quoteInput?.message ? String(quoteInput.message) : "—"],
+  ];
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Inter,Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table width="100%" cellpadding="0" cellspacing="0"
+          style="max-width:760px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#a855f7,#6d28d9);padding:20px 24px;color:white;">
+              <div style="font-size:18px;font-weight:800;letter-spacing:0.2px;">LEAFI</div>
+              <div style="opacity:0.95;font-size:13px;margin-top:4px;">
+                Quote Submission Notification
+              </div>
+            </td>
+          </tr>
+
+          <!-- Title -->
+          <tr>
+            <td style="padding:22px 24px 8px;">
+              <div style="font-size:12px;color:#6b7280;">RFQ</div>
+              <div style="font-size:26px;font-weight:900;color:#0f172a;">
+                ${rfq?.rfqNumber || "—"}
+              </div>
+              <div style="margin-top:6px;font-size:13px;color:#334155;line-height:1.6;">
+                A vendor has submitted a quotation for this RFQ. Details are below.
+              </div>
+            </td>
+          </tr>
+
+          <!-- Vendor summary -->
+          <tr>
+            <td style="padding:0 24px 18px;">
+              <div style="font-size:13px;font-weight:800;color:#0f172a;margin:10px 0 10px;">
+                Quote Summary
+              </div>
+              ${metaTable(quoteRows)}
+            </td>
+          </tr>
+
+          <!-- RFQ Details -->
+          <tr>
+            <td style="padding:0 24px 18px;">
+              <div style="font-size:13px;font-weight:800;color:#0f172a;margin:10px 0 10px;">
+                RFQ Details
+              </div>
+              ${metaTable(rfqRows)}
+            </td>
+          </tr>
+
+          <!-- Cost Breakdown -->
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <div style="font-size:13px;font-weight:800;color:#0f172a;margin:10px 0 10px;">
+                Cost Breakdown (Computed)
+              </div>
+              <div style="font-size:12px;color:#64748b;margin-bottom:10px;line-height:1.5;">
+                Sea Freight is entered in USD; totals are computed in INR using the live USD→INR rate (fallback applied if API fails).
+              </div>
+              ${costTable}
+            </td>
+          </tr>
+
+          <!-- CTA -->
+          <tr>
+            <td align="center" style="padding:0 24px 28px;">
+              <a href="https://leafi.premierenergies.com"
+                 style="display:inline-block;padding:12px 22px;border-radius:10px;
+                        background:#6d28d9;color:white;font-weight:800;
+                        text-decoration:none;font-size:14px;">
+                Open LEAFI
+              </a>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;line-height:1.5;">
+              This is an automated email from LEAFI. Please do not reply to this message.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
 function requireBasicAuth(req) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith("Basic ")) return null;
@@ -911,17 +1779,31 @@ app.post("/api/login", async (req, res) => {
     const user = userRes.recordset[0];
 
     // STEP 1: request OTP (password empty)
+    // STEP 1: request OTP (password empty)
     if (!password) {
       const otp = genOtp4();
-      otpStore.set(String(username).toLowerCase(), {
+      const key = String(username).toLowerCase();
+
+      otpStore.set(key, {
         otp,
         expiresAt: Date.now() + OTP_TTL_MS,
       });
 
-      // MVP: show OTP in console only
-      console.log(`[OTP] ${username} -> ${otp} (valid ${OTP_TTL_MS / 1000}s)`);
+      const toEmail = normalizeEmailForOtp(username);
 
-      return res.json({ ok: true, step: "otp_sent", otp }); // MVP: return OTP to client for display
+      try {
+        await sendOtpEmail({ toEmail, otp });
+      } catch (e) {
+        console.error("[GRAPH] OTP email failed:", e?.message || e);
+        // If user can't receive OTP, login can't proceed meaningfully
+        otpStore.delete(key);
+        return res
+          .status(500)
+          .json({ message: "Failed to send OTP email. Try again." });
+      }
+
+      // ✅ Do NOT log OTP, do NOT return OTP
+      return res.json({ ok: true, step: "otp_sent" });
     }
 
     // STEP 2: verify OTP (password is OTP)
@@ -1182,51 +2064,34 @@ VALUES
 
     const emails = (emRes.recordset || []).map((r) => r.email).filter(Boolean);
 
-    // build HTML table
-    const rows = [
-      ["RFQ Number", nextNum],
-      ["Item Description", itemDescription],
-      ["Company Name", companyName],
-      ["Material PO Number", materialPONumber],
-      ["Supplier Name", supplierName],
-      ["Port of Loading", portOfLoading],
-      ["Port of Destination", portOfDestination],
-      ["Container Type", containerType],
-      ["Number of Containers", numberOfContainers],
-      ["Cargo Weight", cargoWeight],
-      ["Cargo Readiness Date", new Date(cargoReadinessDate).toLocaleString()],
-
-      ["Description", description || ""],
-      [
-        "Attachments",
-        safeAttachments.length ? `${safeAttachments.length} file(s)` : "0",
-      ],
-    ];
-
-    const tableHtml = `
-      <table border="1" cellpadding="5" cellspacing="0">
-        <tr><th align="left">Field</th><th align="left">Value</th></tr>
-        ${rows.map(([f, v]) => `<tr><td>${f}</td><td>${v}</td></tr>`).join("")}
-      </table>
-    `;
-
     // notify vendors (best-effort) — NEVER fail RFQ creation if email fails
     if (emails.length) {
+      const html = rfqCreationEmailTemplate({
+        rfqNumber: nextNum,
+        itemDescription,
+        companyName,
+        materialPONumber,
+        supplierName,
+        portOfLoading,
+        portOfDestination,
+        containerType,
+        numberOfContainers,
+        cargoWeight,
+        cargoReadinessDate,
+        description,
+        attachmentsCount: safeAttachments.length,
+        createdBy: req.user.username,
+      });
+
       try {
         await Promise.all(
           emails.map((email) =>
             graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
               message: {
-                subject: `New RFQ Created: ${nextNum}`,
+                subject: `RFQ ${nextNum} | ${itemDescription}`,
                 body: {
                   contentType: "HTML",
-                  content: `
-                    <p>Dear Vendor,</p>
-                    <p>A new RFQ has been created:</p>
-                    ${tableHtml}
-                    <p>Respond at <a href="https://leafi.premierenergies.com">LEAFI Portal</a></p>
-                    <p>Regards,<br/>LEAFI Team</p>
-                  `,
+                  content: html,
                 },
                 toRecipients: [{ emailAddress: { address: email } }],
               },
@@ -1235,7 +2100,10 @@ VALUES
           )
         );
       } catch (e) {
-        console.error("[GRAPH] sendMail failed (ignored):", e?.message || e);
+        console.error(
+          "[GRAPH] RFQ creation email failed (ignored):",
+          e?.message || e
+        );
       }
     }
 
@@ -1451,21 +2319,49 @@ app.post("/api/quotes", authenticate, async (req, res) => {
         </table>
       `;
 
+      const html = quoteSubmissionEmailTemplate({
+        rfq,
+        vendorName: req.user.company,
+        quoteInput: {
+          numberOfContainers: d.numberOfContainers,
+          shippingLineName: d.shippingLineName,
+          containerType: d.containerType,
+          vesselName: d.vesselName,
+          vesselETD: d.vesselETD,
+          vesselETA: d.vesselETA,
+          seaFreightPerContainer: d.seaFreightPerContainer,
+          houseDeliveryOrderPerBOL: d.houseDeliveryOrderPerBOL,
+          cfsPerContainer: d.cfsPerContainer,
+          transportationPerContainer: d.transportationPerContainer,
+          chaChargesHome: d.chaChargesHome,
+          chaChargesMOOWR: d.chaChargesMOOWR,
+          ediChargesPerBOE: d.ediChargesPerBOE,
+          mooWRReeWarehousingCharges: d.mooWRReeWarehousingCharges,
+          transshipOrDirect: d.transshipOrDirect,
+          quoteValidityDate: d.quoteValidityDate,
+          message: d.message,
+        },
+        computed: {
+          usdToInr: USD_TO_INR,
+          seaFreightPerContainerInINR: seaInINR,
+          homeTotal,
+          mooWRTotal,
+        },
+      });
+
       await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
         message: {
-          subject: `Quote Submitted for RFQ ${rfq.rfqNumber}`,
+          subject: `Quote Submitted | RFQ ${rfq.rfqNumber} | ${req.user.company}`,
           body: {
             contentType: "HTML",
-            content: `
-              <p>Hello LEAFI Team,</p>
-              <h4>RFQ Details</h4>
-              ${makeTable(rfqRows)}
-              <h4>Quote Details</h4>
-              ${makeTable(quoteRows)}
-              <p>Regards,<br/>LEAFI System</p>
-            `,
+            content: html,
           },
           toRecipients: [{ emailAddress: { address: SENDER_EMAIL } }],
+
+          // Optional: match your allocation mail style (if you want CC here too)
+          // ccRecipients: [
+          //   { emailAddress: { address: "ramanjulu@premierenergies.com" } },
+          // ],
         },
         saveToSentItems: true,
       });
@@ -1545,14 +2441,62 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 
     const quoteRes = await pool
       .request()
+      .input("quoteId", sql.UniqueIdentifier, quoteId)
+      .query(`SELECT TOP 1 * FROM dbo.Quotes WHERE id = @quoteId`);
+
+    const quote = quoteRes.recordset[0];
+
+    // ─────────────────────────────────────────────
+    // LEAFI SYSTEM ALLOCATION (LOWEST PRICE BASELINE)
+    // ─────────────────────────────────────────────
+    const leafiQuoteRes = await pool
+      .request()
       .input("rfqId", sql.UniqueIdentifier, rfqId)
       .input("vendorName", sql.NVarChar, vendorName).query(`
-        SELECT TOP 1 *
-        FROM dbo.Quotes
-        WHERE rfqId = @rfqId AND vendorName = @vendorName
-        ORDER BY createdAt DESC
-      `);
-    const quote = quoteRes.recordset[0];
+      SELECT TOP 1 *
+      FROM dbo.Quotes
+      WHERE rfqId = @rfqId AND vendorName = @vendorName
+      ORDER BY createdAt DESC
+    `);
+
+    const leafiQuote = leafiQuoteRes.recordset[0];
+
+    // Default LEAFI allocation = full RFQ qty on cheapest scheme
+    let leafiHome = 0;
+    let leafiMoowr = 0;
+
+    if (leafiQuote && rfq) {
+      const cheapestIsHome =
+        leafiQuote.homeTotal != null &&
+        (leafiQuote.mooWRTotal == null ||
+          leafiQuote.homeTotal <= leafiQuote.mooWRTotal);
+
+      if (cheapestIsHome) {
+        leafiHome = Number(rfq.numberOfContainers || 0);
+        leafiMoowr = 0;
+      } else {
+        leafiHome = 0;
+        leafiMoowr = Number(rfq.numberOfContainers || 0);
+      }
+    }
+
+    // Logistics (manual) allocation
+    const logisticsHome = Number(containersAllottedHome || 0);
+    const logisticsMoowr = Number(containersAllottedMOOWR || 0);
+
+    // Deviation check
+    const hasDeviation =
+      logisticsHome !== leafiHome || logisticsMoowr !== leafiMoowr;
+
+    console.log("[DEV] Deviation check", {
+      rfqId,
+      vendorName,
+      hasDeviation,
+      leafiHome,
+      leafiMoowr,
+      logisticsHome,
+      logisticsMoowr,
+    });
 
     const emailRes = await pool
       .request()
@@ -1641,24 +2585,36 @@ app.post("/api/allocations", authenticate, async (req, res) => {
       `;
 
       try {
+        const allocatedHome = Number(containersAllottedHome || 0);
+        const allocatedMoowr = Number(containersAllottedMOOWR || 0);
+
+        // Build professional dynamic email (scheme-aware)
+        const html = allocationEmailTemplate({
+          rfq,
+          quote,
+          vendorName,
+          vendorEmail,
+          allocatedHome,
+          allocatedMoowr,
+          reason,
+        });
+
+        // Choose TO: vendorEmail (fallback to SENDER_EMAIL to avoid crashing if not found)
+        const toList = vendorEmail
+          ? [{ emailAddress: { address: vendorEmail } }]
+          : [{ emailAddress: { address: SENDER_EMAIL } }];
+
         await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
           message: {
-            subject: `RFQ ${rfq.rfqNumber} Finalized for ${vendorName}`,
+            subject: `Allocation | RFQ ${rfq.rfqNumber} | ${vendorName}`,
             body: {
               contentType: "HTML",
-              content: `
-                <p>Hello,</p>
-                <h4>RFQ Details</h4>${makeTbl(rfqRows)}
-                <h4>Quote Details</h4>${makeTbl(quoteRows2)}
-                <h4>Finalization Details</h4>${makeTbl(finalRows)}
-                <p>Regards,<br/>LEAFI Team</p>
-              `,
+              content: html,
             },
-            toRecipients: [
-              { emailAddress: { address: SENDER_EMAIL } },
-              ...(vendorEmail
-                ? [{ emailAddress: { address: vendorEmail } }]
-                : []),
+            toRecipients: toList,
+
+            // ✅ CC requirement
+            ccRecipients: [
               { emailAddress: { address: "ramanjulu@premierenergies.com" } },
             ],
           },
@@ -1669,6 +2625,60 @@ app.post("/api/allocations", authenticate, async (req, res) => {
           "[GRAPH] Finalization email failed (ignored):",
           e?.message || e
         );
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // INTERNAL deviation email (ONLY if deviation)
+    // ─────────────────────────────────────────────
+    // ─────────────────────────────────────────────
+    // INTERNAL deviation email (ONLY if deviation)
+    // ─────────────────────────────────────────────
+    if (hasDeviation) {
+      // Always log deviation decisions (so you can prove the trigger)
+      console.log("[DEV] Allocation deviation detected", {
+        rfqId,
+        vendorName,
+        leafiHome,
+        leafiMoowr,
+        logisticsHome,
+        logisticsMoowr,
+      });
+
+      try {
+        const rfqNumberSafe = rfq?.rfqNumber ?? "(unknown)";
+        const internalHtml = allocationDeviationInternalTemplate({
+          rfq,
+          quote,
+          vendorName,
+          leafiHome,
+          leafiMoowr,
+          logisticsHome,
+          logisticsMoowr,
+          reason,
+        });
+
+        await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+          message: {
+            subject: `⚠️ Allocation Deviation | RFQ ${rfqNumberSafe} | ${vendorName}`,
+            body: { contentType: "HTML", content: internalHtml },
+            toRecipients: [
+              { emailAddress: { address: "aarnav.singh@premierenergies.com" } },
+            ],
+            ccRecipients: [
+              { emailAddress: { address: "ramanjulu@premierenergies.com" } },
+            ],
+          },
+          saveToSentItems: true,
+        });
+
+        console.log("[GRAPH] Internal deviation email sent", {
+          rfqNumber: rfqNumberSafe,
+          vendorName,
+        });
+      } catch (e) {
+        // Log the full object (Graph errors often hide useful info in nested fields)
+        console.error("[GRAPH] Internal deviation email failed (ignored):", e);
       }
     }
 
@@ -2253,6 +3263,45 @@ app.get("/api/allocations/:rfqId", authenticate, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+// =========================
+// ADMIN — PURGE ALL DATA (EXCEPT USERS + MASTERS)
+// =========================
+app.post(
+  "/api/admin/purge-data",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const pool = await getPool();
+
+      // IMPORTANT: order matters because of foreign keys
+      const purgeSql = `
+        BEGIN TRAN;
+
+        DELETE FROM dbo.Allocations;
+        DELETE FROM dbo.Quotes;
+        DELETE FROM dbo.RFQs;
+
+        COMMIT TRAN;
+      `;
+
+      await pool.request().batch(purgeSql);
+
+      return res.json({
+        ok: true,
+        message:
+          "All transactional data purged (RFQs, Quotes, Allocations). Masters and Users untouched.",
+      });
+    } catch (err) {
+      console.error("[ADMIN] purge-data failed:", err);
+      return res.status(500).json({
+        ok: false,
+        message: "Failed to purge data",
+      });
+    }
+  }
+);
 
 // Exchange rate endpoint
 app.get("/api/rate/usdinr", async (req, res) => {
