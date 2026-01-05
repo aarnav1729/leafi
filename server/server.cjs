@@ -1789,13 +1789,60 @@ app.post("/api/login", async (req, res) => {
         expiresAt: Date.now() + OTP_TTL_MS,
       });
 
-      const toEmail = normalizeEmailForOtp(username);
+      // Resolve where OTP should be sent
+      let toEmail = "";
+
+      // 1) If user typed an email, use it
+      if (String(username).includes("@")) {
+        toEmail = String(username).trim().toLowerCase();
+      } else {
+        // 2) If this is a vendor, prefer Master_Transporters.vendorEmail by vendorCode (= user.company)
+        if (String(user.role || "").toLowerCase() === "vendor") {
+          try {
+            const em = await pool
+              .request()
+              .input(
+                "code",
+                sql.NVarChar(150),
+                String(user.company || "").trim()
+              ).query(`
+          SELECT TOP 1 NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS email
+          FROM dbo.Master_Transporters
+          WHERE vendorCode = @code AND ISNULL(isActive, 1) = 1
+        `);
+
+            toEmail = String(em.recordset?.[0]?.email || "")
+              .trim()
+              .toLowerCase();
+          } catch (e) {
+            console.error("[OTP] Vendor email lookup failed:", e?.message || e);
+          }
+        }
+
+        // 3) Fallbacks
+        if (!toEmail) {
+          // If the stored username in DB is actually an email, use that
+          if (String(user.username || "").includes("@")) {
+            toEmail = String(user.username).trim().toLowerCase();
+          } else {
+            // last resort: internal email convention
+            toEmail = normalizeEmailForOtp(username);
+          }
+        }
+      }
+
+      if (!toEmail || !toEmail.includes("@")) {
+        otpStore.delete(key);
+        return res.status(400).json({
+          message:
+            "No email configured for this user. Please set vendorEmail in Transporter Master (or use email as username).",
+        });
+      }
 
       try {
         await sendOtpEmail({ toEmail, otp });
       } catch (e) {
         console.error("[GRAPH] OTP email failed:", e?.message || e);
-        // If user can't receive OTP, login can't proceed meaningfully
         otpStore.delete(key);
         return res
           .status(500)
