@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { useData } from "@/contexts/DataContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -19,8 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/common/StatusBadge";
-import { format } from "date-fns";
-import { RFQ, QuoteItem } from "@/types/rfq.types";
+import { toast } from "sonner";
+import { RFQ } from "@/types/rfq.types";
 
 const VendorRFQList = () => {
   const { user } = useAuth();
@@ -53,7 +52,7 @@ const VendorRFQList = () => {
   const [quoteValidityDate, setQuoteValidityDate] = useState("");
   const [message, setMessage] = useState("");
 
-  // Attachment viewer (inline)
+  // Attachment viewer (in-browser)
   const [attachmentViewerOpen, setAttachmentViewerOpen] = useState(false);
   const [attachmentPreviewError, setAttachmentPreviewError] = useState(false);
   const [activeAttachment, setActiveAttachment] = useState<{
@@ -67,20 +66,189 @@ const VendorRFQList = () => {
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 
+  // ★ Fetch the live rate once
+  useEffect(() => {
+    fetch("https://14.194.111.58:30443/api/rate/usdinr")
+      .then((res) => res.json())
+      .then(({ rate }) => setUsdToInr(rate))
+      .catch(() => setUsdToInr(75));
+  }, []);
+
+  const resetForm = () => {
+    setShippingLineName("");
+    setVesselName("");
+    setVesselETD("");
+    setVesselETA("");
+    setSeaFreightPerContainer("");
+    setHouseDeliveryOrderPerBOL("");
+    setCfsPerContainer("");
+    setTransportationPerContainer("");
+    setChaChargesHome("");
+    setChaChargesMOOWR("");
+    setEdiChargesPerBOE("");
+    setMooWRReeWarehousingCharges("");
+
+    setTransshipOrDirect("direct");
+    setQuoteValidityDate("");
+    setMessage("");
+  };
+
+  const toNum = (v: any) => {
+    if (v === "" || v === null || v === undefined) return 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const toDateInputValue = (d: any) => {
+    if (!d) return "";
+    const dt = new Date(d);
+    if (Number.isNaN(dt.getTime())) return "";
+    const yyyy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const isQuoteAllowed = (rfq: RFQ) => rfq.status !== "closed";
+
+  // --- attachments helpers (robust against DB string or array) ---
+  const parseAttachments = (raw: any): any[] => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  const getAttachmentName = (a: any, idx: number) => {
+    return (
+      a?.name ||
+      a?.fileName ||
+      a?.filename ||
+      a?.originalname ||
+      a?.key ||
+      a?.path ||
+      `Attachment ${idx + 1}`
+    );
+  };
+
+  const getAttachmentHref = (a: any): string | null => {
+    const url = a?.url || a?.href || a?.link;
+    if (typeof url === "string" && url.trim()) return url;
+
+    const dataUrl = a?.dataUrl || a?.dataURI;
+    if (typeof dataUrl === "string" && dataUrl.startsWith("data:"))
+      return dataUrl;
+
+    const b64 = a?.base64 || a?.content;
+    if (typeof b64 === "string" && b64.length > 200) {
+      return `data:application/octet-stream;base64,${b64}`;
+    }
+
+    return null;
+  };
+
+  const normalizeHref = (href: string) => {
+    if (!href) return href;
+    if (href.startsWith("data:")) return href;
+    if (href.startsWith("http://") || href.startsWith("https://")) return href;
+
+    if (href.startsWith("/")) return `${window.location.origin}${href}`;
+    return `${window.location.origin}/${href}`;
+  };
+
+  const guessKind = (nameOrHref: string) => {
+    const s = String(nameOrHref || "").toLowerCase();
+
+    // handle data URLs too
+    if (s.startsWith("data:application/pdf") || s.includes(".pdf")) return "pdf";
+    if (s.startsWith("data:image/")) return "image";
+
+    if (
+      s.endsWith(".png") ||
+      s.endsWith(".jpg") ||
+      s.endsWith(".jpeg") ||
+      s.endsWith(".webp") ||
+      s.endsWith(".gif") ||
+      s.endsWith(".bmp") ||
+      s.endsWith(".svg")
+    ) {
+      return "image";
+    }
+
+    if (
+      s.endsWith(".doc") ||
+      s.endsWith(".docx") ||
+      s.endsWith(".xls") ||
+      s.endsWith(".xlsx") ||
+      s.endsWith(".ppt") ||
+      s.endsWith(".pptx")
+    ) {
+      return "office";
+    }
+
+    return "other";
+  };
+
+  const buildViewSrc = (rawHref: string, name: string) => {
+    const href = normalizeHref(rawHref);
+    const kind = guessKind(name || href);
+
+    // Office viewer works only if the URL is publicly reachable
+    if (kind === "office" && href && !href.startsWith("data:")) {
+      return {
+        kind,
+        viewSrc: `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(
+          href
+        )}`,
+      };
+    }
+
+    return { kind, viewSrc: href };
+  };
+
+  const openAttachmentViewer = (att: any, idx: number) => {
+    const rawHref = getAttachmentHref(att);
+    if (!rawHref) return;
+
+    const name = getAttachmentName(att, idx);
+    const built = buildViewSrc(rawHref, name);
+
+    setAttachmentPreviewError(false);
+    setActiveAttachment({
+      name,
+      rawHref: normalizeHref(rawHref),
+      viewSrc: built.viewSrc,
+      kind: built.kind,
+    });
+    setAttachmentViewerOpen(true);
+  };
+
   const openQuoteModal = async (rfq: RFQ) => {
+    // clear viewer state so we don't show old file when switching RFQs
+    setAttachmentViewerOpen(false);
+    setAttachmentPreviewError(false);
+    setActiveAttachment(null);
+
     setSelectedRFQ(rfq);
 
-    // default baseline (same as today)
+    // baseline
     setNumberOfContainers(rfq.numberOfContainers);
 
-    // IMPORTANT: clear old values so switching RFQs doesn't show stale fields
+    // clear old values
     resetForm();
 
     setQuoteModalOpen(true);
 
-    // Prefill from vendor's latest quote (if any) using already-loaded DataContext quotes
+    // Prefill from vendor's latest quote (if any)
     const allQuotesForRfq = getQuotesByRFQId(rfq.id) || [];
-
     const latestMine = allQuotesForRfq
       .filter((x) => x.vendorName === user?.company)
       .sort(
@@ -123,16 +291,63 @@ const VendorRFQList = () => {
     }
   };
 
-  // ★ Fetch the live rate once:
-  useEffect(() => {
-    fetch("https://14.194.111.58:30443/api/rate/usdinr")
-      .then((res) => res.json())
-      .then(({ rate }) => setUsdToInr(rate))
-      .catch(() => setUsdToInr(75));
-  }, []);
+  const validateQuote = () => {
+    if (!selectedRFQ) return false;
+
+    const missing: string[] = [];
+
+    const reqStr = (label: string, v: any) => {
+      if (!String(v ?? "").trim()) missing.push(label);
+    };
+
+    const reqNum = (label: string, v: any) => {
+      const s = String(v ?? "").trim();
+      if (!s) {
+        missing.push(label);
+        return;
+      }
+      const n = Number(s);
+      if (!Number.isFinite(n)) missing.push(label);
+    };
+
+    // numberOfContainers must be valid
+    if (!Number.isFinite(Number(numberOfContainers)) || Number(numberOfContainers) < 1) {
+      missing.push("Number of Containers");
+    } else if (Number(numberOfContainers) > Number(selectedRFQ.numberOfContainers || 0)) {
+      toast.error(`Number of Containers cannot exceed RFQ (${selectedRFQ.numberOfContainers}).`);
+      return false;
+    }
+
+    reqStr("Shipping Line Name", shippingLineName);
+    reqStr("Vessel Name", vesselName);
+    reqStr("Vessel ETD", vesselETD);
+    reqStr("Vessel ETA", vesselETA);
+
+    reqNum("Sea Freight Per Container (USD)", seaFreightPerContainer);
+    reqNum("House Delivery Order Per BOL (INR)", houseDeliveryOrderPerBOL);
+    reqNum("CFS Per Container (INR)", cfsPerContainer);
+    reqNum("Transportation Per Container (INR)", transportationPerContainer);
+    reqNum("CHA Charges - Home (INR)", chaChargesHome);
+    reqNum("CHA Charges - MOOWR (INR)", chaChargesMOOWR);
+    reqNum("EDI Charges Per BOE (INR)", ediChargesPerBOE);
+    reqNum("MOOWR Re-Warehousing Charges (INR)", mooWRReeWarehousingCharges);
+
+    reqStr("Quote Validity Date", quoteValidityDate);
+
+    // message is optional (do not validate)
+
+    if (missing.length) {
+      toast.error(`Please fill all mandatory fields: ${missing.join(", ")}`);
+      return false;
+    }
+
+    return true;
+  };
 
   const handleSubmitQuote = () => {
     if (!selectedRFQ || !user?.company) return;
+
+    if (!validateQuote()) return;
 
     createQuote({
       rfqId: selectedRFQ.id,
@@ -157,38 +372,12 @@ const VendorRFQList = () => {
       message,
     });
 
-    // Reset form and close modal
     setQuoteModalOpen(false);
     setSelectedRFQ(null);
     resetForm();
   };
 
-  const resetForm = () => {
-    setShippingLineName("");
-    setVesselName("");
-    setVesselETD("");
-    setVesselETA("");
-    setSeaFreightPerContainer("");
-    setHouseDeliveryOrderPerBOL("");
-    setCfsPerContainer("");
-    setTransportationPerContainer("");
-    setChaChargesHome("");
-    setChaChargesMOOWR("");
-    setEdiChargesPerBOE("");
-    setMooWRReeWarehousingCharges("");
-
-    setTransshipOrDirect("direct");
-    setQuoteValidityDate("");
-    setMessage("");
-  };
-
-  const toNum = (v: any) => {
-    if (v === "" || v === null || v === undefined) return 0;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  };
-
-  // Calculate totals for display in the form
+  // totals
   const seaFreightUSD = toNum(seaFreightPerContainer);
   const houseDO = toNum(houseDeliveryOrderPerBOL);
   const cfs = toNum(cfsPerContainer);
@@ -205,140 +394,6 @@ const VendorRFQList = () => {
 
   const mooWRTotalINR =
     seaFreightINR + houseDO + cfs + transport + edi + moowrRewh + chaMoowr;
-
-  const isQuoteAllowed = (rfq: RFQ) => {
-    // Only block quoting when RFQ is closed
-    return rfq.status !== "closed";
-  };
-
-  const toDateInputValue = (d: any) => {
-    if (!d) return "";
-    const dt = new Date(d);
-    if (Number.isNaN(dt.getTime())) return "";
-    const yyyy = dt.getFullYear();
-    const mm = String(dt.getMonth() + 1).padStart(2, "0");
-    const dd = String(dt.getDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
-  };
-
-  // --- attachments/description helpers (robust against DB string or array) ---
-  const parseAttachments = (raw: any): any[] => {
-    if (!raw) return [];
-    if (Array.isArray(raw)) return raw;
-
-    if (typeof raw === "string") {
-      try {
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  };
-
-  const getAttachmentName = (a: any, idx: number) => {
-    return (
-      a?.name ||
-      a?.fileName ||
-      a?.filename ||
-      a?.originalname ||
-      a?.key ||
-      a?.path ||
-      `Attachment ${idx + 1}`
-    );
-  };
-
-  const getAttachmentHref = (a: any): string | null => {
-    const url = a?.url || a?.href || a?.link;
-    if (typeof url === "string" && url.trim()) return url;
-
-    const dataUrl = a?.dataUrl || a?.dataURI;
-    if (typeof dataUrl === "string" && dataUrl.startsWith("data:"))
-      return dataUrl;
-
-    const b64 = a?.base64 || a?.content;
-    if (typeof b64 === "string" && b64.length > 200) {
-      // fallback: treat as base64 binary
-      return `data:application/octet-stream;base64,${b64}`;
-    }
-
-    return null;
-  };
-
-  const normalizeHref = (href: string) => {
-    if (!href) return href;
-    if (href.startsWith("data:")) return href;
-    if (href.startsWith("http://") || href.startsWith("https://")) return href;
-
-    // handle relative paths
-    if (href.startsWith("/")) return `${window.location.origin}${href}`;
-    return `${window.location.origin}/${href}`;
-  };
-
-  const guessKind = (nameOrHref: string) => {
-    const s = String(nameOrHref || "").toLowerCase();
-    if (s.includes(".pdf")) return "pdf" as const;
-
-    if (
-      s.endsWith(".png") ||
-      s.endsWith(".jpg") ||
-      s.endsWith(".jpeg") ||
-      s.endsWith(".webp") ||
-      s.endsWith(".gif") ||
-      s.endsWith(".bmp") ||
-      s.endsWith(".svg")
-    ) {
-      return "image" as const;
-    }
-
-    if (
-      s.endsWith(".doc") ||
-      s.endsWith(".docx") ||
-      s.endsWith(".xls") ||
-      s.endsWith(".xlsx") ||
-      s.endsWith(".ppt") ||
-      s.endsWith(".pptx")
-    ) {
-      return "office" as const;
-    }
-
-    return "other" as const;
-  };
-
-  const buildViewSrc = (rawHref: string, name: string) => {
-    const href = normalizeHref(rawHref);
-    const kind = guessKind(name || href);
-
-    // Office docs: try Office Online viewer (works only if file is reachable from internet)
-    if (kind === "office" && href && !href.startsWith("data:")) {
-      return {
-        kind,
-        viewSrc: `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(
-          href
-        )}`,
-      };
-    }
-
-    return { kind, viewSrc: href };
-  };
-
-  const openAttachmentViewer = (att: any, idx: number) => {
-    const rawHref = getAttachmentHref(att);
-    if (!rawHref) return;
-
-    const name = getAttachmentName(att, idx);
-    const built = buildViewSrc(rawHref, name);
-
-    setAttachmentPreviewError(false);
-    setActiveAttachment({
-      name,
-      rawHref: normalizeHref(rawHref),
-      viewSrc: built.viewSrc,
-      kind: built.kind,
-    });
-    setAttachmentViewerOpen(true);
-  };
 
   return (
     <div className="space-y-6">
@@ -387,21 +442,21 @@ const VendorRFQList = () => {
                         </Button>
                       )}
                     </td>
-                    <td>{rfq.rfqNumber}</td>
-                    <td>{rfq.itemDescription}</td>
-                    <td>{rfq.companyName}</td>
-                    <td>{rfq.supplierName}</td>
-                    <td>{rfq.portOfLoading}</td>
-                    <td>{rfq.portOfDestination}</td>
-                    <td>{rfq.containerType}</td>
-                    <td>{rfq.numberOfContainers}</td>
-                    <td>{rfq.cargoWeight}</td>
+                    <td>{(rfq as any).rfqNumber}</td>
+                    <td>{(rfq as any).itemDescription}</td>
+                    <td>{(rfq as any).companyName}</td>
+                    <td>{(rfq as any).supplierName}</td>
+                    <td>{(rfq as any).portOfLoading}</td>
+                    <td>{(rfq as any).portOfDestination}</td>
+                    <td>{(rfq as any).containerType}</td>
+                    <td>{(rfq as any).numberOfContainers}</td>
+                    <td>{(rfq as any).cargoWeight}</td>
                     <td>
-                      {new Date(rfq.cargoReadinessDate).toLocaleDateString()}
+                      {new Date((rfq as any).cargoReadinessDate).toLocaleDateString()}
                     </td>
-                    <td>{rfq.materialPONumber}</td>
+                    <td>{(rfq as any).materialPONumber}</td>
                     <td>
-                      <StatusBadge status={rfq.status} />
+                      <StatusBadge status={(rfq as any).status} />
                     </td>
                   </tr>
                 ))
@@ -416,7 +471,7 @@ const VendorRFQList = () => {
         <DialogContent className="w-[95vw] md:w-[80vw] max-w-none max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              Submit Quote for RFQ #{selectedRFQ?.rfqNumber}
+              Submit Quote for RFQ #{(selectedRFQ as any)?.rfqNumber}
             </DialogTitle>
           </DialogHeader>
 
@@ -426,69 +481,49 @@ const VendorRFQList = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Item Description</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.itemDescription}
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).itemDescription}</div>
                 </div>
                 <div>
                   <Label>Company Name</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.companyName}
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).companyName}</div>
                 </div>
                 <div>
                   <Label>Material PO Number</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.materialPONumber}
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).materialPONumber}</div>
                 </div>
                 <div>
                   <Label>Supplier Name</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.supplierName}
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).supplierName}</div>
                 </div>
                 <div>
                   <Label>Port of Loading</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.portOfLoading}
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).portOfLoading}</div>
                 </div>
                 <div>
                   <Label>Port of Destination</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.portOfDestination}
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).portOfDestination}</div>
                 </div>
                 <div>
                   <Label>Container Type</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.containerType}
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).containerType}</div>
                 </div>
                 <div>
                   <Label>Number of Containers</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.numberOfContainers}
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).numberOfContainers}</div>
                 </div>
                 <div>
                   <Label>Cargo Weight</Label>
-                  <div className="mt-1 font-medium">
-                    {selectedRFQ.cargoWeight} tons
-                  </div>
+                  <div className="mt-1 font-medium">{(selectedRFQ as any).cargoWeight} tons</div>
                 </div>
                 <div>
                   <Label>Cargo Readiness Date</Label>
                   <div className="mt-1 font-medium">
-                    {new Date(
-                      selectedRFQ.cargoReadinessDate
-                    ).toLocaleDateString()}
+                    {new Date((selectedRFQ as any).cargoReadinessDate).toLocaleDateString()}
                   </div>
                 </div>
               </div>
 
-              {/* Message + Attachments (shown to vendor) */}
+              {/* Message + Attachments */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="rounded-md border p-3 bg-muted/20">
                   <Label>Message from Logistics</Label>
@@ -502,8 +537,7 @@ const VendorRFQList = () => {
                 <div className="rounded-md border p-3 bg-muted/20">
                   <Label>Attachments</Label>
                   <div className="mt-2">
-                    {parseAttachments((selectedRFQ as any).attachments)
-                      .length === 0 ? (
+                    {parseAttachments((selectedRFQ as any).attachments).length === 0 ? (
                       <div className="text-sm text-muted-foreground">
                         No attachments
                       </div>
@@ -525,9 +559,7 @@ const VendorRFQList = () => {
                                     type="button"
                                     variant="outline"
                                     size="sm"
-                                    onClick={() =>
-                                      openAttachmentViewer(att, idx)
-                                    }
+                                    onClick={() => openAttachmentViewer(att, idx)}
                                   >
                                     View
                                   </Button>
@@ -563,60 +595,65 @@ const VendorRFQList = () => {
                       <div className="p-4 text-sm text-muted-foreground">
                         No preview available.
                       </div>
-                    ) : attachmentPreviewError ? (
-                      <div className="p-4 text-sm">
-                        <div className="text-muted-foreground">
-                          Preview blocked/unavailable (common if the file URL
-                          disallows embedding / requires auth).
-                        </div>
-
-                        {/* Fallback: allow download in same tab */}
-                        <div className="mt-3">
+                    ) : (
+                      <>
+                        <div className="p-3 border-b flex items-center justify-end gap-2">
                           <Button
                             type="button"
                             variant="outline"
                             onClick={() => {
                               if (activeAttachment?.rawHref) {
-                                window.location.href = activeAttachment.rawHref; // same-tab navigation/download
+                                window.open(activeAttachment.rawHref, "_blank");
                               }
                             }}
                           >
-                            Download / Open
+                            Open / Download
                           </Button>
                         </div>
-                      </div>
-                    ) : activeAttachment.kind === "image" ? (
-                      <img
-                        src={activeAttachment.viewSrc}
-                        alt={activeAttachment.name}
-                        className="w-full h-full object-contain"
-                        onError={() => setAttachmentPreviewError(true)}
-                      />
-                    ) : (
-                      <iframe
-                        title={activeAttachment.name}
-                        src={activeAttachment.viewSrc}
-                        className="w-full h-full"
-                        onError={() => setAttachmentPreviewError(true)}
-                      />
+
+                        <div className="h-[calc(78vh-56px)]">
+                          {attachmentPreviewError ? (
+                            <div className="p-4 text-sm text-muted-foreground">
+                              Preview blocked/unavailable (common if the file URL
+                              disallows embedding or requires auth). Use “Open /
+                              Download”.
+                            </div>
+                          ) : activeAttachment.kind === "image" ? (
+                            <img
+                              src={activeAttachment.viewSrc}
+                              alt={activeAttachment.name}
+                              className="w-full h-full object-contain"
+                              onError={() => setAttachmentPreviewError(true)}
+                            />
+                          ) : (
+                            <iframe
+                              key={activeAttachment.viewSrc}
+                              title={activeAttachment.name}
+                              src={activeAttachment.viewSrc}
+                              className="w-full h-full"
+                              onError={() => setAttachmentPreviewError(true)}
+                              sandbox="allow-same-origin allow-scripts allow-downloads allow-forms"
+                            />
+                          )}
+                        </div>
+                      </>
                     )}
                   </div>
                 </DialogContent>
               </Dialog>
 
+              {/* Quote form */}
               <div className="border-t mt-4 pt-4">
                 <h3 className="text-lg font-medium mb-4">Quote Details</h3>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="numberOfContainers">
-                      Number of Containers
-                    </Label>
+                    <Label htmlFor="numberOfContainers">Number of Containers</Label>
                     <Input
                       id="numberOfContainers"
                       type="number"
                       min="1"
-                      max={selectedRFQ.numberOfContainers}
+                      max={(selectedRFQ as any).numberOfContainers}
                       value={numberOfContainers}
                       onChange={(e) =>
                         setNumberOfContainers(parseInt(e.target.value) || 1)
@@ -639,8 +676,9 @@ const VendorRFQList = () => {
                     <Label htmlFor="containerType">Container Type</Label>
                     <Input
                       id="containerType"
-                      value={selectedRFQ.containerType}
+                      value={(selectedRFQ as any).containerType}
                       disabled
+                      required
                     />
                   </div>
 
@@ -683,41 +721,32 @@ const VendorRFQList = () => {
                     <Input
                       id="seaFreightPerContainer"
                       type="number"
-                      min="0"
                       step="0.01"
                       value={seaFreightPerContainer}
-                      onChange={(e) =>
-                        setSeaFreightPerContainer(e.target.value)
-                      }
+                      onChange={(e) => setSeaFreightPerContainer(e.target.value)}
                       required
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="houseDeliveryOrderPerBOL">
-                      House Delivery Order Per Bill of Lading (INR)
+                      House Delivery Order Per BOL (INR)
                     </Label>
                     <Input
                       id="houseDeliveryOrderPerBOL"
                       type="number"
-                      min="0"
                       step="0.01"
                       value={houseDeliveryOrderPerBOL}
-                      onChange={(e) =>
-                        setHouseDeliveryOrderPerBOL(e.target.value)
-                      }
+                      onChange={(e) => setHouseDeliveryOrderPerBOL(e.target.value)}
                       required
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="cfsPerContainer">
-                      CFS Per Container (INR)
-                    </Label>
+                    <Label htmlFor="cfsPerContainer">CFS Per Container (INR)</Label>
                     <Input
                       id="cfsPerContainer"
                       type="number"
-                      min="0"
                       step="0.01"
                       value={cfsPerContainer}
                       onChange={(e) => setCfsPerContainer(e.target.value)}
@@ -732,24 +761,20 @@ const VendorRFQList = () => {
                     <Input
                       id="transportationPerContainer"
                       type="number"
-                      min="0"
                       step="0.01"
                       value={transportationPerContainer}
-                      onChange={(e) =>
-                        setTransportationPerContainer(e.target.value)
-                      }
+                      onChange={(e) => setTransportationPerContainer(e.target.value)}
                       required
                     />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="chaChargesHome">
-                      CHA Charges - Home Per Container (INR)
+                      CHA Charges - Home (INR)
                     </Label>
                     <Input
                       id="chaChargesHome"
                       type="number"
-                      min="0"
                       step="0.01"
                       value={chaChargesHome}
                       onChange={(e) => setChaChargesHome(e.target.value)}
@@ -759,12 +784,11 @@ const VendorRFQList = () => {
 
                   <div className="space-y-2">
                     <Label htmlFor="chaChargesMOOWR">
-                      CHA Charges - MOOWR Scheme Per Container (INR)
+                      CHA Charges - MOOWR (INR)
                     </Label>
                     <Input
                       id="chaChargesMOOWR"
                       type="number"
-                      min="0"
                       step="0.01"
                       value={chaChargesMOOWR}
                       onChange={(e) => setChaChargesMOOWR(e.target.value)}
@@ -779,7 +803,6 @@ const VendorRFQList = () => {
                     <Input
                       id="ediChargesPerBOE"
                       type="number"
-                      min="0"
                       step="0.01"
                       value={ediChargesPerBOE}
                       onChange={(e) => setEdiChargesPerBOE(e.target.value)}
@@ -789,25 +812,20 @@ const VendorRFQList = () => {
 
                   <div className="space-y-2">
                     <Label htmlFor="mooWRReeWarehousingCharges">
-                      MOOWR Re-Warehousing Charges per BOE (INR)
+                      MOOWR Re-Warehousing Charges (INR)
                     </Label>
                     <Input
                       id="mooWRReeWarehousingCharges"
                       type="number"
-                      min="0"
                       step="0.01"
                       value={mooWRReeWarehousingCharges}
-                      onChange={(e) =>
-                        setMooWRReeWarehousingCharges(e.target.value)
-                      }
+                      onChange={(e) => setMooWRReeWarehousingCharges(e.target.value)}
                       required
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="transshipOrDirect">
-                      Transship or Direct
-                    </Label>
+                    <Label htmlFor="transshipOrDirect">Transship or Direct</Label>
                     <Select
                       value={transshipOrDirect}
                       onValueChange={(value) =>
@@ -825,9 +843,7 @@ const VendorRFQList = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="quoteValidityDate">
-                      Quote Validity Date
-                    </Label>
+                    <Label htmlFor="quoteValidityDate">Quote Validity Date</Label>
                     <Input
                       id="quoteValidityDate"
                       type="date"
@@ -847,43 +863,16 @@ const VendorRFQList = () => {
                   />
                 </div>
 
-                {/* Total calculations */}
+                {/* Totals */}
                 <div className="grid grid-cols-2 gap-4 mt-6 bg-muted/20 p-4 rounded-lg">
                   <div className="space-y-2">
-                    <Label className="text-lg">
-                      Total with CHA - Home (INR)
-                    </Label>
-                    <div className="text-xl font-bold">
-                      ₹{homeTotalINR.toFixed(2)}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      Sea Freight (₹{seaFreightINR.toFixed(2)}) + House Delivery
-                      (₹
-                      {houseDO.toFixed(2)}) + CFS (₹{cfs.toFixed(2)}) +
-                      Transportation (₹
-                      {transport.toFixed(2)}) + EDI (₹{edi.toFixed(2)}) +
-                      CHA-Home (₹
-                      {chaHome.toFixed(2)})
-                    </div>
+                    <Label className="text-lg">Total with CHA - Home (INR)</Label>
+                    <div className="text-xl font-bold">₹{homeTotalINR.toFixed(2)}</div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-lg">
-                      Total with CHA - MOOWR (INR)
-                    </Label>
-                    <div className="text-xl font-bold">
-                      ₹{mooWRTotalINR.toFixed(2)}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      Sea Freight (₹{seaFreightINR.toFixed(2)}) + House Delivery
-                      (₹
-                      {houseDO.toFixed(2)}) + CFS (₹{cfs.toFixed(2)}) +
-                      Transportation (₹
-                      {transport.toFixed(2)}) + EDI (₹{edi.toFixed(2)}) + MOOWR
-                      Re-Warehousing (₹
-                      {moowrRewh.toFixed(2)}) + CHA-MOOWR (₹
-                      {chaMoowr.toFixed(2)})
-                    </div>
+                    <Label className="text-lg">Total with CHA - MOOWR (INR)</Label>
+                    <div className="text-xl font-bold">₹{mooWRTotalINR.toFixed(2)}</div>
                   </div>
                 </div>
               </div>
