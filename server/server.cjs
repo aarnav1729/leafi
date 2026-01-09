@@ -7,6 +7,8 @@ const path = require("path");
 const https = require("https");
 
 const express = require("express");
+const cookieParser = require("cookie-parser");
+
 const cors = require("cors");
 const helmet = require("helmet");
 const compression = require("compression");
@@ -39,6 +41,157 @@ function normalizeEmailForOtp(usernameOrEmail) {
   if (raw.includes("@")) return raw.toLowerCase();
   // convenience: allow login with short usernames
   return `${raw.toLowerCase()}@premierenergies.com`;
+}
+
+function splitLoginIdentifier(usernameOrEmail) {
+  const raw = String(usernameOrEmail || "").trim();
+  const lower = raw.toLowerCase();
+
+  const local = lower.includes("@") ? lower.split("@")[0] : lower;
+  const localNoDots = local.replace(/\./g, "");
+  const email = lower.includes("@") ? lower : `${lower}@premierenergies.com`;
+
+  return { raw, lower, local, localNoDots, email };
+}
+
+async function findUserByIdentifier(pool, usernameOrEmail) {
+  const { lower, local, localNoDots, email } =
+    splitLoginIdentifier(usernameOrEmail);
+
+  const r = await pool
+    .request()
+    .input("exact", sql.NVarChar(255), lower)
+    .input("local", sql.NVarChar(255), local)
+    .input("nodots", sql.NVarChar(255), localNoDots)
+    .input("email", sql.NVarChar(255), email).query(`
+      SELECT TOP 1 id, username, role, name, company
+      FROM dbo.Users
+      WHERE LOWER(username) = @exact
+         OR LOWER(username) = @email
+         OR LOWER(username) = @local
+         OR LOWER(username) = @nodots
+      ORDER BY CASE
+        WHEN LOWER(username) = @exact THEN 0
+        WHEN LOWER(username) = @email THEN 1
+        WHEN LOWER(username) = @local THEN 2
+        WHEN LOWER(username) = @nodots THEN 3
+        ELSE 4
+      END
+    `);
+
+  return r.recordset?.[0] || null;
+}
+
+async function findUserForLogin(pool, usernameOrEmail) {
+  // 1) First try Users table (your existing logic)
+  const u = await findUserByIdentifier(pool, usernameOrEmail);
+  if (u) return u;
+
+  // 2) If not found, try Transporter Master (vendor login by email/vendorCode)
+  const { lower, email, local, localNoDots } =
+    splitLoginIdentifier(usernameOrEmail);
+
+  // (a) match by vendorEmail
+  const byEmail = await pool.request().input("email", sql.NVarChar(255), email)
+    .query(`
+      SELECT TOP 1
+        CAST(id AS NVARCHAR(36)) AS id,
+        vendorCode,
+        vendorName,
+        NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail
+      FROM dbo.Master_Transporters
+      WHERE ISNULL(isActive, 1) = 1
+        AND vendorEmail IS NOT NULL
+        AND LOWER(LTRIM(RTRIM(vendorEmail))) = LOWER(@email)
+    `);
+
+  const t1 = byEmail.recordset?.[0];
+  if (t1?.vendorCode) {
+    return {
+      id: t1.id || t1.vendorCode,
+      username: String(t1.vendorEmail || "")
+        .trim()
+        .toLowerCase(), // email login identity
+      role: "vendor",
+      name: t1.vendorName || t1.vendorCode,
+      company: t1.vendorCode, // IMPORTANT: used everywhere as vendor key
+    };
+  }
+
+  // (b) match by vendorCode (if vendor types vendorCode instead of email)
+  const byCode = await pool
+    .request()
+    .input("code1", sql.NVarChar(150), local)
+    .input("code2", sql.NVarChar(150), localNoDots).query(`
+      SELECT TOP 1
+        CAST(id AS NVARCHAR(36)) AS id,
+        vendorCode,
+        vendorName,
+        NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail
+      FROM dbo.Master_Transporters
+      WHERE ISNULL(isActive, 1) = 1
+        AND (
+          LOWER(LTRIM(RTRIM(vendorCode))) = LOWER(@code1)
+          OR LOWER(LTRIM(RTRIM(vendorCode))) = LOWER(@code2)
+        )
+    `);
+
+  const t2 = byCode.recordset?.[0];
+  if (t2?.vendorCode) {
+    return {
+      id: t2.id || t2.vendorCode,
+      // username MUST be stable; if vendorEmail exists use it, else keep vendorCode
+      username: String(t2.vendorEmail || t2.vendorCode || "")
+        .trim()
+        .toLowerCase(),
+      role: "vendor",
+      name: t2.vendorName || t2.vendorCode,
+      company: t2.vendorCode,
+    };
+  }
+
+  return null;
+}
+
+async function resolveOtpEmailForUser(pool, user) {
+  // If user.username is an email, use it
+  if (String(user?.username || "").includes("@")) {
+    return String(user.username).trim().toLowerCase();
+  }
+
+  // Vendor: prefer Transporter Master vendorEmail by vendorCode (= user.company)
+  if (String(user?.role || "").toLowerCase() === "vendor") {
+    const code = String(user?.company || "").trim();
+    if (!code) return "";
+
+    try {
+      const em = await pool.request().input("code", sql.NVarChar(150), code)
+        .query(`
+          SELECT TOP 1
+            NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail,
+            NULLIF(CAST(vendorEmails AS NVARCHAR(MAX)), '') AS vendorEmails
+          FROM dbo.Master_Transporters
+          WHERE vendorCode = @code AND ISNULL(isActive, 1) = 1
+        `);
+
+      const row = em.recordset?.[0] || {};
+      const list = parseEmailList([row.vendorEmail, row.vendorEmails].filter(Boolean).join("\n"));
+      return list[0] || "";
+
+
+      const email = String(em.recordset?.[0]?.email || "")
+        .trim()
+        .toLowerCase();
+
+      return email;
+    } catch (e) {
+      console.error("[OTP] Vendor email lookup failed:", e?.message || e);
+      return "";
+    }
+  }
+
+  // Admin/logistics: infer @premierenergies.com from username
+  return normalizeEmailForOtp(user.username);
 }
 
 async function sendOtpEmail({ toEmail, otp }) {
@@ -84,7 +237,7 @@ const dbConfig = {
   password: process.env.DB_PASSWORD || "Pel@0184",
   server: process.env.DB_SERVER || "10.0.50.17",
   port: Number(process.env.DB_PORT || 1433),
-  database: process.env.DB_NAME || "leafinbound",
+  database: process.env.DB_NAME || "leafidev",
   // --- timeouts (ms) ---
   requestTimeout: Number(process.env.DB_REQUEST_TIMEOUT || 100000),
   connectionTimeout: Number(process.env.DB_CONNECTION_TIMEOUT || 10000000),
@@ -188,6 +341,19 @@ BEGIN
   );
 END;
 
+-- Widen Users.username if needed (vendorCode/email may exceed 50)
+IF EXISTS (
+  SELECT 1
+  FROM sys.columns
+  WHERE object_id = OBJECT_ID('dbo.Users')
+    AND name = 'username'
+    AND max_length > 0
+    AND max_length < (255 * 2)
+)
+BEGIN
+  ALTER TABLE dbo.Users ALTER COLUMN username NVARCHAR(255) NOT NULL;
+END;
+
 IF NOT EXISTS (
   SELECT 1 FROM sys.indexes
   WHERE name = 'UQ_Users_username'
@@ -212,9 +378,12 @@ companyName NVARCHAR(MAX) NOT NULL,
     portOfLoading NVARCHAR(100) NOT NULL,
     portOfDestination NVARCHAR(100) NOT NULL,
     containerType NVARCHAR(50) NOT NULL,
+    incoterms NVARCHAR(50) NULL,
     numberOfContainers INT NOT NULL,
     cargoWeight FLOAT NOT NULL,
     cargoReadinessDate DATETIME2 NOT NULL,
+    cargoReadinessFrom DATETIME2 NULL,
+    cargoReadinessTo DATETIME2 NULL,
 
     description NVARCHAR(1000) NULL,
     attachments NVARCHAR(MAX) NULL,
@@ -248,10 +417,31 @@ BEGIN
   CREATE TABLE dbo.Master_CompanyNames (
     id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Master_CompanyNames PRIMARY KEY DEFAULT NEWID(),
     value NVARCHAR(MAX) NOT NULL,
+    shortName NVARCHAR(100) NULL,          -- ✅ NEW
     isActive BIT NOT NULL CONSTRAINT DF_Master_CompanyNames_isActive DEFAULT (1),
     createdAt DATETIME2 NOT NULL CONSTRAINT DF_Master_CompanyNames_createdAt DEFAULT SYSUTCDATETIME(),
     updatedAt DATETIME2 NULL
   );
+END;
+
+-- ✅ Add shortName if table already exists (safe / idempotent)
+IF OBJECT_ID('dbo.Master_CompanyNames','U') IS NOT NULL
+  AND COL_LENGTH('dbo.Master_CompanyNames','shortName') IS NULL
+BEGIN
+  ALTER TABLE dbo.Master_CompanyNames ADD shortName NVARCHAR(100) NULL;
+END;
+
+-- Incoterms
+IF OBJECT_ID('dbo.Master_Incoterms','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.Master_Incoterms (
+    id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Master_Incoterms PRIMARY KEY DEFAULT NEWID(),
+    value NVARCHAR(50) NOT NULL,
+    isActive BIT NOT NULL CONSTRAINT DF_Master_Incoterms_isActive DEFAULT (1),
+    createdAt DATETIME2 NOT NULL CONSTRAINT DF_Master_Incoterms_createdAt DEFAULT SYSUTCDATETIME(),
+    updatedAt DATETIME2 NULL
+  );
+  CREATE UNIQUE NONCLUSTERED INDEX UQ_Master_Incoterms_value ON dbo.Master_Incoterms(value);
 END;
 
 -- Supplier Names
@@ -273,11 +463,19 @@ BEGIN
   CREATE TABLE dbo.Master_PortsOfLoading (
     id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Master_PortsOfLoading PRIMARY KEY DEFAULT NEWID(),
     value NVARCHAR(100) NOT NULL,
+    country NVARCHAR(100) NULL,            -- ✅ NEW
     isActive BIT NOT NULL CONSTRAINT DF_Master_PortsOfLoading_isActive DEFAULT (1),
     createdAt DATETIME2 NOT NULL CONSTRAINT DF_Master_PortsOfLoading_createdAt DEFAULT SYSUTCDATETIME(),
     updatedAt DATETIME2 NULL
   );
   CREATE UNIQUE NONCLUSTERED INDEX UQ_Master_PortsOfLoading_value ON dbo.Master_PortsOfLoading(value);
+END;
+
+-- ✅ Add country if table already exists (safe / idempotent)
+IF OBJECT_ID('dbo.Master_PortsOfLoading','U') IS NOT NULL
+  AND COL_LENGTH('dbo.Master_PortsOfLoading','country') IS NULL
+BEGIN
+  ALTER TABLE dbo.Master_PortsOfLoading ADD country NVARCHAR(100) NULL;
 END;
 
 -- Port Of Destination
@@ -313,7 +511,9 @@ BEGIN
     id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Master_Transporters PRIMARY KEY DEFAULT NEWID(),
     vendorCode NVARCHAR(150) NOT NULL,     -- what shows as "vendor/company" option (e.g., VENDORA)
     vendorName NVARCHAR(255) NOT NULL,     -- display name
+    shortName NVARCHAR(100) NULL,          -- ✅ NEW
     vendorEmail NVARCHAR(255) NULL,        -- for notifications
+    vendorEmails NVARCHAR(MAX) NULL,   -- ✅ NEW (multi-email list)
     isActive BIT NOT NULL CONSTRAINT DF_Master_Transporters_isActive DEFAULT (1),
     createdAt DATETIME2 NOT NULL CONSTRAINT DF_Master_Transporters_createdAt DEFAULT SYSUTCDATETIME(),
     updatedAt DATETIME2 NULL
@@ -322,6 +522,21 @@ BEGIN
   CREATE UNIQUE NONCLUSTERED INDEX UQ_Master_Transporters_vendorCode
   ON dbo.Master_Transporters(vendorCode);
 END;
+
+-- ✅ Add shortName if table already exists (safe / idempotent)
+IF OBJECT_ID('dbo.Master_Transporters','U') IS NOT NULL
+  AND COL_LENGTH('dbo.Master_Transporters','shortName') IS NULL
+BEGIN
+  ALTER TABLE dbo.Master_Transporters ADD shortName NVARCHAR(100) NULL;
+END;
+
+-- ✅ Add vendorEmails (multi-email list) if table already exists (safe / idempotent)
+IF OBJECT_ID('dbo.Master_Transporters','U') IS NOT NULL
+  AND COL_LENGTH('dbo.Master_Transporters','vendorEmails') IS NULL
+BEGIN
+  ALTER TABLE dbo.Master_Transporters ADD vendorEmails NVARCHAR(MAX) NULL;
+END;
+
 
 -- Seed Transporter Master from existing vendor users (insert-only)
 IF OBJECT_ID('dbo.Users','U') IS NOT NULL
@@ -382,6 +597,66 @@ BEGIN
   FROM dbo.RFQs r
   WHERE r.containerType IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM dbo.Master_ContainerTypes m WHERE m.value = r.containerType);
+END;
+
+
+  -- Incoterms (only if RFQs column exists)
+  IF COL_LENGTH('dbo.RFQs','incoterms') IS NOT NULL
+  BEGIN
+    EXEC(N'
+      INSERT INTO dbo.Master_Incoterms(value)
+      SELECT DISTINCT r.incoterms
+      FROM dbo.RFQs r
+      WHERE r.incoterms IS NOT NULL AND LTRIM(RTRIM(r.incoterms)) <> ''''
+        AND NOT EXISTS (
+          SELECT 1 FROM dbo.Master_Incoterms m WHERE m.value = r.incoterms
+        );
+    ');
+  END;
+
+
+-- Seed Users from existing active Transporter Master (insert-only)
+IF OBJECT_ID('dbo.Master_Transporters','U') IS NOT NULL
+  AND OBJECT_ID('dbo.Users','U') IS NOT NULL
+BEGIN
+  ;WITH T AS (
+    SELECT
+      vendorCode,
+      vendorName,
+      NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail
+    FROM dbo.Master_Transporters
+    WHERE ISNULL(isActive, 1) = 1
+  )
+  INSERT INTO dbo.Users (username, password, role, name, company)
+  SELECT
+    ua.username,
+    ua.username,
+    'vendor',
+    ISNULL(NULLIF(LTRIM(RTRIM(t.vendorName)), ''), ua.username),
+    t.vendorCode
+  FROM T t
+  CROSS APPLY (
+    SELECT
+      CASE
+        WHEN t.vendorEmail IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM dbo.Users u2
+               WHERE LOWER(u2.username) = LOWER(t.vendorEmail)
+             )
+          THEN LOWER(t.vendorEmail)
+        WHEN NOT EXISTS (
+               SELECT 1 FROM dbo.Users u3
+               WHERE LOWER(u3.username) = LOWER(t.vendorCode)
+             )
+          THEN t.vendorCode
+        ELSE NULL
+      END AS username
+  ) ua
+  WHERE ua.username IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM dbo.Users u
+      WHERE u.role = 'vendor' AND u.company = t.vendorCode
+    );
 END;
 
 -- ─────────────────────────────────────────────
@@ -450,6 +725,36 @@ BEGIN
     ALTER TABLE dbo.RFQs ALTER COLUMN itemDescription NVARCHAR(500) NOT NULL;
   END;
 
+    -- incoterms (nullable, backward compatible)
+  IF COL_LENGTH('dbo.RFQs', 'incoterms') IS NULL
+  BEGIN
+    ALTER TABLE dbo.RFQs ADD incoterms NVARCHAR(50) NULL;
+  END;
+
+  -- incoterms -> 50 (if somehow smaller)
+  IF EXISTS (
+    SELECT 1
+    FROM sys.columns
+    WHERE object_id = OBJECT_ID('dbo.RFQs')
+      AND name = 'incoterms'
+      AND max_length > 0
+      AND max_length < (50 * 2)
+  )
+  BEGIN
+    ALTER TABLE dbo.RFQs ALTER COLUMN incoterms NVARCHAR(50) NULL;
+  END;
+
+
+  -- Cargo readiness range (backward compatible)
+  IF COL_LENGTH('dbo.RFQs', 'cargoReadinessFrom') IS NULL
+  BEGIN
+    ALTER TABLE dbo.RFQs ADD cargoReadinessFrom DATETIME2 NULL;
+  END;
+
+  IF COL_LENGTH('dbo.RFQs', 'cargoReadinessTo') IS NULL
+  BEGIN
+    ALTER TABLE dbo.RFQs ADD cargoReadinessTo DATETIME2 NULL;
+  END;
 
   -- companyName -> MAX (handles long multi-line addresses)
   IF EXISTS (
@@ -743,12 +1048,115 @@ END;
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+// ========================= Allocation Email CC Lists =========================
+const ALLOCATION_CC_ALWAYS = [
+  "logistics.imports@premierenergies.com",
+  "narayana.b@premierenergies.com",
+  "pintu.pradhan@premierenergies.com",
+];
+
+const ALLOCATION_CC_WITH_REASON = [
+  "aarnav.singh@premierenergies.com",
+  "vishnu.hazari@premierenergies.com",
+];
+
+function graphRecipientsFromEmails(emails) {
+  const seen = new Set();
+  const clean = (emails || [])
+    .map((e) =>
+      String(e || "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter((e) => e && e.includes("@") && !seen.has(e) && (seen.add(e), true));
+
+  return clean.map((address) => ({ emailAddress: { address } }));
+}
+
+function parseEmailList(input) {
+  const raw = Array.isArray(input) ? input.join("\n") : String(input || "");
+  const parts = raw
+    .replace(/\r\n/g, "\n")
+    .split(/[\n,; ]+/g)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  const seen = new Set();
+  const out = [];
+  for (const e of parts) {
+    if (!e.includes("@")) continue;
+    if (seen.has(e)) continue;
+    seen.add(e);
+    out.push(e);
+  }
+  return out;
+}
+
+function serializeEmailList(emails) {
+  const list = parseEmailList(emails);
+  return list.length ? list.join("\n") : null; // store newline-separated
+}
+
+async function getVendorNotificationEmails(pool, vendorCode) {
+  const code = String(vendorCode || "").trim();
+  if (!code) return [];
+
+  const r = await pool.request().input("code", sql.NVarChar(150), code).query(`
+    SELECT TOP 1
+      NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail,
+      NULLIF(CAST(vendorEmails AS NVARCHAR(MAX)), '') AS vendorEmails
+    FROM dbo.Master_Transporters
+    WHERE vendorCode = @code AND ISNULL(isActive, 1) = 1
+  `);
+
+  const row = r.recordset?.[0] || {};
+  return parseEmailList([row.vendorEmail, row.vendorEmails].filter(Boolean).join("\n"));
+}
+
+
 function safeJsonParse(str, fallback) {
   try {
     return JSON.parse(str);
   } catch {
     return fallback;
   }
+}
+
+function normalizeMasterValue(key, value) {
+  let v = String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+
+  // Incoterms are typically uppercase and single-space
+  if (key === "incoterms") {
+    v = v.replace(/\s+/g, " ").toUpperCase();
+  }
+
+  return v;
+}
+
+function parseDateInput(v) {
+  if (!v) return null;
+  if (v instanceof Date) return v;
+
+  const s = String(v).trim();
+  if (!s) return null;
+
+  // Handle <input type="date"> => "YYYY-MM-DD"
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const d = new Date(`${s}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  // Handle "DD-MM-YYYY" or "DD/MM/YYYY"
+  if (/^\d{2}[-/]\d{2}[-/]\d{4}$/.test(s)) {
+    const [dd, mm, yyyy] = s.split(/[-/]/);
+    const d2 = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
+    return Number.isNaN(d2.getTime()) ? null : d2;
+  }
+
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function rfqCreationEmailTemplate({
@@ -760,15 +1168,27 @@ function rfqCreationEmailTemplate({
   portOfLoading,
   portOfDestination,
   containerType,
+  incoterms,
   numberOfContainers,
   cargoWeight,
   cargoReadinessDate,
+  cargoReadinessFrom,
+  cargoReadinessTo,
+
   description,
   attachmentsCount,
   createdBy,
 }) {
-  const fmtDate = (d) =>
+  const fmtDateTime = (d) =>
     d ? new Date(d).toLocaleString("en-IN", { hour12: true }) : "—";
+
+  const fmtRange = (from, to, legacy) => {
+    const f = from || legacy;
+    const t = to || from || legacy;
+    if (!f) return "—";
+    if (!t || String(t) === String(f)) return fmtDateTime(f);
+    return `${fmtDateTime(f)} → ${fmtDateTime(t)}`;
+  };
 
   const row = (label, value) => `
     <tr>
@@ -828,9 +1248,19 @@ function rfqCreationEmailTemplate({
                 ${row("Port of Loading", portOfLoading)}
                 ${row("Port of Destination", portOfDestination)}
                 ${row("Container Type", containerType)}
+                ${row("Incoterms", incoterms)}
                 ${row("Number of Containers", numberOfContainers)}
                 ${row("Cargo Weight (tons)", cargoWeight)}
-                ${row("Cargo Readiness Date", fmtDate(cargoReadinessDate))}
+                                ${row(
+                                  "Cargo Readiness Window",
+                                  fmtRange(
+                                    cargoReadinessFrom,
+                                    cargoReadinessTo,
+                                    cargoReadinessDate
+                                  )
+                                )}
+
+
                 ${row(
                   "Attachments",
                   attachmentsCount ? `${attachmentsCount} file(s)` : "None"
@@ -855,8 +1285,9 @@ function rfqCreationEmailTemplate({
           <!-- Footer -->
           <tr>
             <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;">
-              Created by <strong>${createdBy}</strong><br/>
-              This is an automated message from LEAFI. Please do not reply.
+              Created for <strong>${createdBy}</strong><br/>
+              This is an automated message from LEAFI. Please do not reply.<br/>
+              If you have any queries, please reach out to: aarnav.singh@premierenergies.com
             </td>
           </tr>
 
@@ -1067,6 +1498,7 @@ function allocationEmailTemplate({
     ["Port of Loading", rfq?.portOfLoading],
     ["Port of Destination", rfq?.portOfDestination],
     ["Container Type", rfq?.containerType],
+    ["Incoterms", rfq?.incoterms],
     ["Req’d Containers", rfq?.numberOfContainers],
     ["Cargo Readiness Date", fmtDateTime(rfq?.cargoReadinessDate)],
   ];
@@ -1240,6 +1672,8 @@ function allocationDeviationInternalTemplate({
     ["Port of Loading", rfq?.portOfLoading],
     ["Port of Destination", rfq?.portOfDestination],
     ["Container Type", rfq?.containerType],
+    ["Incoterms", rfq?.incoterms],
+
     ["Req’d Containers", rfq?.numberOfContainers],
     ["Cargo Weight (tons)", rfq?.cargoWeight],
     ["Cargo Readiness Date", fmtDateTime(rfq?.cargoReadinessDate)],
@@ -1477,6 +1911,8 @@ function quoteSubmissionEmailTemplate({
     ["Port of Loading", rfq?.portOfLoading],
     ["Port of Destination", rfq?.portOfDestination],
     ["Container Type", rfq?.containerType],
+    ["Incoterms", rfq?.incoterms],
+
     ["Req’d Containers", rfq?.numberOfContainers],
     ["Cargo Weight (tons)", rfq?.cargoWeight],
     ["Cargo Readiness Date", fmtDateTime(rfq?.cargoReadinessDate)],
@@ -1620,12 +2056,29 @@ function requireAdmin(req, res, next) {
 }
 
 const MASTER = {
-  itemDescriptions: { table: "dbo.Master_ItemDescriptions", max: 500 },
-  companyNames: { table: "dbo.Master_CompanyNames", max: sql.MAX },
-  suppliers: { table: "dbo.Master_Suppliers", max: 255 },
-  portsOfLoading: { table: "dbo.Master_PortsOfLoading", max: 100 },
-  portsOfDestination: { table: "dbo.Master_PortsOfDestination", max: 100 },
-  containerTypes: { table: "dbo.Master_ContainerTypes", max: 50 },
+  itemDescriptions: {
+    table: "dbo.Master_ItemDescriptions",
+    max: 500,
+    extras: [],
+  },
+  companyNames: {
+    table: "dbo.Master_CompanyNames",
+    max: sql.MAX,
+    extras: ["shortName"],
+  },
+  suppliers: { table: "dbo.Master_Suppliers", max: 255, extras: [] },
+  portsOfLoading: {
+    table: "dbo.Master_PortsOfLoading",
+    max: 100,
+    extras: ["country"],
+  },
+  portsOfDestination: {
+    table: "dbo.Master_PortsOfDestination",
+    max: 100,
+    extras: [],
+  },
+  containerTypes: { table: "dbo.Master_ContainerTypes", max: 50, extras: [] },
+  incoterms: { table: "dbo.Master_Incoterms", max: 50, extras: [] },
 };
 
 function getMasterDef(key) {
@@ -1635,14 +2088,14 @@ function getMasterDef(key) {
 async function ensureMasterValue(pool, key, value) {
   const def = getMasterDef(key);
   if (!def) return;
-  const v = String(value || "").trim();
+
+  const v = normalizeMasterValue(key, value);
   if (!v) return;
 
   const req = pool.request();
   if (def.max === sql.MAX) req.input("v", sql.NVarChar(sql.MAX), v);
   else req.input("v", sql.NVarChar(def.max), v);
 
-  // insert-only (do not change isActive if exists)
   await req.query(`
     IF NOT EXISTS (SELECT 1 FROM ${def.table} WHERE value = @v)
     BEGIN
@@ -1652,10 +2105,101 @@ async function ensureMasterValue(pool, key, value) {
   `);
 }
 
+async function ensureTransporterFromVendorUser(pool, userLike) {
+  const role = String(userLike?.role || "").toLowerCase();
+  if (role !== "vendor") return;
+
+  const username = String(userLike?.username || "").trim();
+  const name = String(userLike?.name || "").trim();
+
+  // vendorCode MUST come from company (preferred). Fallback to username.
+  const vendorCode = String(userLike?.company || "").trim() || username;
+  if (!vendorCode) return;
+
+  const vendorName = name || vendorCode;
+  const vendorEmail = username.includes("@") ? username.toLowerCase() : null;
+
+  await pool
+    .request()
+    .input("vendorCode", sql.NVarChar(150), vendorCode)
+    .input("vendorName", sql.NVarChar(255), vendorName)
+    .input("vendorEmail", sql.NVarChar(255), vendorEmail).query(`
+      IF NOT EXISTS (SELECT 1 FROM dbo.Master_Transporters WHERE vendorCode = @vendorCode)
+      BEGIN
+        INSERT INTO dbo.Master_Transporters (vendorCode, vendorName, vendorEmail, isActive, createdAt)
+        VALUES (@vendorCode, @vendorName, @vendorEmail, 1, SYSUTCDATETIME());
+      END
+      ELSE
+      BEGIN
+        -- "fill blanks only" to avoid overwriting intentional values
+        UPDATE dbo.Master_Transporters
+        SET
+          vendorName = CASE WHEN NULLIF(LTRIM(RTRIM(vendorName)), '') IS NULL THEN @vendorName ELSE vendorName END,
+          vendorEmail = CASE WHEN NULLIF(LTRIM(RTRIM(vendorEmail)), '') IS NULL THEN @vendorEmail ELSE vendorEmail END,
+          updatedAt = SYSUTCDATETIME()
+        WHERE vendorCode = @vendorCode;
+      END
+    `);
+}
+
+async function ensureVendorUserFromTransporter(pool, transporterLike) {
+  const vendorCode = String(transporterLike?.vendorCode || "").trim();
+  if (!vendorCode) return;
+
+  const isActive = transporterLike?.isActive;
+  if (isActive === false) return; // avoid enabling login for inactive transporters
+
+  const vendorName =
+    String(transporterLike?.vendorName || "").trim() || vendorCode;
+
+  const emailRaw = transporterLike?.vendorEmail;
+  const vendorEmail =
+    emailRaw == null
+      ? ""
+      : String(emailRaw || "")
+          .trim()
+          .toLowerCase();
+
+  // username rule: prefer email if present; else vendorCode
+  const desiredUsername =
+    vendorEmail && vendorEmail.includes("@") ? vendorEmail : vendorCode;
+
+  // Skip if vendor user already exists for this vendorCode
+  const existsByCompany = await pool
+    .request()
+    .input("company", sql.NVarChar(150), vendorCode)
+    .query(
+      `SELECT TOP 1 1 AS ok FROM dbo.Users WHERE role='vendor' AND company=@company`
+    );
+  if (existsByCompany.recordset?.length) return;
+
+  // Skip if username already taken (avoid unique violation)
+  const existsByUsername = await pool
+    .request()
+    .input("username", sql.NVarChar(255), desiredUsername)
+    .query(
+      `SELECT TOP 1 1 AS ok FROM dbo.Users WHERE LOWER(username)=LOWER(@username)`
+    );
+  if (existsByUsername.recordset?.length) return;
+
+  // Insert vendor user (password is required by schema; OTP login ignores it)
+  await pool
+    .request()
+    .input("username", sql.NVarChar(255), desiredUsername)
+    .input("password", sql.NVarChar(255), desiredUsername)
+    .input("role", sql.NVarChar(20), "vendor")
+    .input("name", sql.NVarChar(100), vendorName)
+    .input("company", sql.NVarChar(150), vendorCode).query(`
+      INSERT INTO dbo.Users (username, password, role, name, company)
+      VALUES (@username, @password, @role, @name, @company)
+    `);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // App & Middleware (match reference style)
 // ─────────────────────────────────────────────────────────────────────────────
 const app = express();
+app.use(cookieParser());
 
 app.use(
   helmet({
@@ -1688,11 +2232,19 @@ app.use(
   })
 );
 
+const corsOrigin = process.env.CORS_ORIGIN; // comma-separated if you want
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "*",
+    origin: corsOrigin
+      ? corsOrigin
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : true, // reflect origin
+    credentials: true,
   })
 );
+
 app.use(compression());
 app.use(express.json({ limit: "25mb" }));
 app.use(
@@ -1706,16 +2258,31 @@ app.use(
 // ─────────────────────────────────────────────────────────────────────────────
 async function authenticate(req, res, next) {
   const creds = requireBasicAuth(req);
+  const cookieToken = req.cookies?.leafi_session;
+
+  // Prefer cookie session whenever present (avoids stale Basic header causing 401 loops)
+  if (cookieToken) {
+    const s = sessionStore.get(cookieToken);
+    if (s) {
+      if (Date.now() > s.expiresAt) {
+        sessionStore.delete(cookieToken);
+      } else {
+        req.user = s.user;
+        return next();
+      }
+    }
+  }
+
+  // Basic-auth fallback
   if (!creds) return res.sendStatus(401);
 
-  // 1) NEW: session-token auth (token is sent as BasicAuth password)
+  // 1) session-token auth (token is sent as BasicAuth password)
   const session = sessionStore.get(creds.password);
   if (session) {
     if (Date.now() > session.expiresAt) {
       sessionStore.delete(creds.password);
       return res.sendStatus(401);
     }
-    // Ensure username matches the logged-in user
     if (
       String(session.user?.username || "").toLowerCase() !==
       String(creds.username || "").toLowerCase()
@@ -1726,8 +2293,7 @@ async function authenticate(req, res, next) {
     return next();
   }
 
-  // 2) fallback legacy: username+password from DB (optional compatibility)
-
+  // 2) fallback legacy DB username+password...
   try {
     const pool = await getPool();
     const result = await pool
@@ -1763,79 +2329,34 @@ app.post("/api/login", async (req, res) => {
   try {
     const pool = await getPool();
 
-    // Ensure user exists
-    const userRes = await pool
-      .request()
-      .input("username", sql.NVarChar, username).query(`
-        SELECT TOP 1 id, username, role, name, company
-        FROM dbo.Users
-        WHERE username = @username
-      `);
+    // Find user by username OR email (case-insensitive)
+    const user = await findUserForLogin(pool, username);
 
-    if (!userRes.recordset.length) {
+    if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
 
-    const user = userRes.recordset[0];
+    // Canonical OTP key is ALWAYS the DB username (lowercased)
+    const otpKey = String(user.username || "")
+      .trim()
+      .toLowerCase();
 
     // STEP 1: request OTP (password empty)
     // STEP 1: request OTP (password empty)
     if (!password) {
       const otp = genOtp4();
-      const key = String(username).toLowerCase();
-
-      otpStore.set(key, {
+      otpStore.set(otpKey, {
         otp,
         expiresAt: Date.now() + OTP_TTL_MS,
       });
 
-      // Resolve where OTP should be sent
-      let toEmail = "";
-
-      // 1) If user typed an email, use it
-      if (String(username).includes("@")) {
-        toEmail = String(username).trim().toLowerCase();
-      } else {
-        // 2) If this is a vendor, prefer Master_Transporters.vendorEmail by vendorCode (= user.company)
-        if (String(user.role || "").toLowerCase() === "vendor") {
-          try {
-            const em = await pool
-              .request()
-              .input(
-                "code",
-                sql.NVarChar(150),
-                String(user.company || "").trim()
-              ).query(`
-          SELECT TOP 1 NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS email
-          FROM dbo.Master_Transporters
-          WHERE vendorCode = @code AND ISNULL(isActive, 1) = 1
-        `);
-
-            toEmail = String(em.recordset?.[0]?.email || "")
-              .trim()
-              .toLowerCase();
-          } catch (e) {
-            console.error("[OTP] Vendor email lookup failed:", e?.message || e);
-          }
-        }
-
-        // 3) Fallbacks
-        if (!toEmail) {
-          // If the stored username in DB is actually an email, use that
-          if (String(user.username || "").includes("@")) {
-            toEmail = String(user.username).trim().toLowerCase();
-          } else {
-            // last resort: internal email convention
-            toEmail = normalizeEmailForOtp(username);
-          }
-        }
-      }
+      const toEmail = await resolveOtpEmailForUser(pool, user);
 
       if (!toEmail || !toEmail.includes("@")) {
-        otpStore.delete(key);
+        otpStore.delete(otpKey);
         return res.status(400).json({
           message:
-            "No email configured for this user. Please set vendorEmail in Transporter Master (or use email as username).",
+            "No email configured for this user. For vendors, set vendorEmail in Transporter Master.",
         });
       }
 
@@ -1843,20 +2364,19 @@ app.post("/api/login", async (req, res) => {
         await sendOtpEmail({ toEmail, otp });
       } catch (e) {
         console.error("[GRAPH] OTP email failed:", e?.message || e);
-        otpStore.delete(key);
+        otpStore.delete(otpKey);
         return res
           .status(500)
           .json({ message: "Failed to send OTP email. Try again." });
       }
 
-      // ✅ Do NOT log OTP, do NOT return OTP
       return res.json({ ok: true, step: "otp_sent" });
     }
 
     // STEP 2: verify OTP (password is OTP)
-    const rec = otpStore.get(String(username).toLowerCase());
+    const rec = otpStore.get(otpKey);
     if (!rec || Date.now() > rec.expiresAt) {
-      otpStore.delete(String(username).toLowerCase());
+      otpStore.delete(otpKey);
       return res.status(401).json({ message: "OTP expired. Request again." });
     }
 
@@ -1864,7 +2384,7 @@ app.post("/api/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid OTP" });
     }
 
-    otpStore.delete(String(username).toLowerCase());
+    otpStore.delete(otpKey);
 
     // Create session token (used as BasicAuth password for all subsequent API calls)
     const sessionToken = genSessionToken();
@@ -1873,10 +2393,419 @@ app.post("/api/login", async (req, res) => {
       expiresAt: Date.now() + SESSION_TTL_MS,
     });
 
+    // ✅ NEW: set HttpOnly cookie so refresh stays logged-in
+    res.cookie("leafi_session", sessionToken, {
+      httpOnly: true,
+      secure: true, // your server is HTTPS
+      sameSite: "lax",
+      maxAge: SESSION_TTL_MS,
+      path: "/",
+    });
+
+    // Optional: non-HttpOnly helper cookie (useful for UI-only checks)
+    res.cookie("leafi_user", String(user.username || ""), {
+      httpOnly: false,
+      secure: true,
+      sameSite: "lax",
+      maxAge: SESSION_TTL_MS,
+      path: "/",
+    });
+
     return res.json({ ok: true, step: "authenticated", user, sessionToken });
   } catch (err) {
     console.error("[API] /api/login error:", err);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ✅ Session bootstrap endpoint (frontend calls this on refresh)
+app.get("/api/me", authenticate, (req, res) => {
+  return res.json({ ok: true, user: req.user });
+});
+
+// ✅ Logout clears cookie + server session
+app.post("/api/logout", (req, res) => {
+  const token = req.cookies?.leafi_session;
+  if (token) sessionStore.delete(token);
+
+  res.clearCookie("leafi_session", { path: "/" });
+  res.clearCookie("leafi_user", { path: "/" });
+
+  return res.json({ ok: true });
+});
+
+// ========================= ADMIN: MASTERS + TRANSPORTERS =========================
+// CMD+F: ADMIN: MASTERS + TRANSPORTERS
+
+app.get("/api/admin/masters", authenticate, requireAdminOrLogistics, async (req, res) => {
+  try {
+    // used by UI only for labels; keep minimal
+    return res.json(
+      Object.keys(MASTER).map((k) => ({ key: k, label: k }))
+    );
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to load masters" });
+  }
+});
+
+app.get("/api/admin/masters/:key", authenticate, requireAdminOrLogistics, async (req, res) => {
+  const key = req.params.key;
+  const def = getMasterDef(key);
+  if (!def) return res.status(400).json({ message: "Invalid master key" });
+
+  try {
+    const pool = await getPool();
+
+    const extraSelect =
+      key === "companyNames"
+        ? ", CAST(shortName AS NVARCHAR(100)) AS shortName"
+        : key === "portsOfLoading"
+        ? ", CAST(country AS NVARCHAR(100)) AS country"
+        : "";
+
+    const r = await pool.request().query(`
+      SELECT
+        CAST(id AS NVARCHAR(50)) AS id,
+        CAST([value] AS NVARCHAR(MAX)) AS [value]
+        ${extraSelect}
+        , CAST(isActive AS BIT) AS isActive
+        , createdAt
+        , updatedAt
+      FROM ${def.table}
+      ORDER BY createdAt DESC
+    `);
+
+    return res.json(r.recordset || []);
+  } catch (e) {
+    console.error("[ADMIN] GET masters failed:", e?.message || e);
+    return res.status(500).json({ message: "Failed to load master rows" });
+  }
+});
+
+app.post("/api/admin/masters/:key", authenticate, requireAdminOrLogistics, async (req, res) => {
+  const key = req.params.key;
+  const def = getMasterDef(key);
+  if (!def) return res.status(400).json({ message: "Invalid master key" });
+
+  const value = normalizeMasterValue(key, req.body?.value);
+  const isActive = req.body?.isActive === false ? 0 : 1;
+
+  const shortNameRaw = req.body?.shortName;
+  const countryRaw = req.body?.country;
+
+  const shortName =
+    key === "companyNames"
+      ? (shortNameRaw == null ? null : String(shortNameRaw).trim() || null)
+      : null;
+
+  const country =
+    key === "portsOfLoading"
+      ? (countryRaw == null ? null : String(countryRaw).trim() || null)
+      : null;
+
+  if (!value) return res.status(400).json({ message: "value required" });
+
+  try {
+    const pool = await getPool();
+
+    // prevent duplicates (case-insensitive)
+    const exists = await pool
+      .request()
+      .input("v", sql.NVarChar(sql.MAX), value)
+      .query(`SELECT TOP 1 1 AS ok FROM ${def.table} WHERE LOWER(LTRIM(RTRIM([value]))) = LOWER(LTRIM(RTRIM(@v)))`);
+    if (exists.recordset?.length) {
+      return res.status(409).json({ message: "Value already exists" });
+    }
+
+    const rq = pool.request();
+    if (def.max === sql.MAX) rq.input("v", sql.NVarChar(sql.MAX), value);
+    else rq.input("v", sql.NVarChar(def.max), value);
+
+    rq.input("isActive", sql.Bit, isActive);
+
+    if (key === "companyNames") rq.input("shortName", sql.NVarChar(100), shortName);
+    if (key === "portsOfLoading") rq.input("country", sql.NVarChar(100), country);
+
+    const cols = ["value", "isActive", "createdAt"];
+    const vals = ["@v", "@isActive", "SYSUTCDATETIME()"];
+
+    if (key === "companyNames") {
+      cols.push("shortName");
+      vals.push("@shortName");
+    }
+    if (key === "portsOfLoading") {
+      cols.push("country");
+      vals.push("@country");
+    }
+
+    await rq.query(`
+      INSERT INTO ${def.table} (${cols.join(", ")})
+      VALUES (${vals.join(", ")})
+    `);
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[ADMIN] POST masters failed:", e?.message || e);
+    return res.status(500).json({ message: "Failed to create master row" });
+  }
+});
+
+app.put("/api/admin/masters/:key/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
+  const key = req.params.key;
+  const def = getMasterDef(key);
+  if (!def) return res.status(400).json({ message: "Invalid master key" });
+
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ message: "id required" });
+
+  const value = req.body?.value != null ? normalizeMasterValue(key, req.body.value) : null;
+  const isActive = req.body?.isActive;
+
+  const shortName =
+    key === "companyNames" && "shortName" in (req.body || {})
+      ? (req.body.shortName == null ? null : String(req.body.shortName).trim() || null)
+      : undefined;
+
+  const country =
+    key === "portsOfLoading" && "country" in (req.body || {})
+      ? (req.body.country == null ? null : String(req.body.country).trim() || null)
+      : undefined;
+
+  try {
+    const pool = await getPool();
+
+    const rq = pool.request();
+    rq.input("id", sql.UniqueIdentifier, id);
+
+    const sets = [];
+    if (value != null) {
+      if (!value) return res.status(400).json({ message: "value cannot be empty" });
+
+      if (def.max === sql.MAX) rq.input("v", sql.NVarChar(sql.MAX), value);
+      else rq.input("v", sql.NVarChar(def.max), value);
+
+      sets.push("[value] = @v");
+    }
+
+    if (typeof isActive === "boolean") {
+      rq.input("isActive", sql.Bit, isActive);
+      sets.push("isActive = @isActive");
+    }
+
+    if (shortName !== undefined) {
+      rq.input("shortName", sql.NVarChar(100), shortName);
+      sets.push("shortName = @shortName");
+    }
+
+    if (country !== undefined) {
+      rq.input("country", sql.NVarChar(100), country);
+      sets.push("country = @country");
+    }
+
+    sets.push("updatedAt = SYSUTCDATETIME()");
+
+    await rq.query(`
+      UPDATE ${def.table}
+      SET ${sets.join(", ")}
+      WHERE id = @id
+    `);
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[ADMIN] PUT masters failed:", e?.message || e);
+    return res.status(500).json({ message: "Failed to update master row" });
+  }
+});
+
+app.delete("/api/admin/masters/:key/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
+  const key = req.params.key;
+  const def = getMasterDef(key);
+  if (!def) return res.status(400).json({ message: "Invalid master key" });
+
+  try {
+    const pool = await getPool();
+    await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, req.params.id)
+      .query(`
+        UPDATE ${def.table}
+        SET isActive = 0, updatedAt = SYSUTCDATETIME()
+        WHERE id = @id
+      `);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[ADMIN] DELETE masters failed:", e?.message || e);
+    return res.status(500).json({ message: "Failed to disable master row" });
+  }
+});
+
+// ------------------------- Transporters -------------------------
+
+app.get("/api/admin/transporters", authenticate, requireAdminOrLogistics, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const r = await pool.request().query(`
+      SELECT
+        CAST(id AS NVARCHAR(50)) AS id,
+        CAST(vendorCode AS NVARCHAR(150)) AS vendorCode,
+        CAST(vendorName AS NVARCHAR(255)) AS vendorName,
+        CAST(shortName AS NVARCHAR(100)) AS shortName,
+        COALESCE(
+          NULLIF(CAST(vendorEmails AS NVARCHAR(MAX)), ''),
+          NULLIF(LTRIM(RTRIM(vendorEmail)), '')
+        ) AS vendorEmail,
+        CAST(isActive AS BIT) AS isActive,
+        createdAt,
+        updatedAt
+      FROM dbo.Master_Transporters
+      ORDER BY createdAt DESC
+    `);
+    
+    return res.json(r.recordset || []);
+  } catch (e) {
+    console.error("[ADMIN] GET transporters failed:", e?.message || e);
+    return res.status(500).json({ message: "Failed to load transporters" });
+  }
+});
+
+app.post("/api/admin/transporters", authenticate, requireAdminOrLogistics, async (req, res) => {
+  const vendorCode = String(req.body?.vendorCode || "").trim();
+  const vendorName = String(req.body?.vendorName || "").trim();
+  const shortNameRaw = req.body?.shortName;
+  const vendorEmailRaw = req.body?.vendorEmail;
+
+  // Parse multi emails from the same field
+  const emailList = parseEmailList(vendorEmailRaw);
+  const vendorEmailPrimary = emailList[0] || null;      // primary
+  const vendorEmails = emailList.length ? emailList.join("\n") : null; // list
+  
+
+  const shortName = shortNameRaw == null ? null : String(shortNameRaw).trim() || null;
+  const vendorEmail = vendorEmailRaw == null ? null : String(vendorEmailRaw).trim() || null;
+
+  const isActive = req.body?.isActive === false ? 0 : 1;
+
+  if (!vendorCode || !vendorName) {
+    return res.status(400).json({ message: "vendorCode and vendorName required" });
+  }
+
+  try {
+    const pool = await getPool();
+
+    const exists = await pool
+      .request()
+      .input("vendorCode", sql.NVarChar(150), vendorCode)
+      .query(`SELECT TOP 1 1 AS ok FROM dbo.Master_Transporters WHERE vendorCode=@vendorCode`);
+    if (exists.recordset?.length) {
+      return res.status(409).json({ message: "vendorCode already exists" });
+    }
+
+    await pool
+      .request()
+      .input("vendorCode", sql.NVarChar(150), vendorCode)
+      .input("vendorName", sql.NVarChar(255), vendorName)
+      .input("shortName", sql.NVarChar(100), shortName)
+      .input("vendorEmail", sql.NVarChar(255), vendorEmail)
+      .input("vendorEmails", sql.NVarChar(sql.MAX), vendorEmails)
+      .input("isActive", sql.Bit, isActive)
+      .query(`
+        INSERT INTO dbo.Master_Transporters
+          (vendorCode, vendorName, shortName, vendorEmail, isActive, createdAt)
+        VALUES
+          (@vendorCode, @vendorName, @shortName, @vendorEmail, @vendorEmails, @isActive, SYSUTCDATETIME())
+      `);
+
+    // keep vendor user in sync (insert-only)
+    await ensureVendorUserFromTransporter(pool, { vendorCode, vendorName, vendorEmail, isActive });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[ADMIN] POST transporters failed:", e?.message || e);
+    return res.status(500).json({ message: "Failed to create transporter" });
+  }
+});
+
+app.put("/api/admin/transporters/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ message: "id required" });
+
+  const vendorCode = req.body?.vendorCode != null ? String(req.body.vendorCode).trim() : null;
+  const vendorName = req.body?.vendorName != null ? String(req.body.vendorName).trim() : null;
+  const shortName = "shortName" in (req.body || {})
+    ? (req.body.shortName == null ? null : String(req.body.shortName).trim() || null)
+    : undefined;
+  const vendorEmail = "vendorEmail" in (req.body || {})
+    ? (req.body.vendorEmail == null ? null : String(req.body.vendorEmail).trim() || null)
+    : undefined;
+  const isActive = req.body?.isActive;
+
+  try {
+    const pool = await getPool();
+
+    const rq = pool.request();
+    rq.input("id", sql.UniqueIdentifier, id);
+
+    const sets = [];
+    if (vendorCode != null) {
+      if (!vendorCode) return res.status(400).json({ message: "vendorCode cannot be empty" });
+      rq.input("vendorCode", sql.NVarChar(150), vendorCode);
+      sets.push("vendorCode=@vendorCode");
+    }
+    if (vendorName != null) {
+      if (!vendorName) return res.status(400).json({ message: "vendorName cannot be empty" });
+      rq.input("vendorName", sql.NVarChar(255), vendorName);
+      sets.push("vendorName=@vendorName");
+    }
+    if (shortName !== undefined) {
+      rq.input("shortName", sql.NVarChar(100), shortName);
+      sets.push("shortName=@shortName");
+    }
+    if (vendorEmail !== undefined) {
+      rq.input("vendorEmail", sql.NVarChar(255), vendorEmail);
+      sets.push("vendorEmail=@vendorEmail");
+    }
+    if (typeof isActive === "boolean") {
+      rq.input("isActive", sql.Bit, isActive);
+      sets.push("isActive=@isActive");
+    }
+
+    sets.push("updatedAt=SYSUTCDATETIME()");
+
+    await rq.query(`
+      UPDATE dbo.Master_Transporters
+      SET ${sets.join(", ")}
+      WHERE id=@id
+    `);
+
+    // best-effort: keep vendor user insert-only
+    const after = await pool.request().input("id", sql.UniqueIdentifier, id).query(`
+      SELECT TOP 1 vendorCode, vendorName, vendorEmail, isActive
+      FROM dbo.Master_Transporters WHERE id=@id
+    `);
+    await ensureVendorUserFromTransporter(pool, after.recordset?.[0]);
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[ADMIN] PUT transporters failed:", e?.message || e);
+    return res.status(500).json({ message: "Failed to update transporter" });
+  }
+});
+
+app.delete("/api/admin/transporters/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, req.params.id)
+      .query(`
+        UPDATE dbo.Master_Transporters
+        SET isActive=0, updatedAt=SYSUTCDATETIME()
+        WHERE id=@id
+      `);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[ADMIN] DELETE transporters failed:", e?.message || e);
+    return res.status(500).json({ message: "Failed to disable transporter" });
   }
 });
 
@@ -1889,29 +2818,33 @@ app.get("/api/lookups", authenticate, async (req, res) => {
   try {
     const pool = await getPool();
 
-    async function fetchSimple(table, valueType = sql.NVarChar) {
+    // CMD+F: async function fetchSimple(table, valueType = sql.NVarChar)
+    async function fetchSimple(table, extraSelect = "") {
       const r = await pool.request().query(`
-        SELECT
-          CAST(id AS NVARCHAR(50)) AS id,
-          CAST([value] AS NVARCHAR(MAX)) AS [value]
-        FROM ${table}
-        WHERE ISNULL(isActive, 1) = 1
-        ORDER BY [value] ASC
-      `);
+    SELECT
+      CAST(id AS NVARCHAR(50)) AS id,
+      CAST([value] AS NVARCHAR(MAX)) AS [value]
+      ${extraSelect ? "," + extraSelect : ""}
+    FROM ${table}
+    WHERE ISNULL(isActive, 1) = 1
+    ORDER BY [value] ASC
+  `);
       return r.recordset || [];
     }
 
     // CompanyNames can have duplicates (no unique index), so return DISTINCT by value
+    // CMD+F: async function fetchCompanyNamesDistinct()
     async function fetchCompanyNamesDistinct() {
       const r = await pool.request().query(`
-        SELECT
-          MIN(CAST(id AS NVARCHAR(50))) AS id,
-          CAST([value] AS NVARCHAR(MAX)) AS [value]
-        FROM dbo.Master_CompanyNames
-        WHERE ISNULL(isActive, 1) = 1
-        GROUP BY [value]
-        ORDER BY [value] ASC
-      `);
+    SELECT
+      MIN(CAST(id AS NVARCHAR(50))) AS id,
+      CAST([value] AS NVARCHAR(MAX)) AS [value],
+      MAX(CAST(shortName AS NVARCHAR(100))) AS shortName
+    FROM dbo.Master_CompanyNames
+    WHERE ISNULL(isActive, 1) = 1
+    GROUP BY [value]
+    ORDER BY [value] ASC
+  `);
       return r.recordset || [];
     }
 
@@ -1922,13 +2855,18 @@ app.get("/api/lookups", authenticate, async (req, res) => {
       portsOfLoading,
       portsOfDestination,
       containerTypes,
+      incoterms,
     ] = await Promise.all([
       fetchSimple("dbo.Master_ItemDescriptions"),
       fetchCompanyNamesDistinct(),
       fetchSimple("dbo.Master_Suppliers"),
-      fetchSimple("dbo.Master_PortsOfLoading"),
+      fetchSimple(
+        "dbo.Master_PortsOfLoading",
+        "CAST(country AS NVARCHAR(100)) AS country"
+      ),
       fetchSimple("dbo.Master_PortsOfDestination"),
       fetchSimple("dbo.Master_ContainerTypes"),
+      fetchSimple("dbo.Master_Incoterms"),
     ]);
 
     return res.json({
@@ -1938,6 +2876,7 @@ app.get("/api/lookups", authenticate, async (req, res) => {
       portsOfLoading,
       portsOfDestination,
       containerTypes,
+      incoterms,
     });
   } catch (err) {
     console.error("[API] GET /api/lookups failed:", err);
@@ -1998,32 +2937,122 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
     portOfLoading,
     portOfDestination,
     containerType,
+    incoterms,
     numberOfContainers,
     cargoWeight,
-    cargoReadinessDate,
+    cargoReadinessDate, // legacy
+    cargoReadinessFrom,
+    cargoReadinessTo,
+
     description,
     vendors,
     attachments,
   } = req.body || {};
 
+  // Cargo readiness range (backward compatible)
+  const legacyRaw = cargoReadinessDate;
+
+  let fromRaw = cargoReadinessFrom;
+  let toRaw = cargoReadinessTo;
+
+  // ✅ accept legacy "from|to" string from older frontend
   if (
-    !itemDescription ||
-    !companyName ||
-    !materialPONumber ||
-    !supplierName ||
-    !portOfLoading ||
-    !portOfDestination ||
-    !containerType ||
-    !numberOfContainers ||
-    !cargoWeight ||
-    !cargoReadinessDate ||
-    !Array.isArray(vendors) ||
-    vendors.length === 0
+    (!fromRaw || !toRaw) &&
+    typeof legacyRaw === "string" &&
+    legacyRaw.includes("|")
   ) {
-    return res.status(400).json({ message: "Missing required fields" });
+    const [a, b] = legacyRaw.split("|").map((s) => String(s || "").trim());
+    if (!fromRaw) fromRaw = a;
+    if (!toRaw) toRaw = b;
   }
 
+  const incotermsSafe = String(incoterms || "").trim() || null;
+
+  const crFromRaw = fromRaw || legacyRaw;
+  const crToRaw = toRaw || fromRaw || legacyRaw;
+
+  // ✅ parse to JS Date objects (avoid ISO string -> SQL conversion issues)
+  const crFrom = parseDateInput(crFromRaw);
+  const crTo = parseDateInput(crToRaw);
+
+  // ✅ always define here (was scoped wrong before)
   const safeAttachments = Array.isArray(attachments) ? attachments : [];
+
+  // Normalize vendors (accept ["VENDORA"] OR [{company:"VENDORA"}] etc.)
+  // Normalize vendors (accept ["VENDORA"] OR [{company:"VENDORA"}] OR "VENDORA,VENDORB")
+  const vendorsArr = (() => {
+    if (Array.isArray(vendors)) {
+      return vendors
+        .map((v) => {
+          if (typeof v === "string") return v.trim();
+          if (v && typeof v === "object") {
+            return String(v.company || v.value || v.vendorCode || "").trim();
+          }
+          return "";
+        })
+        .filter(Boolean);
+    }
+
+    if (typeof vendors === "string") {
+      return vendors
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+
+    return [];
+  })();
+
+  const numContainers = Number(numberOfContainers);
+  const weight = Number(cargoWeight);
+
+  const missing = [];
+  if (!itemDescription) missing.push("itemDescription");
+  if (!companyName) missing.push("companyName");
+  if (!materialPONumber) missing.push("materialPONumber");
+  if (!supplierName) missing.push("supplierName");
+  if (!portOfLoading) missing.push("portOfLoading");
+  if (!portOfDestination) missing.push("portOfDestination");
+  if (!containerType) missing.push("containerType");
+
+  if (!Number.isFinite(numContainers) || numContainers <= 0)
+    missing.push("numberOfContainers");
+  if (!Number.isFinite(weight) || weight <= 0) missing.push("cargoWeight");
+
+  if (!vendorsArr.length) missing.push("vendors");
+
+  // Cargo readiness range (backward compatible)
+
+  if (!crFrom) missing.push("cargoReadinessFrom|cargoReadinessDate");
+  if (!crTo)
+    missing.push("cargoReadinessTo|cargoReadinessFrom|cargoReadinessDate");
+
+  if (missing.length) {
+    console.log("[RFQ] Invalid payload (missing/invalid):", {
+      missing,
+      received: req.body,
+    });
+
+    return res.status(400).json({
+      message: "Missing/invalid required fields",
+      missing,
+      received: {
+        numberOfContainers,
+        cargoWeight,
+        cargoReadinessFrom,
+        cargoReadinessTo,
+        cargoReadinessDate,
+        vendorsType: Array.isArray(vendors) ? "array" : typeof vendors,
+        vendorsExample: Array.isArray(vendors) ? vendors[0] : vendors,
+      },
+    });
+  }
+
+  if (crTo.getTime() < crFrom.getTime()) {
+    return res
+      .status(400)
+      .json({ message: "Cargo Readiness To cannot be before From" });
+  }
 
   try {
     const pool = await getPool();
@@ -2035,6 +3064,8 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
     await ensureMasterValue(pool, "portsOfLoading", portOfLoading);
     await ensureMasterValue(pool, "portsOfDestination", portOfDestination);
     await ensureMasterValue(pool, "containerTypes", containerType);
+    if (incotermsSafe)
+      await ensureMasterValue(pool, "incoterms", incotermsSafe);
 
     // next RFQ number
     const maxRes = await pool
@@ -2055,10 +3086,15 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
       .input("portOfDestination", sql.NVarChar(100), portOfDestination)
 
       .input("containerType", sql.NVarChar(50), containerType)
+      .input("incoterms", sql.NVarChar(50), incotermsSafe)
 
       .input("numberOfContainers", sql.Int, Number(numberOfContainers))
       .input("cargoWeight", sql.Float, Number(cargoWeight))
-      .input("cargoReadinessDate", sql.DateTime2, cargoReadinessDate)
+      // ✅ send JS Date objects to mssql driver
+      .input("cargoReadinessDate", sql.DateTime2, crFrom) // legacy = FROM
+      .input("cargoReadinessFrom", sql.DateTime2, crFrom)
+      .input("cargoReadinessTo", sql.DateTime2, crTo)
+
       .input(
         "attachments",
         sql.NVarChar(sql.MAX),
@@ -2066,30 +3102,30 @@ app.post("/api/rfqs", authenticate, async (req, res) => {
       )
 
       .input("description", sql.NVarChar(1000), description || null)
-      .input("vendors", sql.NVarChar(sql.MAX), JSON.stringify(vendors))
+      .input("vendors", sql.NVarChar(sql.MAX), JSON.stringify(vendorsArr))
 
       .input("status", sql.NVarChar, "initial")
       .input("createdBy", sql.NVarChar(100), req.user.username).query(`
 INSERT INTO dbo.RFQs
   (rfqNumber, itemDescription, companyName, materialPONumber,
-   supplierName, portOfLoading, portOfDestination, containerType,
-   numberOfContainers, cargoWeight, cargoReadinessDate, description, attachments, vendors,
+   supplierName, portOfLoading, portOfDestination, containerType, incoterms,
+   numberOfContainers, cargoWeight, cargoReadinessDate, cargoReadinessFrom, cargoReadinessTo, description, attachments, vendors,
    status, createdBy, createdAt)
 VALUES
   (@rfqNumber, @itemDescription, @companyName, @materialPONumber,
-   @supplierName, @portOfLoading, @portOfDestination, @containerType,
-   @numberOfContainers, @cargoWeight, @cargoReadinessDate, @description, @attachments, @vendors,
+   @supplierName, @portOfLoading, @portOfDestination, @containerType, @incoterms,
+   @numberOfContainers, @cargoWeight, @cargoReadinessDate, @cargoReadinessFrom, @cargoReadinessTo, @description, @attachments, @vendors,
    @status, @createdBy, SYSUTCDATETIME())
 
       `);
 
     // fetch vendor emails
     // fetch vendor emails (prefer Master_Transporters.vendorEmail)
-    const codesCte = vendors
+    const codesCte = vendorsArr
       .map((_, i) => `SELECT @c${i} AS code`)
       .join(" UNION ALL ");
     let req2 = pool.request();
-    vendors.forEach((c, i) => req2.input(`c${i}`, sql.NVarChar, c));
+    vendorsArr.forEach((c, i) => req2.input(`c${i}`, sql.NVarChar, c));
 
     const emRes = await req2.query(`
   ;WITH V AS (${codesCte})
@@ -2122,9 +3158,13 @@ VALUES
         portOfLoading,
         portOfDestination,
         containerType,
+        incoterms: incotermsSafe,
         numberOfContainers,
         cargoWeight,
         cargoReadinessDate,
+        cargoReadinessFrom: crFrom.toISOString(),
+        cargoReadinessTo: crTo.toISOString(),
+
         description,
         attachmentsCount: safeAttachments.length,
         createdBy: req.user.username,
@@ -2135,7 +3175,8 @@ VALUES
           emails.map((email) =>
             graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
               message: {
-                subject: `RFQ ${nextNum} | ${itemDescription}`,
+                subject: `RFQ ${nextNum} | ${itemDescription} | ${materialPONumber}`,
+
                 body: {
                   contentType: "HTML",
                   content: html,
@@ -2157,7 +3198,12 @@ VALUES
     res.json({ message: "RFQ created", rfqNumber: nextNum });
   } catch (err) {
     console.error("[API] Create RFQ error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({
+      message: "Server error",
+      error: err?.message || String(err),
+      code: err?.code,
+      number: err?.number,
+    });
   }
 });
 
@@ -2306,8 +3352,8 @@ app.post("/api/quotes", authenticate, async (req, res) => {
       .request()
       .input("id", sql.UniqueIdentifier, d.rfqId).query(`
         SELECT rfqNumber, itemDescription, companyName, materialPONumber,
-               supplierName, portOfLoading, portOfDestination, containerType,
-               numberOfContainers, cargoWeight, cargoReadinessDate,
+               supplierName, portOfLoading, portOfDestination, containerType, incoterms,
+               numberOfContainers, cargoWeight, cargoReadinessDate, cargoReadinessFrom, cargoReadinessTo,
                description
         FROM dbo.RFQs
         WHERE id = @id
@@ -2324,6 +3370,7 @@ app.post("/api/quotes", authenticate, async (req, res) => {
         ["Port of Loading", rfq.portOfLoading],
         ["Port of Destination", rfq.portOfDestination],
         ["Container Type", rfq.containerType],
+        ["Incoterms", rfq.incoterms || ""],
         ["Number of Containers", rfq.numberOfContainers],
         ["Cargo Weight", rfq.cargoWeight],
         [
@@ -2478,8 +3525,8 @@ app.post("/api/allocations", authenticate, async (req, res) => {
       .request()
       .input("rfqId", sql.UniqueIdentifier, rfqId).query(`
         SELECT rfqNumber, itemDescription, companyName, materialPONumber,
-               supplierName, portOfLoading, portOfDestination, containerType,
-               numberOfContainers, cargoWeight, cargoReadinessDate,
+               supplierName, portOfLoading, portOfDestination, containerType, incoterms,
+               numberOfContainers, cargoWeight, cargoReadinessDate, cargoReadinessFrom, cargoReadinessTo,
                description
         FROM dbo.RFQs
         WHERE id = @rfqId
@@ -2661,9 +3708,11 @@ app.post("/api/allocations", authenticate, async (req, res) => {
             toRecipients: toList,
 
             // ✅ CC requirement
-            ccRecipients: [
-              { emailAddress: { address: "ramanjulu@premierenergies.com" } },
-            ],
+            ccRecipients: graphRecipientsFromEmails([
+              "ramanjulu@premierenergies.com",
+              ...ALLOCATION_CC_ALWAYS,
+              ...(String(reason || "").trim() ? ALLOCATION_CC_WITH_REASON : []),
+            ]),
           },
           saveToSentItems: true,
         });
@@ -2675,9 +3724,6 @@ app.post("/api/allocations", authenticate, async (req, res) => {
       }
     }
 
-    // ─────────────────────────────────────────────
-    // INTERNAL deviation email (ONLY if deviation)
-    // ─────────────────────────────────────────────
     // ─────────────────────────────────────────────
     // INTERNAL deviation email (ONLY if deviation)
     // ─────────────────────────────────────────────
@@ -2712,9 +3758,11 @@ app.post("/api/allocations", authenticate, async (req, res) => {
             toRecipients: [
               { emailAddress: { address: "aarnav.singh@premierenergies.com" } },
             ],
-            ccRecipients: [
-              { emailAddress: { address: "ramanjulu@premierenergies.com" } },
-            ],
+            ccRecipients: graphRecipientsFromEmails([
+              "ramanjulu@premierenergies.com",
+              ...ALLOCATION_CC_ALWAYS,
+              ...(String(reason || "").trim() ? ALLOCATION_CC_WITH_REASON : []),
+            ]),
           },
           saveToSentItems: true,
         });
@@ -2750,9 +3798,10 @@ app.get(
     try {
       const pool = await getPool();
       const r = await pool.request().query(`
-        SELECT id, vendorCode, vendorName, vendorEmail, isActive, createdAt, updatedAt
-        FROM dbo.Master_Transporters
-        ORDER BY vendorName ASC
+SELECT id, vendorCode, vendorName, shortName, vendorEmail, isActive, createdAt, updatedAt
+FROM dbo.Master_Transporters
+ORDER BY vendorName ASC
+
       `);
       res.json(r.recordset || []);
     } catch (err) {
@@ -2776,6 +3825,10 @@ app.post(
         : String(vendorEmailRaw || "").trim() || null;
     const isActive =
       typeof req.body?.isActive === "boolean" ? req.body.isActive : true;
+    const shortName =
+      req.body?.shortName == null
+        ? null
+        : String(req.body.shortName || "").trim() || null;
 
     if (!vendorCode)
       return res.status(400).json({ message: "vendorCode required" });
@@ -2801,10 +3854,21 @@ app.post(
         .input("vendorCode", sql.NVarChar(150), vendorCode)
         .input("vendorName", sql.NVarChar(255), vendorName)
         .input("vendorEmail", sql.NVarChar(255), vendorEmail)
-        .input("isActive", sql.Bit, isActive).query(`
-          INSERT INTO dbo.Master_Transporters (vendorCode, vendorName, vendorEmail, isActive, createdAt)
-          VALUES (@vendorCode, @vendorName, @vendorEmail, @isActive, SYSUTCDATETIME())
-        `);
+        .input("isActive", sql.Bit, isActive)
+        .input("shortName", sql.NVarChar(100), shortName).query(`
+  INSERT INTO dbo.Master_Transporters (vendorCode, vendorName, shortName, vendorEmail, isActive, createdAt)
+  VALUES (@vendorCode, @vendorName, @shortName, @vendorEmail, @isActive, SYSUTCDATETIME())
+`);
+
+      // ✅ Sync: Master_Transporters -> Users (vendor)
+      if (isActive) {
+        await ensureVendorUserFromTransporter(pool, {
+          vendorCode,
+          vendorName,
+          vendorEmail: vendorEmailPrimary,
+          isActive,
+        });
+      }
 
       res.json({ ok: true });
     } catch (err) {
@@ -2824,9 +3888,17 @@ app.put(
     const hasVendorCode = typeof req.body?.vendorCode === "string";
     const hasVendorName = typeof req.body?.vendorName === "string";
     const hasVendorEmail = "vendorEmail" in (req.body || {});
+    const hasShortName = "shortName" in (req.body || {});
+
     const hasIsActive = typeof req.body?.isActive === "boolean";
 
-    if (!hasVendorCode && !hasVendorName && !hasVendorEmail && !hasIsActive) {
+    if (
+      !hasVendorCode &&
+      !hasVendorName &&
+      !hasVendorEmail &&
+      !hasShortName &&
+      !hasIsActive
+    ) {
       return res.status(400).json({ message: "Nothing to update" });
     }
 
@@ -2871,6 +3943,15 @@ app.put(
         sets.push("isActive = @isActive");
       }
 
+      if (hasShortName) {
+        const shortName =
+          req.body.shortName == null
+            ? null
+            : String(req.body.shortName || "").trim() || null;
+        r.input("shortName", sql.NVarChar(100), shortName);
+        sets.push("shortName = @shortName");
+      }
+
       sets.push("updatedAt = SYSUTCDATETIME()");
 
       await r.query(`
@@ -2878,6 +3959,20 @@ app.put(
         SET ${sets.join(", ")}
         WHERE id = @id
       `);
+
+      // ✅ Sync after update: if transporter is active, ensure vendor user exists
+      const t = await pool.request().input("id", sql.UniqueIdentifier, id)
+        .query(`
+SELECT TOP 1 vendorCode, vendorName, shortName, vendorEmail, isActive
+FROM dbo.Master_Transporters
+WHERE id=@id
+
+`);
+
+      const tr = t.recordset?.[0];
+      if (tr && tr.isActive !== false) {
+        await ensureVendorUserFromTransporter(pool, tr);
+      }
 
       res.json({ ok: true });
     } catch (err) {
@@ -2972,6 +4067,14 @@ app.post("/api/admin/users", authenticate, requireAdmin, async (req, res) => {
         VALUES (@username, @password, @role, @name, @company)
       `);
 
+    // ✅ Sync: Users (vendor) -> Master_Transporters
+    await ensureTransporterFromVendorUser(pool, {
+      username: u,
+      role: r,
+      name: n,
+      company: c,
+    });
+
     return res.json({ ok: true });
   } catch (err) {
     console.error("[API] POST /api/admin/users error:", err);
@@ -3057,6 +4160,19 @@ app.put(
       WHERE id = @id
     `);
 
+      // ✅ Sync after update: if vendor, ensure transporter exists
+      const updated = await pool
+        .request()
+        .input("id", sql.UniqueIdentifier, id)
+        .query(
+          `SELECT TOP 1 username, role, name, company FROM dbo.Users WHERE id=@id`
+        );
+
+      const row = updated.recordset?.[0];
+      if (row) {
+        await ensureTransporterFromVendorUser(pool, row);
+      }
+
       return res.json({ ok: true });
     } catch (err) {
       console.error("[API] PUT /api/admin/users/:id error:", err);
@@ -3115,6 +4231,7 @@ app.get(
       { key: "portsOfLoading", label: "Ports of Loading" },
       { key: "portsOfDestination", label: "Ports of Destination" },
       { key: "containerTypes", label: "Container Types" },
+      { key: "incoterms", label: "Incoterms" },
     ]);
   }
 );
@@ -3125,22 +4242,38 @@ app.get(
   authenticate,
   requireAdminOrLogistics,
   async (req, res) => {
-    const def = getMasterDef(req.params.key);
+    const key = String(req.params.key || "").trim();
+    const def = getMasterDef(key);
     if (!def) return res.status(400).json({ message: "Invalid master key" });
 
     try {
       const pool = await getPool();
-      const rows = (
-        await pool.request().query(`
-        SELECT id, value, isActive, createdAt, updatedAt
+
+      const extraSelect = [];
+      if (key === "companyNames") {
+        extraSelect.push("CAST(shortName AS NVARCHAR(100)) AS shortName");
+      }
+      if (key === "portsOfLoading") {
+        extraSelect.push("CAST(country AS NVARCHAR(100)) AS country");
+      }
+
+      const sqlText = `
+        SELECT
+          CAST(id AS NVARCHAR(50)) AS id,
+          CAST([value] AS NVARCHAR(MAX)) AS [value],
+          isActive,
+          createdAt,
+          updatedAt
+          ${extraSelect.length ? ", " + extraSelect.join(", ") : ""}
         FROM ${def.table}
-        ORDER BY value
-      `)
-      ).recordset;
-      res.json(rows || []);
+        ORDER BY CONVERT(NVARCHAR(4000), [value]) ASC
+      `;
+
+      const rows = (await pool.request().query(sqlText)).recordset || [];
+      return res.json(rows);
     } catch (err) {
       console.error("[API] admin list master error:", err);
-      res.status(500).json({ message: "Server error" });
+      return res.status(500).json({ message: "Server error" });
     }
   }
 );
@@ -3150,33 +4283,70 @@ app.post(
   authenticate,
   requireAdminOrLogistics,
   async (req, res) => {
-    const def = getMasterDef(req.params.key);
+    const key = String(req.params.key || "").trim();
+    const def = getMasterDef(key);
     if (!def) return res.status(400).json({ message: "Invalid master key" });
 
-    const { value, isActive } = req.body || {};
-    const v = String(value || "").trim();
-    if (!v) return res.status(400).json({ message: "value required" });
+    const valueRaw = req.body?.value;
+    const value = normalizeMasterValue(key, valueRaw);
+    if (!value) return res.status(400).json({ message: "value required" });
+
+    const isActive =
+      typeof req.body?.isActive === "boolean" ? req.body.isActive : true;
+
+    const shortName =
+      key === "companyNames"
+        ? req.body?.shortName == null
+          ? null
+          : String(req.body.shortName || "").trim() || null
+        : null;
+
+    const country =
+      key === "portsOfLoading"
+        ? req.body?.country == null
+          ? null
+          : String(req.body.country || "").trim() || null
+        : null;
 
     try {
       const pool = await getPool();
+
       const r = pool.request();
-      if (def.max === sql.MAX) r.input("value", sql.NVarChar(sql.MAX), v);
-      else r.input("value", sql.NVarChar(def.max), v);
-      r.input(
-        "isActive",
-        sql.Bit,
-        typeof isActive === "boolean" ? isActive : true
-      );
+
+      // value param sizing
+      if (def.max === sql.MAX) r.input("value", sql.NVarChar(sql.MAX), value);
+      else r.input("value", sql.NVarChar(def.max), value);
+
+      r.input("isActive", sql.Bit, isActive);
+
+      const cols = ["value", "isActive", "createdAt"];
+      const vals = ["@value", "@isActive", "SYSUTCDATETIME()"];
+
+      if (key === "companyNames") {
+        r.input("shortName", sql.NVarChar(100), shortName);
+        cols.push("shortName");
+        vals.push("@shortName");
+      }
+
+      if (key === "portsOfLoading") {
+        r.input("country", sql.NVarChar(100), country);
+        cols.push("country");
+        vals.push("@country");
+      }
 
       await r.query(`
-      INSERT INTO ${def.table}(value, isActive, createdAt)
-      VALUES (@value, @isActive, SYSUTCDATETIME())
-    `);
+        INSERT INTO ${def.table} (${cols.join(", ")})
+        VALUES (${vals.join(", ")})
+      `);
 
-      res.json({ ok: true });
+      return res.json({ ok: true });
     } catch (err) {
-      console.error("[API] admin create master error:", err);
-      res.status(500).json({ message: "Server error" });
+      // Unique-index masters (most tables except companyNames) may throw duplicate key
+      if (err && (err.number === 2627 || err.number === 2601)) {
+        return res.status(409).json({ message: "value already exists" });
+      }
+      console.error("[API] POST /api/admin/masters/:key error:", err);
+      return res.status(500).json({ message: "Server error" });
     }
   }
 );
@@ -3186,45 +4356,81 @@ app.put(
   authenticate,
   requireAdminOrLogistics,
   async (req, res) => {
-    const def = getMasterDef(req.params.key);
+    const key = String(req.params.key || "").trim();
+    const { id } = req.params;
+
+    const def = getMasterDef(key);
     if (!def) return res.status(400).json({ message: "Invalid master key" });
 
-    const { value, isActive } = req.body || {};
-    const hasValue = typeof value === "string";
-    const hasActive = typeof isActive === "boolean";
-    if (!hasValue && !hasActive) {
+    const hasValue = "value" in (req.body || {});
+    const hasIsActive = typeof req.body?.isActive === "boolean";
+    const hasShortName =
+      key === "companyNames" && "shortName" in (req.body || {});
+    const hasCountry =
+      key === "portsOfLoading" && "country" in (req.body || {});
+
+    if (!hasValue && !hasIsActive && !hasShortName && !hasCountry) {
       return res.status(400).json({ message: "Nothing to update" });
     }
 
     try {
       const pool = await getPool();
-      const r = pool.request().input("id", sql.UniqueIdentifier, req.params.id);
+      const r = pool.request().input("id", sql.UniqueIdentifier, id);
 
-      let sets = [];
+      const sets = [];
+
       if (hasValue) {
-        const v = String(value || "").trim();
-        if (!v)
+        const value = normalizeMasterValue(key, req.body?.value);
+        if (!value)
           return res.status(400).json({ message: "value cannot be empty" });
-        if (def.max === sql.MAX) r.input("value", sql.NVarChar(sql.MAX), v);
-        else r.input("value", sql.NVarChar(def.max), v);
-        sets.push("value = @value");
+
+        if (def.max === sql.MAX) r.input("value", sql.NVarChar(sql.MAX), value);
+        else r.input("value", sql.NVarChar(def.max), value);
+
+        sets.push("[value] = @value");
       }
-      if (hasActive) {
-        r.input("isActive", sql.Bit, isActive);
+
+      if (hasIsActive) {
+        r.input("isActive", sql.Bit, req.body.isActive);
         sets.push("isActive = @isActive");
       }
+
+      if (hasShortName) {
+        const shortName =
+          req.body.shortName == null
+            ? null
+            : String(req.body.shortName || "").trim() || null;
+        r.input("shortName", sql.NVarChar(100), shortName);
+        sets.push("shortName = @shortName");
+      }
+
+      if (hasCountry) {
+        const country =
+          req.body.country == null
+            ? null
+            : String(req.body.country || "").trim() || null;
+        r.input("country", sql.NVarChar(100), country);
+        sets.push("country = @country");
+      }
+
       sets.push("updatedAt = SYSUTCDATETIME()");
 
-      await r.query(`
-      UPDATE ${def.table}
-      SET ${sets.join(", ")}
-      WHERE id = @id
-    `);
+      const q = `
+        UPDATE ${def.table}
+        SET ${sets.join(", ")}
+        WHERE id = @id
+      `;
 
-      res.json({ ok: true });
+      const out = await r.query(q);
+      if (!out.rowsAffected?.[0]) return res.sendStatus(404);
+
+      return res.json({ ok: true });
     } catch (err) {
-      console.error("[API] admin update master error:", err);
-      res.status(500).json({ message: "Server error" });
+      if (err && (err.number === 2627 || err.number === 2601)) {
+        return res.status(409).json({ message: "value already exists" });
+      }
+      console.error("[API] PUT /api/admin/masters/:key/:id error:", err);
+      return res.status(500).json({ message: "Server error" });
     }
   }
 );
@@ -3263,10 +4469,12 @@ app.get("/api/vendors", authenticate, async (req, res) => {
 
     try {
       const r = await pool.request().query(`
-        SELECT
-          vendorEmail AS username,
-          vendorName AS name,
-          vendorCode AS company
+SELECT
+  vendorEmail AS username,
+  vendorName AS name,
+  shortName AS shortName,
+  vendorCode AS company
+
         FROM dbo.Master_Transporters
         WHERE ISNULL(isActive, 1) = 1
         ORDER BY vendorName ASC
@@ -3276,9 +4484,10 @@ app.get("/api/vendors", authenticate, async (req, res) => {
       // { username, name, company }
       return res.json(
         (r.recordset || []).map((x) => ({
-          username: x.username || "", // may be empty until set
+          username: x.username || "",
           name: x.name,
           company: x.company,
+          shortName: x.shortName || null, // ✅ NEW
         }))
       );
     } catch (e) {

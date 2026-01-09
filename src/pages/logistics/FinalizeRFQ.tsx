@@ -704,7 +704,7 @@ const FinalizeRFQ: React.FC = () => {
           <div className="font-medium">{fmt.plain(rfq.supplierName)}</div>
         </div>
         <div>
-          <div className="text-muted-foreground">PO Number</div>
+          <div className="text-muted-foreground">Material PO Number</div>
           <div className="font-medium">{fmt.plain(rfq.materialPONumber)}</div>
         </div>
         <div>

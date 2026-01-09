@@ -9,11 +9,14 @@ export interface RFQ {
   supplierName: string;
   portOfLoading: string;
   portOfDestination: string;
+  incoterms?: string;
   containerType: string;
 
   numberOfContainers: number;
   cargoWeight: number; // in tons
   cargoReadinessDate: string;
+  cargoReadinessFrom?: string | null;
+  cargoReadinessTo?: string | null;
 
   description?: string;
   vendors: string[];
@@ -21,7 +24,6 @@ export interface RFQ {
   status: "initial" | "evaluation" | "closed";
   createdBy: string;
 }
-
 
 export interface QuoteItem {
   id: string;

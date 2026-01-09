@@ -28,11 +28,14 @@ type MasterKey =
   | "suppliers"
   | "portsOfLoading"
   | "portsOfDestination"
-  | "containerTypes";
+  | "containerTypes"
+  | "incoterms";
 
 type MasterRow = {
   id: string;
   value: string;
+  shortName?: string | null;
+  country?: string | null;
   isActive: boolean;
   createdAt?: string;
   updatedAt?: string | null;
@@ -45,10 +48,12 @@ type MasterMeta = {
   multiline?: boolean;
   maxHint?: string;
 };
+
 type TransporterRow = {
   id: string;
   vendorCode: string;
   vendorName: string;
+  shortName?: string | null;
   vendorEmail: string | null;
   isActive: boolean;
   createdAt?: string;
@@ -92,6 +97,14 @@ const FALLBACK_META: MasterMeta[] = [
     maxHint: "Up to 100 chars",
   },
   {
+    key: "incoterms",
+    label: "Incoterms",
+    helper:
+      "Used in RFQ create modal → Incoterms (e.g., EXW, FOB, CIF, CFR, DDP)",
+    multiline: false,
+    maxHint: "Up to 50 chars",
+  },
+  {
     key: "containerTypes",
     label: "Container Types",
     helper: "Used in RFQ create modal → Container Type",
@@ -101,7 +114,6 @@ const FALLBACK_META: MasterMeta[] = [
 ];
 
 function normalizeValue(v: string) {
-  // keep newlines if any, just trim outside
   return String(v ?? "")
     .replace(/\r\n/g, "\n")
     .trim();
@@ -109,6 +121,28 @@ function normalizeValue(v: string) {
 
 const Masters: React.FC = () => {
   const [meta, setMeta] = useState<MasterMeta[]>(FALLBACK_META);
+
+  const [rowsByKey, setRowsByKey] = useState<Record<string, MasterRow[]>>({});
+  const [loadingByKey, setLoadingByKey] = useState<Record<string, boolean>>({});
+  const [queryByKey, setQueryByKey] = useState<Record<string, string>>({});
+
+  const [addOpenKey, setAddOpenKey] = useState<MasterKey | null>(null);
+  const [newValue, setNewValue] = useState("");
+  const [newIsActive, setNewIsActive] = useState(true);
+  const [newShortName, setNewShortName] = useState("");
+  const [newCountry, setNewCountry] = useState("");
+
+  // Master edit state
+  const [editing, setEditing] = useState<{
+    key: MasterKey;
+    id: string;
+    value: string;
+    isActive: boolean;
+    shortName?: string;
+    country?: string;
+  } | null>(null);
+
+  // Transporter state
   const [transporters, setTransporters] = useState<TransporterRow[]>([]);
   const [transportersLoading, setTransportersLoading] = useState(false);
   const [transportersQuery, setTransportersQuery] = useState("");
@@ -117,73 +151,75 @@ const Masters: React.FC = () => {
   const [newTransporterCode, setNewTransporterCode] = useState("");
   const [newTransporterName, setNewTransporterName] = useState("");
   const [newTransporterEmail, setNewTransporterEmail] = useState("");
+  const [newTransporterShortName, setNewTransporterShortName] = useState("");
   const [newTransporterIsActive, setNewTransporterIsActive] = useState(true);
 
   const [editingTransporter, setEditingTransporter] =
     useState<TransporterRow | null>(null);
 
-  const [rowsByKey, setRowsByKey] = useState<Record<string, MasterRow[]>>({});
-  const [loadingByKey, setLoadingByKey] = useState<Record<string, boolean>>({});
-  const [queryByKey, setQueryByKey] = useState<Record<string, string>>({});
-
-  // Add dialog state per master
-  const [addOpenKey, setAddOpenKey] = useState<MasterKey | null>(null);
-  const [newValue, setNewValue] = useState("");
-  const [newIsActive, setNewIsActive] = useState(true);
-
-  // Edit state
-  const [editing, setEditing] = useState<{
-    key: MasterKey;
-    id: string;
-    value: string;
-    isActive: boolean;
-  } | null>(null);
-
-  const setLoading = (key: MasterKey, v: boolean) => {
+  const setLoading = useCallback((key: MasterKey, v: boolean) => {
     setLoadingByKey((p) => ({ ...p, [key]: v }));
-  };
+  }, []);
 
-  const fetchMeta = useCallback(async () => {
-    // Optional endpoint; if not present, fallback_meta is used.
+  const fetchMeta = useCallback(async (): Promise<MasterMeta[]> => {
     try {
       const res = await api.get<{ key: MasterKey; label: string }[]>(
         "/admin/masters"
       );
+
       if (Array.isArray(res.data) && res.data.length) {
-        // Merge server meta with fallback hints (multiline/helper/maxHint)
-        const merged = res.data.map((m) => {
-          const f = FALLBACK_META.find((x) => x.key === m.key);
+        const serverByKey = new Map(res.data.map((m) => [m.key, m]));
+
+        // Keep ALL fallback keys, override labels if server sends them.
+        const merged: MasterMeta[] = FALLBACK_META.map((f) => {
+          const s = serverByKey.get(f.key);
           return {
-            key: m.key,
-            label: m.label || f?.label || String(m.key),
-            helper: f?.helper,
-            multiline: f?.multiline,
-            maxHint: f?.maxHint,
-          } as MasterMeta;
+            ...f,
+            label: s?.label || f.label,
+          };
         });
+
+        // Also include any server keys that aren't in fallback (future-proof)
+        const fallbackKeys = new Set(FALLBACK_META.map((x) => x.key));
+        for (const s of res.data) {
+          if (!fallbackKeys.has(s.key)) {
+            merged.push({
+              key: s.key,
+              label: s.label || String(s.key),
+            });
+          }
+        }
+
         setMeta(merged);
+        return merged;
       }
     } catch {
       // ignore - endpoint might not exist; fallback is fine
     }
+
+    setMeta(FALLBACK_META);
+    return FALLBACK_META;
   }, []);
 
-  const fetchRows = useCallback(async (key: MasterKey) => {
-    setLoading(key, true);
-    try {
-      const res = await api.get<MasterRow[]>(`/admin/masters/${key}`);
-      setRowsByKey((p) => ({ ...p, [key]: res.data || [] }));
-    } catch (err: any) {
-      console.error("Failed to load master:", key, err);
-      toast({
-        title: "Failed to load",
-        description: `Could not load ${key}`,
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(key, false);
-    }
-  }, []);
+  const fetchRows = useCallback(
+    async (key: MasterKey) => {
+      setLoading(key, true);
+      try {
+        const res = await api.get<MasterRow[]>(`/admin/masters/${key}`);
+        setRowsByKey((p) => ({ ...p, [key]: res.data || [] }));
+      } catch (err: any) {
+        console.error("Failed to load master:", key, err);
+        toast({
+          title: "Failed to load",
+          description: `Could not load ${key}`,
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(key, false);
+      }
+    },
+    [setLoading]
+  );
 
   const fetchTransporters = useCallback(async () => {
     setTransportersLoading(true);
@@ -205,8 +241,9 @@ const Masters: React.FC = () => {
   const filteredTransporters = useMemo(() => {
     const q = transportersQuery.trim().toLowerCase();
     if (!q) return transporters;
+
     return transporters.filter((t) => {
-      const a = `${t.vendorCode} ${t.vendorName} ${
+      const a = `${t.vendorCode} ${t.vendorName} ${t.shortName || ""} ${
         t.vendorEmail || ""
       }`.toLowerCase();
       return a.includes(q);
@@ -218,11 +255,13 @@ const Masters: React.FC = () => {
   }, [meta, fetchRows]);
 
   useEffect(() => {
-    fetchMeta().finally(() => {
-      // load everything once
-      Promise.all(FALLBACK_META.map((m) => fetchRows(m.key))).catch(() => {});
-      fetchTransporters().catch(() => {});
-    });
+    (async () => {
+      const effectiveMeta = await fetchMeta();
+      await Promise.all(effectiveMeta.map((m) => fetchRows(m.key))).catch(
+        () => {}
+      );
+      await fetchTransporters().catch(() => {});
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -230,11 +269,14 @@ const Masters: React.FC = () => {
     setAddOpenKey(key);
     setNewValue("");
     setNewIsActive(true);
+    setNewShortName("");
+    setNewCountry("");
   };
 
   const submitAdd = async () => {
     if (!addOpenKey) return;
     const key = addOpenKey;
+
     const v = normalizeValue(newValue);
     if (!v) {
       toast({
@@ -245,15 +287,25 @@ const Masters: React.FC = () => {
       return;
     }
 
+    const shortName =
+      key === "companyNames" ? normalizeValue(newShortName) : "";
+    const country = key === "portsOfLoading" ? normalizeValue(newCountry) : "";
+
     try {
       await api.post(`/admin/masters/${key}`, {
         value: v,
         isActive: newIsActive,
+        ...(key === "companyNames" ? { shortName: shortName || null } : {}),
+        ...(key === "portsOfLoading" ? { country: country || null } : {}),
       });
+
       toast({ title: "Created", description: "Master value added." });
       setAddOpenKey(null);
       setNewValue("");
       setNewIsActive(true);
+      setNewShortName("");
+      setNewCountry("");
+
       await fetchRows(key);
     } catch (err: any) {
       const msg =
@@ -274,6 +326,8 @@ const Masters: React.FC = () => {
       id: row.id,
       value: row.value ?? "",
       isActive: !!row.isActive,
+      shortName: row.shortName ?? "",
+      country: row.country ?? "",
     });
   };
 
@@ -292,11 +346,27 @@ const Masters: React.FC = () => {
       return;
     }
 
+    const shortName =
+      editing.key === "companyNames"
+        ? normalizeValue(editing.shortName || "")
+        : "";
+    const country =
+      editing.key === "portsOfLoading"
+        ? normalizeValue(editing.country || "")
+        : "";
+
     try {
       await api.put(`/admin/masters/${editing.key}/${editing.id}`, {
         value: v,
         isActive: editing.isActive,
+        ...(editing.key === "companyNames"
+          ? { shortName: shortName || null }
+          : {}),
+        ...(editing.key === "portsOfLoading"
+          ? { country: country || null }
+          : {}),
       });
+
       toast({ title: "Saved", description: "Changes updated." });
       const key = editing.key;
       setEditing(null);
@@ -338,7 +408,6 @@ const Masters: React.FC = () => {
   };
 
   const enableRow = async (key: MasterKey, row: MasterRow) => {
-    // enable by PUT isActive=true
     try {
       await api.put(`/admin/masters/${key}/${row.id}`, { isActive: true });
       toast({ title: "Enabled", description: "Value enabled." });
@@ -361,11 +430,13 @@ const Masters: React.FC = () => {
       const rows = rowsByKey[key] || [];
       const q = (queryByKey[key] || "").trim().toLowerCase();
       if (!q) return rows;
-      return rows.filter((r) =>
-        String(r.value || "")
+
+      return rows.filter((r) => {
+        const hay = `${r.value || ""} ${r.shortName || ""} ${r.country || ""}`
           .toLowerCase()
-          .includes(q)
-      );
+          .trim();
+        return hay.includes(q);
+      });
     },
     [rowsByKey, queryByKey]
   );
@@ -435,6 +506,7 @@ const Masters: React.FC = () => {
                         setNewTransporterCode("");
                         setNewTransporterName("");
                         setNewTransporterEmail("");
+                        setNewTransporterShortName("");
                         setNewTransporterIsActive(true);
                         setTransporterAddOpen(true);
                       }}
@@ -472,6 +544,17 @@ const Masters: React.FC = () => {
                               setNewTransporterName(e.target.value)
                             }
                             placeholder="e.g., Vendor A Logistics"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Short Name (optional)</Label>
+                          <Input
+                            value={newTransporterShortName}
+                            onChange={(e) =>
+                              setNewTransporterShortName(e.target.value)
+                            }
+                            placeholder="e.g., VENDORA"
                           />
                         </div>
 
@@ -531,6 +614,8 @@ const Masters: React.FC = () => {
                               await api.post("/admin/transporters", {
                                 vendorCode,
                                 vendorName,
+                                shortName:
+                                  newTransporterShortName.trim() || null,
                                 vendorEmail: vendorEmail || null,
                                 isActive: newTransporterIsActive,
                               });
@@ -575,21 +660,23 @@ const Masters: React.FC = () => {
                     <tr className="text-left">
                       <th className="p-3 w-[160px]">Code</th>
                       <th className="p-3">Name</th>
+                      <th className="p-3 w-[220px]">Short Name</th>
                       <th className="p-3">Email</th>
                       <th className="p-3 w-[120px]">Active</th>
                       <th className="p-3 w-[220px]">Actions</th>
                     </tr>
                   </thead>
+
                   <tbody>
                     {transportersLoading ? (
                       <tr>
-                        <td className="p-3" colSpan={5}>
+                        <td className="p-3" colSpan={6}>
                           Loading...
                         </td>
                       </tr>
                     ) : filteredTransporters.length === 0 ? (
                       <tr>
-                        <td className="p-3 text-muted-foreground" colSpan={5}>
+                        <td className="p-3 text-muted-foreground" colSpan={6}>
                           No transporters found.
                         </td>
                       </tr>
@@ -642,13 +729,34 @@ const Masters: React.FC = () => {
                             <td className="p-3">
                               {isEditing ? (
                                 <Input
+                                  value={et.shortName || ""}
+                                  onChange={(e) =>
+                                    setEditingTransporter((p) =>
+                                      p
+                                        ? { ...p, shortName: e.target.value }
+                                        : p
+                                    )
+                                  }
+                                  placeholder="Short name..."
+                                />
+                              ) : (
+                                <div className="text-muted-foreground break-words">
+                                  {t.shortName || "—"}
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="p-3">
+                              {isEditing ? (
+                                <Input
                                   value={et.vendorEmail || ""}
                                   onChange={(e) =>
                                     setEditingTransporter((p) =>
                                       p
                                         ? {
                                             ...p,
-                                            vendorEmail: e.target.value || null,
+                                            vendorEmail:
+                                              e.target.value.trim() || null,
                                           }
                                         : p
                                     )
@@ -687,16 +795,31 @@ const Masters: React.FC = () => {
 
                             <td className="p-3">
                               {isEditing ? (
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 flex-wrap">
                                   <Button
                                     size="sm"
                                     onClick={async () => {
+                                      const vendorCode = et.vendorCode.trim();
+                                      const vendorName = et.vendorName.trim();
+                                      if (!vendorCode || !vendorName) {
+                                        toast({
+                                          title: "Missing fields",
+                                          description:
+                                            "Vendor Code and Vendor Name are required.",
+                                          variant: "destructive",
+                                        });
+                                        return;
+                                      }
+
                                       try {
                                         await api.put(
                                           `/admin/transporters/${et.id}`,
                                           {
-                                            vendorCode: et.vendorCode.trim(),
-                                            vendorName: et.vendorName.trim(),
+                                            vendorCode,
+                                            vendorName,
+                                            shortName:
+                                              (et.shortName || "").trim() ||
+                                              null,
                                             vendorEmail:
                                               (et.vendorEmail || "").trim() ||
                                               null,
@@ -737,7 +860,9 @@ const Masters: React.FC = () => {
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => setEditingTransporter(t)}
+                                    onClick={() =>
+                                      setEditingTransporter({ ...t })
+                                    }
                                   >
                                     Edit
                                   </Button>
@@ -818,8 +943,8 @@ const Masters: React.FC = () => {
               </div>
 
               <p className="text-xs text-muted-foreground">
-                Tip: Set Vendor Email for VENDORA/VENDORB so RFQ notifications
-                go to the right transporter inbox.
+                Tip: Set Vendor Email for transporters so RFQ notifications go
+                to the right transporter inbox.
               </p>
             </div>
           </AccordionContent>
@@ -830,6 +955,11 @@ const Masters: React.FC = () => {
           const rows = filteredRows(m.key);
           const isLoading = !!loadingByKey[m.key];
           const multiline = !!m.multiline;
+
+          const colSpan =
+            3 +
+            (m.key === "companyNames" ? 1 : 0) +
+            (m.key === "portsOfLoading" ? 1 : 0);
 
           return (
             <AccordionItem key={m.key} value={m.key}>
@@ -872,6 +1002,7 @@ const Masters: React.FC = () => {
                       <DialogTrigger asChild>
                         <Button onClick={() => openAdd(m.key)}>+ Add</Button>
                       </DialogTrigger>
+
                       <DialogContent className="max-w-2xl">
                         <DialogHeader>
                           <DialogTitle>Add {m.label}</DialogTitle>
@@ -899,6 +1030,33 @@ const Masters: React.FC = () => {
                               typically single-line.
                             </p>
                           </div>
+
+                          {m.key === "companyNames" && (
+                            <div className="space-y-2">
+                              <Label>Short Name (optional)</Label>
+                              <Input
+                                value={newShortName}
+                                onChange={(e) =>
+                                  setNewShortName(e.target.value)
+                                }
+                                placeholder="e.g., PEL / PGE / PEI"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Used as a compact label in dropdowns/reports.
+                              </p>
+                            </div>
+                          )}
+
+                          {m.key === "portsOfLoading" && (
+                            <div className="space-y-2">
+                              <Label>Country (optional)</Label>
+                              <Input
+                                value={newCountry}
+                                onChange={(e) => setNewCountry(e.target.value)}
+                                placeholder="e.g., India"
+                              />
+                            </div>
+                          )}
 
                           <div className="flex items-center justify-between border rounded-md p-3">
                             <div>
@@ -939,15 +1097,25 @@ const Masters: React.FC = () => {
                     <table className="w-full text-sm">
                       <thead className="border-b">
                         <tr className="text-left">
-                          <th className="p-3 w-[70%]">Value</th>
+                          <th className="p-3">Value</th>
+
+                          {m.key === "companyNames" && (
+                            <th className="p-3 w-[220px]">Short Name</th>
+                          )}
+
+                          {m.key === "portsOfLoading" && (
+                            <th className="p-3 w-[220px]">Country</th>
+                          )}
+
                           <th className="p-3 w-[120px]">Active</th>
                           <th className="p-3 w-[220px]">Actions</th>
                         </tr>
                       </thead>
+
                       <tbody>
                         {isLoading ? (
                           <tr>
-                            <td className="p-3" colSpan={3}>
+                            <td className="p-3" colSpan={colSpan}>
                               Loading...
                             </td>
                           </tr>
@@ -955,7 +1123,7 @@ const Masters: React.FC = () => {
                           <tr>
                             <td
                               className="p-3 text-muted-foreground"
-                              colSpan={3}
+                              colSpan={colSpan}
                             >
                               No values found.
                             </td>
@@ -964,6 +1132,7 @@ const Masters: React.FC = () => {
                           rows.map((r) => {
                             const isEditing =
                               editing?.key === m.key && editing?.id === r.id;
+
                             return (
                               <tr
                                 key={r.id}
@@ -1002,6 +1171,56 @@ const Masters: React.FC = () => {
                                   )}
                                 </td>
 
+                                {m.key === "companyNames" && (
+                                  <td className="p-3">
+                                    {isEditing ? (
+                                      <Input
+                                        value={editing.shortName || ""}
+                                        onChange={(e) =>
+                                          setEditing((p) =>
+                                            p
+                                              ? {
+                                                  ...p,
+                                                  shortName: e.target.value,
+                                                }
+                                              : p
+                                          )
+                                        }
+                                        placeholder="Short name..."
+                                      />
+                                    ) : (
+                                      <div className="text-muted-foreground break-words">
+                                        {r.shortName || "—"}
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
+
+                                {m.key === "portsOfLoading" && (
+                                  <td className="p-3">
+                                    {isEditing ? (
+                                      <Input
+                                        value={editing.country || ""}
+                                        onChange={(e) =>
+                                          setEditing((p) =>
+                                            p
+                                              ? {
+                                                  ...p,
+                                                  country: e.target.value,
+                                                }
+                                              : p
+                                          )
+                                        }
+                                        placeholder="Country..."
+                                      />
+                                    ) : (
+                                      <div className="text-muted-foreground break-words">
+                                        {r.country || "—"}
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
+
                                 <td className="p-3">
                                   {isEditing ? (
                                     <Switch
@@ -1028,7 +1247,7 @@ const Masters: React.FC = () => {
 
                                 <td className="p-3">
                                   {isEditing ? (
-                                    <div className="flex gap-2">
+                                    <div className="flex gap-2 flex-wrap">
                                       <Button size="sm" onClick={saveEdit}>
                                         Save
                                       </Button>

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import api from "@/lib/api";
+import { toast } from "sonner";
 import { RFQ } from "@/types/rfq.types";
 
 interface Vendor {
@@ -38,11 +39,27 @@ type LookupsResponse = {
   suppliers: LookupRow[];
   portsOfLoading: LookupRow[];
   portsOfDestination: LookupRow[];
+  incoterms?: LookupRow[];
   containerTypes: LookupRow[];
   vendors: Vendor[]; // optional (we still use /vendors below)
 };
 
 // suppliers.ts
+
+// Fallback list if backend /lookups doesn't include incoterms yet
+const DEFAULT_INCOTERMS = [
+  "EXW",
+  "FCA",
+  "CPT",
+  "CIP",
+  "DAP",
+  "DPU",
+  "DDP",
+  "FAS",
+  "FOB",
+  "CFR",
+  "CIF",
+];
 
 const RFQList: React.FC = () => {
   const { getUserRFQs, createRFQ } = useData();
@@ -60,10 +77,12 @@ const RFQList: React.FC = () => {
   const [portOfLoading, setPortOfLoading] = useState<RFQ["portOfLoading"]>("");
   const [portOfDestination, setPortOfDestination] =
     useState<RFQ["portOfDestination"]>("");
+  const [incoterms, setIncoterms] = useState<NonNullable<RFQ["incoterms"]>>("");
   const [containerType, setContainerType] = useState<RFQ["containerType"]>("");
   const [numberOfContainers, setNumberOfContainers] = useState(1);
   const [cargoWeight, setCargoWeight] = useState(1);
-  const [cargoReadinessDate, setCargoReadinessDate] = useState("");
+  const [cargoReadinessFrom, setCargoReadinessFrom] = useState("");
+  const [cargoReadinessTo, setCargoReadinessTo] = useState("");
 
   const [description, setDescription] = useState("");
 
@@ -132,6 +151,7 @@ const RFQList: React.FC = () => {
     supplierName: "",
     portOfLoading: "",
     portOfDestination: "",
+    incoterms: "",
     containerType: "",
     numberOfContainers: "",
     cargoWeight: "",
@@ -161,6 +181,7 @@ const RFQList: React.FC = () => {
       supplierName: "",
       portOfLoading: "",
       portOfDestination: "",
+      incoterms: "",
       containerType: "",
       numberOfContainers: "",
       cargoWeight: "",
@@ -180,6 +201,12 @@ const RFQList: React.FC = () => {
     String(v ?? "")
       .trim()
       .toLowerCase();
+
+  const splitReadiness = (v: any) => {
+    const raw = String(v ?? "");
+    const [from, to] = raw.includes("|") ? raw.split("|") : [raw, ""];
+    return { from: from || "", to: to || "" };
+  };
 
   const formatDateKey = (d: any) => {
     if (!d) return "";
@@ -209,7 +236,10 @@ const RFQList: React.FC = () => {
 
     const statusOk = !f.status || norm(rfq.status) === norm(f.status);
 
-    const readinessKey = formatDateKey((rfq as any).cargoReadinessDate);
+    const rd = splitReadiness((rfq as any).cargoReadinessDate);
+    const readinessKey = [formatDateKey(rd.from), formatDateKey(rd.to)]
+      .filter(Boolean)
+      .join(" | ");
 
     return (
       statusOk &&
@@ -231,6 +261,8 @@ const RFQList: React.FC = () => {
         norm((rfq as any).portOfDestination).includes(
           norm(f.portOfDestination)
         )) &&
+      (!f.incoterms ||
+        norm((rfq as any).incoterms).includes(norm(f.incoterms))) &&
       (!f.containerType ||
         norm((rfq as any).containerType).includes(norm(f.containerType))) &&
       (!f.numberOfContainers ||
@@ -256,6 +288,7 @@ const RFQList: React.FC = () => {
       (rfq as any).supplierName,
       (rfq as any).portOfLoading,
       (rfq as any).portOfDestination,
+      (rfq as any).incoterms,
       (rfq as any).containerType,
       (rfq as any).numberOfContainers,
       (rfq as any).cargoWeight,
@@ -278,7 +311,13 @@ const RFQList: React.FC = () => {
 
     const getVal = (r: any) => {
       // Treat readiness date and createdAt as dates for sorting
-      if (key === "cargoReadinessDate" || key === "createdAt") {
+      if (key === "cargoReadinessDate") {
+        const { from } = splitReadiness(r[key]);
+        const t = new Date(from).getTime();
+        return Number.isNaN(t) ? 0 : t;
+      }
+
+      if (key === "createdAt") {
         const t = new Date(r[key]).getTime();
         return Number.isNaN(t) ? 0 : t;
       }
@@ -333,6 +372,7 @@ const RFQList: React.FC = () => {
           suppliers: res.data?.suppliers?.length,
           portsOfLoading: res.data?.portsOfLoading?.length,
           portsOfDestination: res.data?.portsOfDestination?.length,
+          incoterms: res.data?.incoterms?.length,
           containerTypes: res.data?.containerTypes?.length,
         });
 
@@ -358,17 +398,52 @@ const RFQList: React.FC = () => {
   }, []);
 
   const handleCreateRFQ = () => {
+    const po = String(materialPONumber || "").trim();
+
+    if (!po) {
+      toast.error("Material PO Number is required");
+      return;
+    }
+
+    if (!incoterms) {
+      toast.error("Incoterms is required");
+      return;
+    }
+
+    if (!cargoReadinessFrom || !cargoReadinessTo) {
+      toast.error("Cargo readiness window (From/To) is required");
+      return;
+    }
+
+    const fromT = new Date(cargoReadinessFrom).getTime();
+    const toT = new Date(cargoReadinessTo).getTime();
+    if (!Number.isFinite(fromT) || !Number.isFinite(toT)) {
+      toast.error("Invalid cargo readiness date/time");
+      return;
+    }
+    if (toT < fromT) {
+      toast.error("Cargo Readiness To cannot be before From");
+      return;
+    }
+
     createRFQ({
       itemDescription,
       companyName,
-      materialPONumber,
+      materialPONumber: po,
       supplierName,
       portOfLoading,
       portOfDestination,
+      incoterms,
       containerType,
       numberOfContainers,
       cargoWeight,
-      cargoReadinessDate,
+
+      // ✅ Send separately (backend expects these)
+      cargoReadinessFrom,
+      cargoReadinessTo,
+
+      // ✅ Optional legacy field: keep FROM only (do NOT send pipe)
+      cargoReadinessDate: cargoReadinessFrom,
 
       description,
       vendors,
@@ -377,12 +452,14 @@ const RFQList: React.FC = () => {
     });
 
     setIsCreateModalOpen(false);
+
     // Reset form
     setMaterialPONumber("");
     setNumberOfContainers(1);
     setCargoWeight(1);
-    setCargoReadinessDate("");
-
+    setCargoReadinessFrom("");
+    setCargoReadinessTo("");
+    setIncoterms("");
     setDescription("");
     setVendors([]);
     setAttachments([]);
@@ -529,6 +606,33 @@ const RFQList: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
+                  <Label htmlFor="incoterms">Incoterms</Label>
+                  <Select value={incoterms} onValueChange={setIncoterms}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select incoterms" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {((lookups?.incoterms || [])
+                        .map((r) => String(r.value || "").trim())
+                        .filter(Boolean).length
+                        ? (lookups?.incoterms || []).map((r) => ({
+                            id: r.id,
+                            value: String(r.value || "").trim(),
+                          }))
+                        : DEFAULT_INCOTERMS.map((v) => ({
+                            id: v,
+                            value: v,
+                          }))
+                      ).map((r) => (
+                        <SelectItem key={String(r.id)} value={r.value}>
+                          {r.value}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
                   <Label htmlFor="containerType">Container Type</Label>
                   <Select
                     value={containerType}
@@ -583,16 +687,41 @@ const RFQList: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="cargoReadinessDate">
-                    Tentative Cargo Readiness Date
-                  </Label>
-                  <Input
-                    id="cargoReadinessDate"
-                    type="datetime-local"
-                    value={cargoReadinessDate}
-                    onChange={(e) => setCargoReadinessDate(e.target.value)}
-                    required
-                  />
+                  <Label>Tentative Cargo Readiness Window</Label>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label
+                        htmlFor="cargoReadinessFrom"
+                        className="text-xs text-muted-foreground"
+                      >
+                        From
+                      </Label>
+                      <Input
+                        id="cargoReadinessFrom"
+                        type="datetime-local"
+                        value={cargoReadinessFrom}
+                        onChange={(e) => setCargoReadinessFrom(e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label
+                        htmlFor="cargoReadinessTo"
+                        className="text-xs text-muted-foreground"
+                      >
+                        To
+                      </Label>
+                      <Input
+                        id="cargoReadinessTo"
+                        type="datetime-local"
+                        value={cargoReadinessTo}
+                        onChange={(e) => setCargoReadinessTo(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -790,330 +919,369 @@ const RFQList: React.FC = () => {
         </div>
       </div>
 
-      <div className="rounded-md border">
-        <div className="overflow-x-auto">
-          <table className="w-full data-table text-[15px] [&_th]:px-4 [&_th]:py-3 [&_td]:px-4 [&_td]:py-3">
-            <thead>
-              <tr>
-                <th>Actions</th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("rfqNumber")}
-                  >
-                    RFQ Number {sortIndicator("rfqNumber")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("itemDescription")}
-                  >
-                    Item Description {sortIndicator("itemDescription")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("companyName")}
-                  >
-                    Company {sortIndicator("companyName")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("materialPONumber")}
-                  >
-                    Material PO {sortIndicator("materialPONumber")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("supplierName")}
-                  >
-                    Supplier {sortIndicator("supplierName")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("portOfLoading")}
-                  >
-                    Port of Loading {sortIndicator("portOfLoading")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("portOfDestination")}
-                  >
-                    Port of Destination {sortIndicator("portOfDestination")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("containerType")}
-                  >
-                    Container Type {sortIndicator("containerType")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("numberOfContainers")}
-                  >
-                    No. of Containers {sortIndicator("numberOfContainers")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("cargoWeight")}
-                  >
-                    Weight (tons) {sortIndicator("cargoWeight")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("cargoReadinessDate")}
-                  >
-                    Readiness Date {sortIndicator("cargoReadinessDate")}
-                  </button>
-                </th>
-
-                <th>
-                  <button
-                    type="button"
-                    className="font-semibold underline-offset-2 hover:underline"
-                    onClick={() => toggleSort("status")}
-                  >
-                    Status {sortIndicator("status")}
-                  </button>
-                </th>
-              </tr>
-
-              {/* Filter row */}
-              <tr>
-                <th />
-
-                <th>
-                  <Input
-                    value={colFilters.rfqNumber}
-                    onChange={(e) => setFilter("rfqNumber", e.target.value)}
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.itemDescription}
-                    onChange={(e) =>
-                      setFilter("itemDescription", e.target.value)
-                    }
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.companyName}
-                    onChange={(e) => setFilter("companyName", e.target.value)}
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.materialPONumber}
-                    onChange={(e) =>
-                      setFilter("materialPONumber", e.target.value)
-                    }
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.supplierName}
-                    onChange={(e) => setFilter("supplierName", e.target.value)}
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.portOfLoading}
-                    onChange={(e) => setFilter("portOfLoading", e.target.value)}
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.portOfDestination}
-                    onChange={(e) =>
-                      setFilter("portOfDestination", e.target.value)
-                    }
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.containerType}
-                    onChange={(e) => setFilter("containerType", e.target.value)}
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.numberOfContainers}
-                    onChange={(e) =>
-                      setFilter("numberOfContainers", e.target.value)
-                    }
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.cargoWeight}
-                    onChange={(e) => setFilter("cargoWeight", e.target.value)}
-                    placeholder="Filter…"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Input
-                    value={colFilters.cargoReadinessDate}
-                    onChange={(e) =>
-                      setFilter("cargoReadinessDate", e.target.value)
-                    }
-                    placeholder="YYYY-MM-DD"
-                    className="h-8"
-                  />
-                </th>
-
-                <th>
-                  <Select
-                    value={colFilters.status || "__ALL__"}
-                    onValueChange={(v) =>
-                      setFilter("status", v === "__ALL__" ? "" : v)
-                    }
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue placeholder="All" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__ALL__">All</SelectItem>
-
-                      {Array.from(
-                        new Set(rfqs.map((r: any) => String(r.status || "")))
-                      )
-                        .filter(Boolean)
-                        .sort()
-                        .map((s) => (
-                          <SelectItem key={s} value={s}>
-                            {s}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {paged.length === 0 ? (
+      <div className="w-full flex justify-center">
+        <div className="rounded-md border w-full lg:w-[90vw] lg:max-w-[90vw]">
+          <div className="overflow-x-auto">
+            <table className="w-full data-table !mx-0 !max-w-none text-[15px] [&_th]:px-3 [&_th]:py-3 [&_td]:px-3 [&_td]:py-3 md:[&_th]:px-4 md:[&_td]:px-4">
+              <thead>
                 <tr>
-                  <td colSpan={13} className="text-center py-4">
-                    No RFQs found. Create your first RFQ!
-                  </td>
+                  <th>Actions</th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("rfqNumber")}
+                    >
+                      RFQ Number {sortIndicator("rfqNumber")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("itemDescription")}
+                    >
+                      Item Description {sortIndicator("itemDescription")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("companyName")}
+                    >
+                      Company {sortIndicator("companyName")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("materialPONumber")}
+                    >
+                      Material PO Number {sortIndicator("materialPONumber")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("supplierName")}
+                    >
+                      Supplier {sortIndicator("supplierName")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("portOfLoading")}
+                    >
+                      Port of Loading {sortIndicator("portOfLoading")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("portOfDestination")}
+                    >
+                      Port of Destination {sortIndicator("portOfDestination")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("containerType")}
+                    >
+                      Container Type {sortIndicator("containerType")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("containerType")}
+                    >
+                      Container Type {sortIndicator("containerType")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("numberOfContainers")}
+                    >
+                      No. of Containers {sortIndicator("numberOfContainers")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("cargoWeight")}
+                    >
+                      Weight (tons) {sortIndicator("cargoWeight")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("cargoReadinessDate")}
+                    >
+                      Readiness Date {sortIndicator("cargoReadinessDate")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("status")}
+                    >
+                      Status {sortIndicator("status")}
+                    </button>
+                  </th>
                 </tr>
-              ) : (
-                paged.map((rfq) => (
-                  <tr key={rfq.id}>
-                    <td>
-                      {rfq.status !== "closed" && (
-                        <Button
-                          size="sm"
-                          onClick={() => handleFinalize(rfq.id)}
-                        >
-                          Finalize
-                        </Button>
-                      )}
-                      {rfq.status === "closed" && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleFinalize(rfq.id)}
-                        >
-                          View
-                        </Button>
-                      )}
-                    </td>
-                    <td>{rfq.rfqNumber}</td>
-                    <td>{rfq.itemDescription}</td>
-                    <td className="whitespace-pre-wrap break-words max-w-[320px]">
-                      {rfq.companyName}
-                    </td>
 
-                    <td>{rfq.materialPONumber}</td>
-                    <td>{rfq.supplierName}</td>
-                    <td>{rfq.portOfLoading}</td>
-                    <td>{rfq.portOfDestination}</td>
-                    <td>{rfq.containerType}</td>
-                    <td>{rfq.numberOfContainers}</td>
-                    <td>{rfq.cargoWeight}</td>
-                    <td>
-                      {new Date(rfq.cargoReadinessDate).toLocaleDateString()}
-                    </td>
+                {/* Filter row */}
+                <tr>
+                  <th />
 
-                    <td>
-                      <StatusBadge status={rfq.status} />
+                  <th>
+                    <Input
+                      value={colFilters.rfqNumber}
+                      onChange={(e) => setFilter("rfqNumber", e.target.value)}
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.itemDescription}
+                      onChange={(e) =>
+                        setFilter("itemDescription", e.target.value)
+                      }
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.companyName}
+                      onChange={(e) => setFilter("companyName", e.target.value)}
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.materialPONumber}
+                      onChange={(e) =>
+                        setFilter("materialPONumber", e.target.value)
+                      }
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.supplierName}
+                      onChange={(e) =>
+                        setFilter("supplierName", e.target.value)
+                      }
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.portOfLoading}
+                      onChange={(e) =>
+                        setFilter("portOfLoading", e.target.value)
+                      }
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.portOfDestination}
+                      onChange={(e) =>
+                        setFilter("portOfDestination", e.target.value)
+                      }
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.incoterms}
+                      onChange={(e) => setFilter("incoterms", e.target.value)}
+                      placeholder="EXW / FOB …"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.containerType}
+                      onChange={(e) =>
+                        setFilter("containerType", e.target.value)
+                      }
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.numberOfContainers}
+                      onChange={(e) =>
+                        setFilter("numberOfContainers", e.target.value)
+                      }
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.cargoWeight}
+                      onChange={(e) => setFilter("cargoWeight", e.target.value)}
+                      placeholder="Filter…"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.cargoReadinessDate}
+                      onChange={(e) =>
+                        setFilter("cargoReadinessDate", e.target.value)
+                      }
+                      placeholder="YYYY-MM-DD"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Select
+                      value={colFilters.status || "__ALL__"}
+                      onValueChange={(v) =>
+                        setFilter("status", v === "__ALL__" ? "" : v)
+                      }
+                    >
+                      <SelectTrigger className="h-8">
+                        <SelectValue placeholder="All" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__ALL__">All</SelectItem>
+
+                        {Array.from(
+                          new Set(rfqs.map((r: any) => String(r.status || "")))
+                        )
+                          .filter(Boolean)
+                          .sort()
+                          .map((s) => (
+                            <SelectItem key={s} value={s}>
+                              {s}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {paged.length === 0 ? (
+                  <tr>
+                    <td colSpan={14} className="text-center py-4">
+                      No RFQs found. Create your first RFQ!
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  paged.map((rfq) => (
+                    <tr key={rfq.id}>
+                      <td>
+                        {rfq.status !== "closed" && (
+                          <Button
+                            size="sm"
+                            onClick={() => handleFinalize(rfq.id)}
+                          >
+                            Finalize
+                          </Button>
+                        )}
+                        {rfq.status === "closed" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleFinalize(rfq.id)}
+                          >
+                            View
+                          </Button>
+                        )}
+                      </td>
+                      <td>{rfq.rfqNumber}</td>
+                      <td>{rfq.itemDescription}</td>
+                      <td className="whitespace-pre-wrap break-words max-w-[320px]">
+                        {rfq.companyName}
+                      </td>
+
+                      <td>{rfq.materialPONumber}</td>
+                      <td>{rfq.supplierName}</td>
+                      <td>{rfq.portOfLoading}</td>
+                      <td>{rfq.portOfDestination}</td>
+                      <td>{(rfq as any).incoterms || "-"}</td>
+                      <td>{rfq.containerType}</td>
+                      <td>{rfq.numberOfContainers}</td>
+                      <td>{rfq.cargoWeight}</td>
+                      <td>
+                        {(() => {
+                          const rd = splitReadiness(
+                            (rfq as any).cargoReadinessDate
+                          );
+                          const fromTxt = rd.from
+                            ? new Date(rd.from).toLocaleDateString()
+                            : "";
+                          const toTxt = rd.to
+                            ? new Date(rd.to).toLocaleDateString()
+                            : "";
+                          return toTxt ? `${fromTxt} → ${toTxt}` : fromTxt;
+                        })()}
+                      </td>
+
+                      <td>
+                        <StatusBadge status={rfq.status} />
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
       {/* Pagination */}

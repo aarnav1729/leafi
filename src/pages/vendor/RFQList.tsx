@@ -28,7 +28,7 @@ const VendorRFQList = () => {
   const [selectedRFQ, setSelectedRFQ] = useState<RFQ | null>(null);
   const [quoteModalOpen, setQuoteModalOpen] = useState(false);
   const [usdToInr, setUsdToInr] = useState<number>(75);
-
+  const [isSubmittingQuote, setIsSubmittingQuote] = useState(false);
   // Form state
   const [numberOfContainers, setNumberOfContainers] = useState(1);
   const [shippingLineName, setShippingLineName] = useState("");
@@ -68,7 +68,7 @@ const VendorRFQList = () => {
 
   // ★ Fetch the live rate once
   useEffect(() => {
-    fetch("https://14.194.111.58:30443/api/rate/usdinr")
+    fetch("/api/rate/usdinr", { credentials: "include" })
       .then((res) => res.json())
       .then(({ rate }) => setUsdToInr(rate))
       .catch(() => setUsdToInr(75));
@@ -107,6 +107,28 @@ const VendorRFQList = () => {
     const mm = String(dt.getMonth() + 1).padStart(2, "0");
     const dd = String(dt.getDate()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const formatCargoReadiness = (rfq: any) => {
+    const from = rfq?.cargoReadinessFrom || rfq?.cargoReadinessDate;
+    const to =
+      rfq?.cargoReadinessTo ||
+      rfq?.cargoReadinessFrom ||
+      rfq?.cargoReadinessDate;
+
+    const fmt = (d: any) => {
+      if (!d) return "";
+      const dt = new Date(d);
+      if (Number.isNaN(dt.getTime())) return "";
+      return dt.toLocaleDateString("en-IN");
+    };
+
+    const f = fmt(from);
+    const t = fmt(to);
+
+    if (!f) return "—";
+    if (!t || t === f) return f;
+    return `${f} → ${t}`;
   };
 
   const isQuoteAllowed = (rfq: RFQ) => rfq.status !== "closed";
@@ -168,7 +190,8 @@ const VendorRFQList = () => {
     const s = String(nameOrHref || "").toLowerCase();
 
     // handle data URLs too
-    if (s.startsWith("data:application/pdf") || s.includes(".pdf")) return "pdf";
+    if (s.startsWith("data:application/pdf") || s.includes(".pdf"))
+      return "pdf";
     if (s.startsWith("data:image/")) return "image";
 
     if (
@@ -236,6 +259,7 @@ const VendorRFQList = () => {
     setAttachmentViewerOpen(false);
     setAttachmentPreviewError(false);
     setActiveAttachment(null);
+    setIsSubmittingQuote(false);
 
     setSelectedRFQ(rfq);
 
@@ -311,10 +335,17 @@ const VendorRFQList = () => {
     };
 
     // numberOfContainers must be valid
-    if (!Number.isFinite(Number(numberOfContainers)) || Number(numberOfContainers) < 1) {
+    if (
+      !Number.isFinite(Number(numberOfContainers)) ||
+      Number(numberOfContainers) < 1
+    ) {
       missing.push("Number of Containers");
-    } else if (Number(numberOfContainers) > Number(selectedRFQ.numberOfContainers || 0)) {
-      toast.error(`Number of Containers cannot exceed RFQ (${selectedRFQ.numberOfContainers}).`);
+    } else if (
+      Number(numberOfContainers) > Number(selectedRFQ.numberOfContainers || 0)
+    ) {
+      toast.error(
+        `Number of Containers cannot exceed RFQ (${selectedRFQ.numberOfContainers}).`
+      );
       return false;
     }
 
@@ -344,37 +375,47 @@ const VendorRFQList = () => {
     return true;
   };
 
-  const handleSubmitQuote = () => {
-    if (!selectedRFQ || !user?.company) return;
+  const handleSubmitQuote = async () => {
+    if (isSubmittingQuote) return; // hard guard
 
+    if (!selectedRFQ || !user?.company) return;
     if (!validateQuote()) return;
 
-    createQuote({
-      rfqId: selectedRFQ.id,
-      vendorName: user.company,
-      numberOfContainers,
-      shippingLineName,
-      containerType: selectedRFQ.containerType,
-      vesselName,
-      vesselETD,
-      vesselETA,
-      seaFreightPerContainer: toNum(seaFreightPerContainer),
-      houseDeliveryOrderPerBOL: toNum(houseDeliveryOrderPerBOL),
-      cfsPerContainer: toNum(cfsPerContainer),
-      transportationPerContainer: toNum(transportationPerContainer),
-      chaChargesHome: toNum(chaChargesHome),
-      chaChargesMOOWR: toNum(chaChargesMOOWR),
-      ediChargesPerBOE: toNum(ediChargesPerBOE),
-      mooWRReeWarehousingCharges: toNum(mooWRReeWarehousingCharges),
+    setIsSubmittingQuote(true);
+    try {
+      await Promise.resolve(
+        createQuote({
+          rfqId: selectedRFQ.id,
+          vendorName: user.company,
+          numberOfContainers,
+          shippingLineName,
+          containerType: selectedRFQ.containerType,
+          vesselName,
+          vesselETD,
+          vesselETA,
+          seaFreightPerContainer: toNum(seaFreightPerContainer),
+          houseDeliveryOrderPerBOL: toNum(houseDeliveryOrderPerBOL),
+          cfsPerContainer: toNum(cfsPerContainer),
+          transportationPerContainer: toNum(transportationPerContainer),
+          chaChargesHome: toNum(chaChargesHome),
+          chaChargesMOOWR: toNum(chaChargesMOOWR),
+          ediChargesPerBOE: toNum(ediChargesPerBOE),
+          mooWRReeWarehousingCharges: toNum(mooWRReeWarehousingCharges),
 
-      transshipOrDirect,
-      quoteValidityDate,
-      message,
-    });
+          transshipOrDirect,
+          quoteValidityDate,
+          message,
+        })
+      );
 
-    setQuoteModalOpen(false);
-    setSelectedRFQ(null);
-    resetForm();
+      setQuoteModalOpen(false);
+      setSelectedRFQ(null);
+      resetForm();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to submit quote. Please try again.");
+    } finally {
+      setIsSubmittingQuote(false);
+    }
   };
 
   // totals
@@ -417,7 +458,7 @@ const VendorRFQList = () => {
                 <th>No. of Containers</th>
                 <th>Weight (tons)</th>
                 <th>Readiness Date</th>
-                <th>PO Number</th>
+                <th>Material PO Number</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -452,7 +493,9 @@ const VendorRFQList = () => {
                     <td>{(rfq as any).numberOfContainers}</td>
                     <td>{(rfq as any).cargoWeight}</td>
                     <td>
-                      {new Date((rfq as any).cargoReadinessDate).toLocaleDateString()}
+                      {new Date(
+                        (rfq as any).cargoReadinessDate
+                      ).toLocaleDateString()}
                     </td>
                     <td>{(rfq as any).materialPONumber}</td>
                     <td>
@@ -467,7 +510,13 @@ const VendorRFQList = () => {
       </div>
 
       {/* Quote submission modal */}
-      <Dialog open={quoteModalOpen} onOpenChange={setQuoteModalOpen}>
+      <Dialog
+        open={quoteModalOpen}
+        onOpenChange={(open) => {
+          if (isSubmittingQuote) return; // block close while submitting
+          setQuoteModalOpen(open);
+        }}
+      >
         <DialogContent className="w-[95vw] md:w-[80vw] max-w-none max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
@@ -481,44 +530,62 @@ const VendorRFQList = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Item Description</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).itemDescription}</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).itemDescription}
+                  </div>
                 </div>
                 <div>
                   <Label>Company Name</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).companyName}</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).companyName}
+                  </div>
                 </div>
                 <div>
                   <Label>Material PO Number</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).materialPONumber}</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).materialPONumber}
+                  </div>
                 </div>
                 <div>
                   <Label>Supplier Name</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).supplierName}</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).supplierName}
+                  </div>
                 </div>
                 <div>
                   <Label>Port of Loading</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).portOfLoading}</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).portOfLoading}
+                  </div>
                 </div>
                 <div>
                   <Label>Port of Destination</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).portOfDestination}</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).portOfDestination}
+                  </div>
                 </div>
                 <div>
                   <Label>Container Type</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).containerType}</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).containerType}
+                  </div>
                 </div>
                 <div>
                   <Label>Number of Containers</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).numberOfContainers}</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).numberOfContainers}
+                  </div>
                 </div>
                 <div>
                   <Label>Cargo Weight</Label>
-                  <div className="mt-1 font-medium">{(selectedRFQ as any).cargoWeight} tons</div>
+                  <div className="mt-1 font-medium">
+                    {(selectedRFQ as any).cargoWeight} tons
+                  </div>
                 </div>
                 <div>
                   <Label>Cargo Readiness Date</Label>
                   <div className="mt-1 font-medium">
-                    {new Date((selectedRFQ as any).cargoReadinessDate).toLocaleDateString()}
+                    {formatCargoReadiness(selectedRFQ)}
                   </div>
                 </div>
               </div>
@@ -537,7 +604,8 @@ const VendorRFQList = () => {
                 <div className="rounded-md border p-3 bg-muted/20">
                   <Label>Attachments</Label>
                   <div className="mt-2">
-                    {parseAttachments((selectedRFQ as any).attachments).length === 0 ? (
+                    {parseAttachments((selectedRFQ as any).attachments)
+                      .length === 0 ? (
                       <div className="text-sm text-muted-foreground">
                         No attachments
                       </div>
@@ -559,7 +627,9 @@ const VendorRFQList = () => {
                                     type="button"
                                     variant="outline"
                                     size="sm"
-                                    onClick={() => openAttachmentViewer(att, idx)}
+                                    onClick={() =>
+                                      openAttachmentViewer(att, idx)
+                                    }
                                   >
                                     View
                                   </Button>
@@ -614,9 +684,9 @@ const VendorRFQList = () => {
                         <div className="h-[calc(78vh-56px)]">
                           {attachmentPreviewError ? (
                             <div className="p-4 text-sm text-muted-foreground">
-                              Preview blocked/unavailable (common if the file URL
-                              disallows embedding or requires auth). Use “Open /
-                              Download”.
+                              Preview blocked/unavailable (common if the file
+                              URL disallows embedding or requires auth). Use
+                              “Open / Download”.
                             </div>
                           ) : activeAttachment.kind === "image" ? (
                             <img
@@ -648,7 +718,9 @@ const VendorRFQList = () => {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="numberOfContainers">Number of Containers</Label>
+                    <Label htmlFor="numberOfContainers">
+                      Number of Containers
+                    </Label>
                     <Input
                       id="numberOfContainers"
                       type="number"
@@ -723,7 +795,9 @@ const VendorRFQList = () => {
                       type="number"
                       step="0.01"
                       value={seaFreightPerContainer}
-                      onChange={(e) => setSeaFreightPerContainer(e.target.value)}
+                      onChange={(e) =>
+                        setSeaFreightPerContainer(e.target.value)
+                      }
                       required
                     />
                   </div>
@@ -737,13 +811,17 @@ const VendorRFQList = () => {
                       type="number"
                       step="0.01"
                       value={houseDeliveryOrderPerBOL}
-                      onChange={(e) => setHouseDeliveryOrderPerBOL(e.target.value)}
+                      onChange={(e) =>
+                        setHouseDeliveryOrderPerBOL(e.target.value)
+                      }
                       required
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="cfsPerContainer">CFS Per Container (INR)</Label>
+                    <Label htmlFor="cfsPerContainer">
+                      CFS Per Container (INR)
+                    </Label>
                     <Input
                       id="cfsPerContainer"
                       type="number"
@@ -763,7 +841,9 @@ const VendorRFQList = () => {
                       type="number"
                       step="0.01"
                       value={transportationPerContainer}
-                      onChange={(e) => setTransportationPerContainer(e.target.value)}
+                      onChange={(e) =>
+                        setTransportationPerContainer(e.target.value)
+                      }
                       required
                     />
                   </div>
@@ -819,13 +899,17 @@ const VendorRFQList = () => {
                       type="number"
                       step="0.01"
                       value={mooWRReeWarehousingCharges}
-                      onChange={(e) => setMooWRReeWarehousingCharges(e.target.value)}
+                      onChange={(e) =>
+                        setMooWRReeWarehousingCharges(e.target.value)
+                      }
                       required
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="transshipOrDirect">Transship or Direct</Label>
+                    <Label htmlFor="transshipOrDirect">
+                      Transship or Direct
+                    </Label>
                     <Select
                       value={transshipOrDirect}
                       onValueChange={(value) =>
@@ -843,7 +927,9 @@ const VendorRFQList = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="quoteValidityDate">Quote Validity Date</Label>
+                    <Label htmlFor="quoteValidityDate">
+                      Quote Validity Date
+                    </Label>
                     <Input
                       id="quoteValidityDate"
                       type="date"
@@ -866,19 +952,31 @@ const VendorRFQList = () => {
                 {/* Totals */}
                 <div className="grid grid-cols-2 gap-4 mt-6 bg-muted/20 p-4 rounded-lg">
                   <div className="space-y-2">
-                    <Label className="text-lg">Total with CHA - Home (INR)</Label>
-                    <div className="text-xl font-bold">₹{homeTotalINR.toFixed(2)}</div>
+                    <Label className="text-lg">
+                      Total with CHA - Home (INR)
+                    </Label>
+                    <div className="text-xl font-bold">
+                      ₹{homeTotalINR.toFixed(2)}
+                    </div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-lg">Total with CHA - MOOWR (INR)</Label>
-                    <div className="text-xl font-bold">₹{mooWRTotalINR.toFixed(2)}</div>
+                    <Label className="text-lg">
+                      Total with CHA - MOOWR (INR)
+                    </Label>
+                    <div className="text-xl font-bold">
+                      ₹{mooWRTotalINR.toFixed(2)}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <Button onClick={handleSubmitQuote} className="mt-4">
-                Submit Quote
+              <Button
+                onClick={handleSubmitQuote}
+                className="mt-4"
+                disabled={isSubmittingQuote}
+              >
+                {isSubmittingQuote ? "Submitting..." : "Submit Quote"}
               </Button>
             </div>
           )}
