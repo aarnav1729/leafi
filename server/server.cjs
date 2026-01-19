@@ -235,7 +235,7 @@ const httpsOptions = {
   ca: fs.readFileSync(path.join(__dirname, "certs", "gd_bundle-g2-g1.crt")),
 };
 
-const APP_PORT = Number(process.env.PORT || 30443);
+const APP_PORT = Number(process.env.PORT || 31443);
 const APP_HOST = process.env.HOST || "0.0.0.0";
 
 // ─────────────────────────────────────────────────────────────────────────────
