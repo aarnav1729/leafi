@@ -76,7 +76,7 @@ const App = () => (
               <Route element={<Layout requiredRole="admin" />}>
                 <Route path="/admin/dashboard" element={<AdminDashboard />} />
                 <Route path="/admin/masters" element={<Masters />} />
-
+                <Route path="/admin/rfqs" element={<RFQList />} />
                 <Route path="/admin/users" element={<Users />} />
               </Route>
 

@@ -95,6 +95,12 @@ export function Header() {
                     </Button>
                     <Button
                       variant="ghost"
+                      onClick={() => navigate("/admin/rfqs")}
+                    >
+                      RFQs
+                    </Button>
+                    <Button
+                      variant="ghost"
                       onClick={() => navigate("/admin/masters")}
                     >
                       Masters

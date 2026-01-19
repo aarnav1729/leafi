@@ -10,9 +10,16 @@ interface DataContextType {
   quotes: QuoteItem[];
   allocations: Allocation[];
   isLoading: boolean;
-  createRFQ: (rfq: Omit<RFQ, "id" | "rfqNumber" | "createdAt" | "status">) => Promise<void>;
-  createQuote: (quote: Omit<QuoteItem, "id" | "createdAt" | "homeTotal" | "mooWRTotal">) => Promise<void>;
-  finalizeRFQ: (rfqId: string, allocation: Omit<Allocation, "createdAt">) => Promise<void>;
+  createRFQ: (
+    rfq: Omit<RFQ, "id" | "rfqNumber" | "createdAt" | "status">
+  ) => Promise<void>;
+  createQuote: (
+    quote: Omit<QuoteItem, "id" | "createdAt" | "homeTotal" | "mooWRTotal">
+  ) => Promise<void>;
+  finalizeRFQ: (
+    rfqId: string,
+    allocation: Omit<Allocation, "createdAt">
+  ) => Promise<void>;
   getUserRFQs: () => RFQ[];
   getVendorRFQs: () => RFQ[];
   getVendorAllottedRFQs: () => RFQ[];
@@ -21,11 +28,15 @@ interface DataContextType {
   getAllocationsByRFQId: (rfqId: string) => Allocation[];
 }
 
-export const DataContext = createContext<DataContextType>({} as DataContextType);
+export const DataContext = createContext<DataContextType>(
+  {} as DataContextType
+);
 
 export const useData = () => useContext(DataContext);
 
-export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const DataProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const { user, isLoading: authLoading } = useAuth();
 
   const [rfqs, setRFQs] = useState<RFQ[]>([]);
@@ -55,16 +66,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // 2) fetch quotes for each RFQ
         const quoteArrays = await Promise.all(
-          rfqRes.data.map(rfq =>
-            api.get<QuoteItem[]>(`/quotes/${rfq.id}`).then(res => res.data)
+          rfqRes.data.map((rfq) =>
+            api.get<QuoteItem[]>(`/quotes/${rfq.id}`).then((res) => res.data)
           )
         );
         setQuotes(quoteArrays.flat());
 
         // 3) fetch allocations for each RFQ
         const allocArrays = await Promise.all(
-          rfqRes.data.map(rfq =>
-            api.get<Allocation[]>(`/allocations/${rfq.id}`).then(res => res.data)
+          rfqRes.data.map((rfq) =>
+            api
+              .get<Allocation[]>(`/allocations/${rfq.id}`)
+              .then((res) => res.data)
           )
         );
         setAllocations(allocArrays.flat());
@@ -80,7 +93,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [user, authLoading]);
 
   // Create a new RFQ
-  const createRFQ = async (rfqData: Omit<RFQ, "id" | "rfqNumber" | "createdAt" | "status">) => {
+  const createRFQ = async (
+    rfqData: Omit<RFQ, "id" | "rfqNumber" | "createdAt" | "status">
+  ) => {
     try {
       await api.post("/rfqs", rfqData);
       const rfqRes = await api.get<RFQ[]>("/rfqs");
@@ -93,13 +108,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Create a new Quote
-  const createQuote = async (quoteData: Omit<QuoteItem, "id" | "createdAt" | "homeTotal" | "mooWRTotal">) => {
+  const createQuote = async (
+    quoteData: Omit<QuoteItem, "id" | "createdAt" | "homeTotal" | "mooWRTotal">
+  ) => {
     try {
       await api.post("/quotes", quoteData);
       // refresh quotes for that RFQ
-      const rfqQuotesRes = await api.get<QuoteItem[]>(`/quotes/${quoteData.rfqId}`);
-      setQuotes(prev => [
-        ...prev.filter(q => q.rfqId !== quoteData.rfqId),
+      const rfqQuotesRes = await api.get<QuoteItem[]>(
+        `/quotes/${quoteData.rfqId}`
+      );
+      setQuotes((prev) => [
+        ...prev.filter((q) => q.rfqId !== quoteData.rfqId),
         ...rfqQuotesRes.data,
       ]);
       // refresh RFQs
@@ -113,13 +132,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Finalize an RFQ (allocations)
-  const finalizeRFQ = async (rfqId: string, allocation: Omit<Allocation, "createdAt">) => {
+  const finalizeRFQ = async (
+    rfqId: string,
+    allocation: Omit<Allocation, "createdAt">
+  ) => {
     try {
       await api.post("/allocations", allocation);
       // refresh allocations for that RFQ
       const allocRes = await api.get<Allocation[]>(`/allocations/${rfqId}`);
-      setAllocations(prev => [
-        ...prev.filter(a => a.rfqId !== rfqId),
+      setAllocations((prev) => [
+        ...prev.filter((a) => a.rfqId !== rfqId),
         ...allocRes.data,
       ]);
       // refresh RFQs
@@ -132,34 +154,39 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Getters for various roles/views
   const getUserRFQs = () => {
-    return user?.role === "logistics" ? rfqs : [];
+    if (!user) return [];
+
+    if (user.role === "logistics") return rfqs;
+
+    if (user.role === "admin") return rfqs; 
+
+    return [];
   };
 
   const getVendorRFQs = () => {
     if (user?.role !== "vendor") return [];
-    return rfqs.filter(r => r.vendors.includes(user.company!));
+    return rfqs.filter((r) => r.vendors.includes(user.company!));
   };
 
   const getVendorAllottedRFQs = () => {
     if (user?.role !== "vendor") return [];
     const rfqIds = allocations
-      .filter(a => a.vendorName === user.company)
-      .map(a => a.rfqId);
-    return rfqs.filter(r => rfqIds.includes(r.id));
+      .filter((a) => a.vendorName === user.company)
+      .map((a) => a.rfqId);
+    return rfqs.filter((r) => rfqIds.includes(r.id));
   };
 
   const getRFQById = (id: string) => {
-    return rfqs.find(r => r.id === id);
+    return rfqs.find((r) => r.id === id);
   };
 
   const getQuotesByRFQId = (rfqId: string) => {
-    return quotes.filter(q => q.rfqId === rfqId);
+    return quotes.filter((q) => q.rfqId === rfqId);
   };
 
   const getAllocationsByRFQId = (rfqId: string) => {
-    return allocations.filter(a => a.rfqId === rfqId);
+    return allocations.filter((a) => a.rfqId === rfqId);
   };
 
   return (
