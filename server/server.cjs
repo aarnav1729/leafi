@@ -92,31 +92,40 @@ async function findUserForLogin(pool, usernameOrEmail) {
     splitLoginIdentifier(usernameOrEmail);
 
   // (a) match by vendorEmail
-  const byEmail = await pool.request().input("email", sql.NVarChar(255), email)
+  // (a) match by vendorEmail OR vendorEmails (multi list)
+  const byEmail = await pool
+    .request()
+    .input("email", sql.NVarChar(255), email)
     .query(`
       SELECT TOP 1
         CAST(id AS NVARCHAR(36)) AS id,
         vendorCode,
         vendorName,
-        NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail
+        NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail,
+        NULLIF(CAST(vendorEmails AS NVARCHAR(MAX)), '') AS vendorEmails
       FROM dbo.Master_Transporters
       WHERE ISNULL(isActive, 1) = 1
-        AND vendorEmail IS NOT NULL
-        AND LOWER(LTRIM(RTRIM(vendorEmail))) = LOWER(@email)
+        AND (
+          (vendorEmail IS NOT NULL AND LOWER(LTRIM(RTRIM(vendorEmail))) = LOWER(@email))
+          OR (vendorEmails IS NOT NULL AND CHARINDEX(LOWER(@email), LOWER(CAST(vendorEmails AS NVARCHAR(MAX)))) > 0)
+        )
     `);
 
-  const t1 = byEmail.recordset?.[0];
-  if (t1?.vendorCode) {
-    return {
-      id: t1.id || t1.vendorCode,
-      username: String(t1.vendorEmail || "")
-        .trim()
-        .toLowerCase(), // email login identity
-      role: "vendor",
-      name: t1.vendorName || t1.vendorCode,
-      company: t1.vendorCode, // IMPORTANT: used everywhere as vendor key
-    };
-  }
+
+    const t1 = byEmail.recordset?.[0];
+    if (t1?.vendorCode) {
+      // prefer exact email used to login (email), else fallback to vendorEmail, else vendorCode
+      const loginIdentity = (email && email.includes("@") ? email : "") || String(t1.vendorEmail || "").trim().toLowerCase() || String(t1.vendorCode).trim().toLowerCase();
+  
+      return {
+        id: t1.id || t1.vendorCode,
+        username: loginIdentity,
+        role: "vendor",
+        name: t1.vendorName || t1.vendorCode,
+        company: t1.vendorCode, // vendor key everywhere
+      };
+    }
+  
 
   // (b) match by vendorCode (if vendor types vendorCode instead of email)
   const byCode = await pool
@@ -165,7 +174,9 @@ async function resolveOtpEmailForUser(pool, user) {
     if (!code) return "";
 
     try {
-      const em = await pool.request().input("code", sql.NVarChar(150), code)
+      const em = await pool
+        .request()
+        .input("code", sql.NVarChar(150), code)
         .query(`
           SELECT TOP 1
             NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail,
@@ -175,19 +186,17 @@ async function resolveOtpEmailForUser(pool, user) {
         `);
 
       const row = em.recordset?.[0] || {};
-      const list = parseEmailList([row.vendorEmail, row.vendorEmails].filter(Boolean).join("\n"));
+      const list = parseEmailList(
+        [row.vendorEmail, row.vendorEmails].filter(Boolean).join("\n")
+      );
+
+      // OTP goes to the primary email (first in the list)
       return list[0] || "";
-
-
-      const email = String(em.recordset?.[0]?.email || "")
-        .trim()
-        .toLowerCase();
-
-      return email;
     } catch (e) {
       console.error("[OTP] Vendor email lookup failed:", e?.message || e);
       return "";
     }
+
   }
 
   // Admin/logistics: infer @premierenergies.com from username
@@ -2132,10 +2141,19 @@ async function ensureTransporterFromVendorUser(pool, userLike) {
       ELSE
       BEGIN
         -- "fill blanks only" to avoid overwriting intentional values
-        UPDATE dbo.Master_Transporters
+                UPDATE dbo.Master_Transporters
         SET
           vendorName = CASE WHEN NULLIF(LTRIM(RTRIM(vendorName)), '') IS NULL THEN @vendorName ELSE vendorName END,
           vendorEmail = CASE WHEN NULLIF(LTRIM(RTRIM(vendorEmail)), '') IS NULL THEN @vendorEmail ELSE vendorEmail END,
+
+          -- ✅ maintain vendorEmails as a newline-separated list (append if not present)
+          vendorEmails = CASE
+            WHEN @vendorEmail IS NULL THEN vendorEmails
+            WHEN NULLIF(CAST(vendorEmails AS NVARCHAR(MAX)), '') IS NULL THEN @vendorEmail
+            WHEN CHARINDEX(LOWER(@vendorEmail), LOWER(CAST(vendorEmails AS NVARCHAR(MAX)))) > 0 THEN vendorEmails
+            ELSE CAST(vendorEmails AS NVARCHAR(MAX)) + CHAR(10) + @vendorEmail
+          END,
+
           updatedAt = SYSUTCDATETIME()
         WHERE vendorCode = @vendorCode;
       END
@@ -2675,13 +2693,16 @@ app.post("/api/admin/transporters", authenticate, requireAdminOrLogistics, async
   const vendorEmailRaw = req.body?.vendorEmail;
 
   // Parse multi emails from the same field
-  const emailList = parseEmailList(vendorEmailRaw);
-  const vendorEmailPrimary = emailList[0] || null;      // primary
-  const vendorEmails = emailList.length ? emailList.join("\n") : null; // list
+    // ✅ Parse multi emails from the same field (UI provides one textbox)
+    const emailList = parseEmailList(vendorEmailRaw);
+    const vendorEmailPrimary = emailList[0] || null; // primary
+    const vendorEmails = emailList.length ? emailList.join("\n") : null; // list
   
-
-  const shortName = shortNameRaw == null ? null : String(shortNameRaw).trim() || null;
-  const vendorEmail = vendorEmailRaw == null ? null : String(vendorEmailRaw).trim() || null;
+    const shortName = shortNameRaw == null ? null : String(shortNameRaw).trim() || null;
+  
+    // store primary in vendorEmail, full list in vendorEmails
+    const vendorEmail = vendorEmailPrimary;
+  
 
   const isActive = req.body?.isActive === false ? 0 : 1;
 
@@ -2710,13 +2731,20 @@ app.post("/api/admin/transporters", authenticate, requireAdminOrLogistics, async
       .input("isActive", sql.Bit, isActive)
       .query(`
         INSERT INTO dbo.Master_Transporters
-          (vendorCode, vendorName, shortName, vendorEmail, isActive, createdAt)
+          (vendorCode, vendorName, shortName, vendorEmail, vendorEmails, isActive, createdAt)
         VALUES
           (@vendorCode, @vendorName, @shortName, @vendorEmail, @vendorEmails, @isActive, SYSUTCDATETIME())
       `);
 
+
     // keep vendor user in sync (insert-only)
-    await ensureVendorUserFromTransporter(pool, { vendorCode, vendorName, vendorEmail, isActive });
+    await ensureVendorUserFromTransporter(pool, {
+      vendorCode,
+      vendorName,
+      vendorEmail: vendorEmailPrimary,
+      isActive
+    });
+    
 
     return res.json({ ok: true });
   } catch (e) {
@@ -2734,9 +2762,20 @@ app.put("/api/admin/transporters/:id", authenticate, requireAdminOrLogistics, as
   const shortName = "shortName" in (req.body || {})
     ? (req.body.shortName == null ? null : String(req.body.shortName).trim() || null)
     : undefined;
-  const vendorEmail = "vendorEmail" in (req.body || {})
-    ? (req.body.vendorEmail == null ? null : String(req.body.vendorEmail).trim() || null)
+  // vendorEmail textbox can contain multiple emails
+  const vendorEmailInput = "vendorEmail" in (req.body || {})
+    ? req.body.vendorEmail
     : undefined;
+
+  const vendorEmailParsed =
+    vendorEmailInput === undefined ? undefined : parseEmailList(vendorEmailInput);
+
+  const vendorEmail =
+    vendorEmailParsed === undefined ? undefined : (vendorEmailParsed[0] || null);
+
+  const vendorEmails =
+    vendorEmailParsed === undefined ? undefined : (vendorEmailParsed.length ? vendorEmailParsed.join("\n") : null);
+
   const isActive = req.body?.isActive;
 
   try {
@@ -2762,8 +2801,12 @@ app.put("/api/admin/transporters/:id", authenticate, requireAdminOrLogistics, as
     }
     if (vendorEmail !== undefined) {
       rq.input("vendorEmail", sql.NVarChar(255), vendorEmail);
+      rq.input("vendorEmails", sql.NVarChar(sql.MAX), vendorEmails);
+
       sets.push("vendorEmail=@vendorEmail");
+      sets.push("vendorEmails=@vendorEmails");
     }
+
     if (typeof isActive === "boolean") {
       rq.input("isActive", sql.Bit, isActive);
       sets.push("isActive=@isActive");
@@ -3128,24 +3171,31 @@ VALUES
     vendorsArr.forEach((c, i) => req2.input(`c${i}`, sql.NVarChar, c));
 
     const emRes = await req2.query(`
-  ;WITH V AS (${codesCte})
-  SELECT DISTINCT
-    COALESCE(
-      NULLIF(LTRIM(RTRIM(t.vendorEmail)), ''),
-      CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END
-    ) AS email
-  FROM V
-  LEFT JOIN dbo.Master_Transporters t
-    ON t.vendorCode = V.code AND ISNULL(t.isActive, 1) = 1
-  LEFT JOIN dbo.Users u
-    ON u.company = V.code AND u.role = 'vendor'
-  WHERE COALESCE(
-    NULLIF(LTRIM(RTRIM(t.vendorEmail)), ''),
-    CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END
-  ) IS NOT NULL
-`);
+      ;WITH V AS (${codesCte})
+      SELECT
+        V.code AS vendorCode,
+        NULLIF(LTRIM(RTRIM(t.vendorEmail)), '') AS vendorEmail,
+        NULLIF(CAST(t.vendorEmails AS NVARCHAR(MAX)), '') AS vendorEmails,
+        CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END AS userEmail
+      FROM V
+      LEFT JOIN dbo.Master_Transporters t
+        ON t.vendorCode = V.code AND ISNULL(t.isActive, 1) = 1
+      LEFT JOIN dbo.Users u
+        ON u.company = V.code AND u.role = 'vendor'
+    `);
 
-    const emails = (emRes.recordset || []).map((r) => r.email).filter(Boolean);
+    const emails = (() => {
+      const all = [];
+      for (const r of emRes.recordset || []) {
+        const list = parseEmailList(
+          [r.vendorEmail, r.vendorEmails, r.userEmail].filter(Boolean).join("\n")
+        );
+        all.push(...list);
+      }
+      return parseEmailList(all); // dedupe + normalize
+    })();
+
+   
 
     // notify vendors (best-effort) — NEVER fail RFQ creation if email fails
     if (emails.length) {
@@ -3594,23 +3644,31 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 
     const emailRes = await pool
       .request()
-      .input("company", sql.NVarChar, vendorName).query(`
-      SELECT TOP 1
-        COALESCE(
-          NULLIF(LTRIM(RTRIM(t.vendorEmail)), ''),
-          CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END
-        ) AS email
-      FROM dbo.Master_Transporters t
-      FULL OUTER JOIN dbo.Users u
-        ON u.company = t.vendorCode AND u.role = 'vendor'
-      WHERE (t.vendorCode = @company OR u.company = @company)
-        AND COALESCE(
-          NULLIF(LTRIM(RTRIM(t.vendorEmail)), ''),
-          CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END
-        ) IS NOT NULL
-    `);
+      .input("company", sql.NVarChar, vendorName)
+      .query(`
+        SELECT TOP 1
+          NULLIF(LTRIM(RTRIM(t.vendorEmail)), '') AS vendorEmail,
+          NULLIF(CAST(t.vendorEmails AS NVARCHAR(MAX)), '') AS vendorEmails,
+          CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END AS userEmail
+        FROM dbo.Master_Transporters t
+        FULL OUTER JOIN dbo.Users u
+          ON u.company = t.vendorCode AND u.role = 'vendor'
+        WHERE (t.vendorCode = @company OR u.company = @company)
+      `);
 
-    const vendorEmail = emailRes.recordset[0]?.email;
+    const vendorEmailList = parseEmailList(
+      [
+        emailRes.recordset?.[0]?.vendorEmail,
+        emailRes.recordset?.[0]?.vendorEmails,
+        emailRes.recordset?.[0]?.userEmail,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+
+    // for template display, show the primary
+    const vendorEmail = vendorEmailList[0] || "";
+
 
     if (rfq && totalAllocated >= Number(rfq.numberOfContainers || 0)) {
       await pool.request().input("rfqId", sql.UniqueIdentifier, rfqId).query(`
@@ -3694,9 +3752,10 @@ app.post("/api/allocations", authenticate, async (req, res) => {
         });
 
         // Choose TO: vendorEmail (fallback to SENDER_EMAIL to avoid crashing if not found)
-        const toList = vendorEmail
-          ? [{ emailAddress: { address: vendorEmail } }]
+        const toList = vendorEmailList.length
+          ? graphRecipientsFromEmails(vendorEmailList)
           : [{ emailAddress: { address: SENDER_EMAIL } }];
+
 
         await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
           message: {

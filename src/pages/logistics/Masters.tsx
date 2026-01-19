@@ -1,7 +1,6 @@
 // root/src/pages/logistics/Masters.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import api from "@/lib/api";
-
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -332,7 +331,6 @@ const Masters: React.FC = () => {
   };
 
   const cancelEdit = () => setEditing(null);
-
   const saveEdit = async () => {
     if (!editing) return;
 
