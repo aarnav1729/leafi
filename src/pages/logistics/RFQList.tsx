@@ -1,6 +1,6 @@
 // root/src/pages/logistics/RFQList.tsx
 import React, { useState, useEffect, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/common/StatusBadge";
@@ -64,6 +64,7 @@ const DEFAULT_INCOTERMS = [
 const RFQList: React.FC = () => {
   const { getUserRFQs, createRFQ } = useData();
   const navigate = useNavigate();
+  const location = useLocation();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [lookups, setLookups] = useState<LookupsResponse | null>(null);
 
@@ -466,7 +467,8 @@ const RFQList: React.FC = () => {
   };
 
   const handleFinalize = (rfqId: string) => {
-    navigate(`/logistics/finalize/${rfqId}`);
+    const isAdmin = location.pathname.startsWith("/admin");
+    navigate(`${isAdmin ? "/admin" : "/logistics"}/finalize/${rfqId}`);
   };
 
   return (

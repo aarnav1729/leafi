@@ -111,6 +111,12 @@ export function Header() {
                     >
                       Users
                     </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => navigate("/admin/reports")}
+                    >
+                      Reports
+                    </Button>
                   </>
                 )}
               </div>
