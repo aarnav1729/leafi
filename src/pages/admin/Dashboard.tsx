@@ -136,9 +136,131 @@ const AdminDashboard = () => {
   const [statusFilter, setStatusFilter] = React.useState<string>("all");
   const [containerTypeFilter, setContainerTypeFilter] =
     React.useState<string>("all");
+
+  // ✅ NEW: Country filter (defaults to "All" => no behavior change)
+  const [countryFilter, setCountryFilter] = React.useState<string>("all");
+
   const [polFilter, setPolFilter] = React.useState<string>("all");
   const [podFilter, setPodFilter] = React.useState<string>("all");
   const [vendorFilter, setVendorFilter] = React.useState<string>("all");
+
+  // ✅ Optional: port→country mapping fetched from backend (recommended route below)
+  const [polMeta, setPolMeta] = React.useState<
+    Array<{ value: string; country?: string | null }>
+  >([]);
+
+  React.useEffect(() => {
+    let ignore = false;
+
+    const readMaybeJson = async (res: Response) => {
+      try {
+        return await res.json();
+      } catch {
+        return null;
+      }
+    };
+
+    // Try to reuse any BasicAuth-style session if present (safe no-op if not used)
+    const buildAuthHeaders = () => {
+      try {
+        // common patterns
+        const raw =
+          localStorage.getItem("leafi_auth") ||
+          localStorage.getItem("auth") ||
+          localStorage.getItem("session") ||
+          "";
+        if (raw) {
+          const obj = JSON.parse(raw);
+          const user = obj?.username || obj?.user || obj?.email;
+          const token = obj?.token || obj?.sessionToken;
+          if (user && token) {
+            return {
+              Authorization:
+                "Basic " + btoa(`${String(user)}:${String(token)}`),
+            };
+          }
+        }
+      } catch {}
+
+      try {
+        const user =
+          localStorage.getItem("username") ||
+          localStorage.getItem("user") ||
+          localStorage.getItem("email") ||
+          "";
+        const token =
+          localStorage.getItem("sessionToken") ||
+          localStorage.getItem("token") ||
+          "";
+        if (user && token) {
+          return {
+            Authorization: "Basic " + btoa(`${String(user)}:${String(token)}`),
+          };
+        }
+      } catch {}
+
+      return {};
+    };
+
+    (async () => {
+      // Recommended endpoint (added in server section below)
+      const candidates = [
+        "/api/master/ports-of-loading-meta",
+        // fallback guesses (won’t break if 404)
+        "/api/master/ports-of-loading",
+        "/api/master/pol",
+      ];
+
+      for (const url of candidates) {
+        try {
+          const res = await fetch(url, {
+            method: "GET",
+            credentials: "include",
+            headers: {
+              Accept: "application/json",
+              ...buildAuthHeaders(),
+            },
+          });
+          if (!res.ok) continue;
+
+          const data = await readMaybeJson(res);
+          const arr = Array.isArray(data)
+            ? data
+            : Array.isArray((data as any)?.rows)
+            ? (data as any).rows
+            : Array.isArray((data as any)?.data)
+            ? (data as any).data
+            : [];
+
+          const norm = (arr || [])
+            .map((r: any) => {
+              if (typeof r === "string") return { value: r, country: null };
+              return {
+                value: String(
+                  r?.value ?? r?.portOfLoading ?? r?.name ?? ""
+                ).trim(),
+                country: (r?.country ??
+                  r?.polCountry ??
+                  r?.portCountry ??
+                  null) as string | null,
+              };
+            })
+            .filter((x: any) => x?.value);
+
+          if (!ignore && norm.length) {
+            setPolMeta(norm);
+          }
+          break; // first success wins
+        } catch {
+          // ignore and try next
+        }
+      }
+    })();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   const applyPreset = React.useCallback(
     (preset: typeof rangePreset) => {
@@ -204,6 +326,120 @@ const AdminDashboard = () => {
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [rfqs]);
 
+  // ✅ Country helpers
+  const prettyCountry = React.useCallback((c: string) => {
+    const t = String(c || "")
+      .trim()
+      .replace(/\s+/g, " ");
+    if (!t) return "";
+    // keep short ALL-CAPS codes like UAE/USA/UK
+    if (t.length <= 4 && t.toUpperCase() === t) return t;
+    return t
+      .toLowerCase()
+      .replace(/\b[a-z]/g, (m) => m.toUpperCase())
+      .trim();
+  }, []);
+
+  const inferCountryFromPortLabel = React.useCallback(
+    (port: string): string | null => {
+      const s = String(port || "").trim();
+      if (!s) return null;
+
+      // "City, Country"
+      if (s.includes(",")) {
+        const parts = s
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean);
+        const last = parts[parts.length - 1];
+        if (last && last.length <= 40) return prettyCountry(last);
+      }
+
+      // "Port - Country" or "Port – Country"
+      const dash = s.match(/[-–—]\s*([A-Za-z][A-Za-z .&'-]{1,40})\s*$/);
+      if (dash?.[1]) return prettyCountry(dash[1]);
+
+      // "Port (Country)"
+      const paren = s.match(/\(([^)]+)\)\s*$/);
+      if (paren?.[1]) return prettyCountry(paren[1]);
+
+      return null;
+    },
+    [prettyCountry]
+  );
+
+  // Build port→country map (backend meta first, rfq fields next, label inference last)
+  const polCountryByValue = React.useMemo(() => {
+    const m: Record<string, string> = {};
+
+    // 1) backend master meta (if available)
+    (polMeta || []).forEach((row) => {
+      const pol = String(row?.value || "").trim();
+      if (!pol) return;
+      const c = String(row?.country || "").trim();
+      m[pol] = c ? prettyCountry(c) : "Unknown";
+    });
+
+    // 2) if RFQ payload already includes a country field (safe)
+    (rfqs || []).forEach((r: AnyRecord) => {
+      const pol = String(r?.portOfLoading || "").trim();
+      if (!pol) return;
+      const c = String(
+        r?.portOfLoadingCountry ?? r?.polCountry ?? r?.country ?? ""
+      ).trim();
+      if (c) m[pol] = prettyCountry(c);
+    });
+
+    // 3) fallback inference from the label itself
+    (rfqs || []).forEach((r: AnyRecord) => {
+      const pol = String(r?.portOfLoading || "").trim();
+      if (!pol) return;
+      if (m[pol]) return;
+      const inferred = inferCountryFromPortLabel(pol);
+      m[pol] = inferred || "Unknown";
+    });
+
+    return m;
+  }, [polMeta, rfqs, inferCountryFromPortLabel, prettyCountry]);
+
+  const getCountryForPOL = React.useCallback(
+    (pol: string) => polCountryByValue[String(pol || "").trim()] || "Unknown",
+    [polCountryByValue]
+  );
+
+  const allCountries = React.useMemo(() => {
+    const s = new Set<string>();
+    (allPOL || []).forEach((pol) => {
+      s.add(getCountryForPOL(pol));
+    });
+    const arr = Array.from(s).filter(Boolean);
+    return arr.sort((a, b) => a.localeCompare(b));
+  }, [allPOL, getCountryForPOL]);
+
+  // Country → restrict POL options
+  const visiblePOL = React.useMemo(() => {
+    if (countryFilter === "all") return allPOL;
+    return (allPOL || []).filter(
+      (pol) => getCountryForPOL(pol) === countryFilter
+    );
+  }, [allPOL, countryFilter, getCountryForPOL]);
+
+  // POL → auto-select Country
+  React.useEffect(() => {
+    if (polFilter === "all") return;
+    const c = getCountryForPOL(polFilter);
+    if (c && countryFilter !== c) setCountryFilter(c);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polFilter]);
+
+  // If Country changes and current POL doesn't belong, reset POL to "all"
+  React.useEffect(() => {
+    if (countryFilter === "all") return;
+    if (polFilter === "all") return;
+    const c = getCountryForPOL(polFilter);
+    if (c !== countryFilter) setPolFilter("all");
+  }, [countryFilter, polFilter, getCountryForPOL]);
+
   const allPOD = React.useMemo(() => {
     const s = new Set<string>();
     (rfqs || []).forEach((r: AnyRecord) => {
@@ -240,12 +476,28 @@ const AdminDashboard = () => {
         return false;
       if (polFilter !== "all" && String(rfq.portOfLoading) !== polFilter)
         return false;
+      // ✅ NEW: Country filter (derived from POL → country mapping)
+      if (countryFilter !== "all") {
+        const pol = String(rfq.portOfLoading || "").trim();
+        const c = getCountryForPOL(pol);
+        if (c !== countryFilter) return false;
+      }
+
       if (podFilter !== "all" && String(rfq.portOfDestination) !== podFilter)
         return false;
 
       return true;
     },
-    [dateRange, fmt, statusFilter, containerTypeFilter, polFilter, podFilter]
+    [
+      dateRange,
+      fmt,
+      statusFilter,
+      containerTypeFilter,
+      countryFilter,
+      polFilter,
+      podFilter,
+      getCountryForPOL,
+    ]
   );
 
   const filteredRFQs = React.useMemo(() => {
@@ -800,6 +1052,7 @@ const AdminDashboard = () => {
     applyPreset("30d");
     setStatusFilter("all");
     setContainerTypeFilter("all");
+    setCountryFilter("all");
     setPolFilter("all");
     setPodFilter("all");
     setVendorFilter("all");
@@ -965,6 +1218,23 @@ const AdminDashboard = () => {
           </div>
 
           <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">Country</div>
+            <Select value={countryFilter} onValueChange={setCountryFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="All countries" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                {allCountries.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1">
             <div className="text-xs text-muted-foreground">Port of Loading</div>
             <Select value={polFilter} onValueChange={setPolFilter}>
               <SelectTrigger>
@@ -972,7 +1242,7 @@ const AdminDashboard = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
-                {allPOL.map((p) => (
+                {visiblePOL.map((p) => (
                   <SelectItem key={p} value={p}>
                     {p}
                   </SelectItem>

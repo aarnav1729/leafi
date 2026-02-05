@@ -93,9 +93,7 @@ async function findUserForLogin(pool, usernameOrEmail) {
 
   // (a) match by vendorEmail
   // (a) match by vendorEmail OR vendorEmails (multi list)
-  const byEmail = await pool
-    .request()
-    .input("email", sql.NVarChar(255), email)
+  const byEmail = await pool.request().input("email", sql.NVarChar(255), email)
     .query(`
       SELECT TOP 1
         CAST(id AS NVARCHAR(36)) AS id,
@@ -111,21 +109,24 @@ async function findUserForLogin(pool, usernameOrEmail) {
         )
     `);
 
+  const t1 = byEmail.recordset?.[0];
+  if (t1?.vendorCode) {
+    // prefer exact email used to login (email), else fallback to vendorEmail, else vendorCode
+    const loginIdentity =
+      (email && email.includes("@") ? email : "") ||
+      String(t1.vendorEmail || "")
+        .trim()
+        .toLowerCase() ||
+      String(t1.vendorCode).trim().toLowerCase();
 
-    const t1 = byEmail.recordset?.[0];
-    if (t1?.vendorCode) {
-      // prefer exact email used to login (email), else fallback to vendorEmail, else vendorCode
-      const loginIdentity = (email && email.includes("@") ? email : "") || String(t1.vendorEmail || "").trim().toLowerCase() || String(t1.vendorCode).trim().toLowerCase();
-  
-      return {
-        id: t1.id || t1.vendorCode,
-        username: loginIdentity,
-        role: "vendor",
-        name: t1.vendorName || t1.vendorCode,
-        company: t1.vendorCode, // vendor key everywhere
-      };
-    }
-  
+    return {
+      id: t1.id || t1.vendorCode,
+      username: loginIdentity,
+      role: "vendor",
+      name: t1.vendorName || t1.vendorCode,
+      company: t1.vendorCode, // vendor key everywhere
+    };
+  }
 
   // (b) match by vendorCode (if vendor types vendorCode instead of email)
   const byCode = await pool
@@ -174,9 +175,7 @@ async function resolveOtpEmailForUser(pool, user) {
     if (!code) return "";
 
     try {
-      const em = await pool
-        .request()
-        .input("code", sql.NVarChar(150), code)
+      const em = await pool.request().input("code", sql.NVarChar(150), code)
         .query(`
           SELECT TOP 1
             NULLIF(LTRIM(RTRIM(vendorEmail)), '') AS vendorEmail,
@@ -196,7 +195,6 @@ async function resolveOtpEmailForUser(pool, user) {
       console.error("[OTP] Vendor email lookup failed:", e?.message || e);
       return "";
     }
-
   }
 
   // Admin/logistics: infer @premierenergies.com from username
@@ -1119,9 +1117,10 @@ async function getVendorNotificationEmails(pool, vendorCode) {
   `);
 
   const row = r.recordset?.[0] || {};
-  return parseEmailList([row.vendorEmail, row.vendorEmails].filter(Boolean).join("\n"));
+  return parseEmailList(
+    [row.vendorEmail, row.vendorEmails].filter(Boolean).join("\n")
+  );
 }
-
 
 function safeJsonParse(str, fallback) {
   try {
@@ -2455,33 +2454,40 @@ app.post("/api/logout", (req, res) => {
 // ========================= ADMIN: MASTERS + TRANSPORTERS =========================
 // CMD+F: ADMIN: MASTERS + TRANSPORTERS
 
-app.get("/api/admin/masters", authenticate, requireAdminOrLogistics, async (req, res) => {
-  try {
-    // used by UI only for labels; keep minimal
-    return res.json(
-      Object.keys(MASTER).map((k) => ({ key: k, label: k }))
-    );
-  } catch (e) {
-    return res.status(500).json({ message: "Failed to load masters" });
+app.get(
+  "/api/admin/masters",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    try {
+      // used by UI only for labels; keep minimal
+      return res.json(Object.keys(MASTER).map((k) => ({ key: k, label: k })));
+    } catch (e) {
+      return res.status(500).json({ message: "Failed to load masters" });
+    }
   }
-});
+);
 
-app.get("/api/admin/masters/:key", authenticate, requireAdminOrLogistics, async (req, res) => {
-  const key = req.params.key;
-  const def = getMasterDef(key);
-  if (!def) return res.status(400).json({ message: "Invalid master key" });
+app.get(
+  "/api/admin/masters/:key",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const key = req.params.key;
+    const def = getMasterDef(key);
+    if (!def) return res.status(400).json({ message: "Invalid master key" });
 
-  try {
-    const pool = await getPool();
+    try {
+      const pool = await getPool();
 
-    const extraSelect =
-      key === "companyNames"
-        ? ", CAST(shortName AS NVARCHAR(100)) AS shortName"
-        : key === "portsOfLoading"
-        ? ", CAST(country AS NVARCHAR(100)) AS country"
-        : "";
+      const extraSelect =
+        key === "companyNames"
+          ? ", CAST(shortName AS NVARCHAR(100)) AS shortName"
+          : key === "portsOfLoading"
+          ? ", CAST(country AS NVARCHAR(100)) AS country"
+          : "";
 
-    const r = await pool.request().query(`
+      const r = await pool.request().query(`
       SELECT
         CAST(id AS NVARCHAR(50)) AS id,
         CAST([value] AS NVARCHAR(MAX)) AS [value]
@@ -2493,176 +2499,210 @@ app.get("/api/admin/masters/:key", authenticate, requireAdminOrLogistics, async 
       ORDER BY createdAt DESC
     `);
 
-    return res.json(r.recordset || []);
-  } catch (e) {
-    console.error("[ADMIN] GET masters failed:", e?.message || e);
-    return res.status(500).json({ message: "Failed to load master rows" });
+      return res.json(r.recordset || []);
+    } catch (e) {
+      console.error("[ADMIN] GET masters failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to load master rows" });
+    }
   }
-});
+);
 
-app.post("/api/admin/masters/:key", authenticate, requireAdminOrLogistics, async (req, res) => {
-  const key = req.params.key;
-  const def = getMasterDef(key);
-  if (!def) return res.status(400).json({ message: "Invalid master key" });
+app.post(
+  "/api/admin/masters/:key",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const key = req.params.key;
+    const def = getMasterDef(key);
+    if (!def) return res.status(400).json({ message: "Invalid master key" });
 
-  const value = normalizeMasterValue(key, req.body?.value);
-  const isActive = req.body?.isActive === false ? 0 : 1;
+    const value = normalizeMasterValue(key, req.body?.value);
+    const isActive = req.body?.isActive === false ? 0 : 1;
 
-  const shortNameRaw = req.body?.shortName;
-  const countryRaw = req.body?.country;
+    const shortNameRaw = req.body?.shortName;
+    const countryRaw = req.body?.country;
 
-  const shortName =
-    key === "companyNames"
-      ? (shortNameRaw == null ? null : String(shortNameRaw).trim() || null)
-      : null;
+    const shortName =
+      key === "companyNames"
+        ? shortNameRaw == null
+          ? null
+          : String(shortNameRaw).trim() || null
+        : null;
 
-  const country =
-    key === "portsOfLoading"
-      ? (countryRaw == null ? null : String(countryRaw).trim() || null)
-      : null;
+    const country =
+      key === "portsOfLoading"
+        ? countryRaw == null
+          ? null
+          : String(countryRaw).trim() || null
+        : null;
 
-  if (!value) return res.status(400).json({ message: "value required" });
+    if (!value) return res.status(400).json({ message: "value required" });
 
-  try {
-    const pool = await getPool();
+    try {
+      const pool = await getPool();
 
-    // prevent duplicates (case-insensitive)
-    const exists = await pool
-      .request()
-      .input("v", sql.NVarChar(sql.MAX), value)
-      .query(`SELECT TOP 1 1 AS ok FROM ${def.table} WHERE LOWER(LTRIM(RTRIM([value]))) = LOWER(LTRIM(RTRIM(@v)))`);
-    if (exists.recordset?.length) {
-      return res.status(409).json({ message: "Value already exists" });
-    }
+      // prevent duplicates (case-insensitive)
+      const exists = await pool
+        .request()
+        .input("v", sql.NVarChar(sql.MAX), value)
+        .query(
+          `SELECT TOP 1 1 AS ok FROM ${def.table} WHERE LOWER(LTRIM(RTRIM([value]))) = LOWER(LTRIM(RTRIM(@v)))`
+        );
+      if (exists.recordset?.length) {
+        return res.status(409).json({ message: "Value already exists" });
+      }
 
-    const rq = pool.request();
-    if (def.max === sql.MAX) rq.input("v", sql.NVarChar(sql.MAX), value);
-    else rq.input("v", sql.NVarChar(def.max), value);
+      const rq = pool.request();
+      if (def.max === sql.MAX) rq.input("v", sql.NVarChar(sql.MAX), value);
+      else rq.input("v", sql.NVarChar(def.max), value);
 
-    rq.input("isActive", sql.Bit, isActive);
+      rq.input("isActive", sql.Bit, isActive);
 
-    if (key === "companyNames") rq.input("shortName", sql.NVarChar(100), shortName);
-    if (key === "portsOfLoading") rq.input("country", sql.NVarChar(100), country);
+      if (key === "companyNames")
+        rq.input("shortName", sql.NVarChar(100), shortName);
+      if (key === "portsOfLoading")
+        rq.input("country", sql.NVarChar(100), country);
 
-    const cols = ["value", "isActive", "createdAt"];
-    const vals = ["@v", "@isActive", "SYSUTCDATETIME()"];
+      const cols = ["value", "isActive", "createdAt"];
+      const vals = ["@v", "@isActive", "SYSUTCDATETIME()"];
 
-    if (key === "companyNames") {
-      cols.push("shortName");
-      vals.push("@shortName");
-    }
-    if (key === "portsOfLoading") {
-      cols.push("country");
-      vals.push("@country");
-    }
+      if (key === "companyNames") {
+        cols.push("shortName");
+        vals.push("@shortName");
+      }
+      if (key === "portsOfLoading") {
+        cols.push("country");
+        vals.push("@country");
+      }
 
-    await rq.query(`
+      await rq.query(`
       INSERT INTO ${def.table} (${cols.join(", ")})
       VALUES (${vals.join(", ")})
     `);
 
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("[ADMIN] POST masters failed:", e?.message || e);
-    return res.status(500).json({ message: "Failed to create master row" });
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("[ADMIN] POST masters failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to create master row" });
+    }
   }
-});
+);
 
-app.put("/api/admin/masters/:key/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
-  const key = req.params.key;
-  const def = getMasterDef(key);
-  if (!def) return res.status(400).json({ message: "Invalid master key" });
+app.put(
+  "/api/admin/masters/:key/:id",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const key = req.params.key;
+    const def = getMasterDef(key);
+    if (!def) return res.status(400).json({ message: "Invalid master key" });
 
-  const id = String(req.params.id || "").trim();
-  if (!id) return res.status(400).json({ message: "id required" });
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ message: "id required" });
 
-  const value = req.body?.value != null ? normalizeMasterValue(key, req.body.value) : null;
-  const isActive = req.body?.isActive;
+    const value =
+      req.body?.value != null
+        ? normalizeMasterValue(key, req.body.value)
+        : null;
+    const isActive = req.body?.isActive;
 
-  const shortName =
-    key === "companyNames" && "shortName" in (req.body || {})
-      ? (req.body.shortName == null ? null : String(req.body.shortName).trim() || null)
-      : undefined;
+    const shortName =
+      key === "companyNames" && "shortName" in (req.body || {})
+        ? req.body.shortName == null
+          ? null
+          : String(req.body.shortName).trim() || null
+        : undefined;
 
-  const country =
-    key === "portsOfLoading" && "country" in (req.body || {})
-      ? (req.body.country == null ? null : String(req.body.country).trim() || null)
-      : undefined;
+    const country =
+      key === "portsOfLoading" && "country" in (req.body || {})
+        ? req.body.country == null
+          ? null
+          : String(req.body.country).trim() || null
+        : undefined;
 
-  try {
-    const pool = await getPool();
+    try {
+      const pool = await getPool();
 
-    const rq = pool.request();
-    rq.input("id", sql.UniqueIdentifier, id);
+      const rq = pool.request();
+      rq.input("id", sql.UniqueIdentifier, id);
 
-    const sets = [];
-    if (value != null) {
-      if (!value) return res.status(400).json({ message: "value cannot be empty" });
+      const sets = [];
+      if (value != null) {
+        if (!value)
+          return res.status(400).json({ message: "value cannot be empty" });
 
-      if (def.max === sql.MAX) rq.input("v", sql.NVarChar(sql.MAX), value);
-      else rq.input("v", sql.NVarChar(def.max), value);
+        if (def.max === sql.MAX) rq.input("v", sql.NVarChar(sql.MAX), value);
+        else rq.input("v", sql.NVarChar(def.max), value);
 
-      sets.push("[value] = @v");
-    }
+        sets.push("[value] = @v");
+      }
 
-    if (typeof isActive === "boolean") {
-      rq.input("isActive", sql.Bit, isActive);
-      sets.push("isActive = @isActive");
-    }
+      if (typeof isActive === "boolean") {
+        rq.input("isActive", sql.Bit, isActive);
+        sets.push("isActive = @isActive");
+      }
 
-    if (shortName !== undefined) {
-      rq.input("shortName", sql.NVarChar(100), shortName);
-      sets.push("shortName = @shortName");
-    }
+      if (shortName !== undefined) {
+        rq.input("shortName", sql.NVarChar(100), shortName);
+        sets.push("shortName = @shortName");
+      }
 
-    if (country !== undefined) {
-      rq.input("country", sql.NVarChar(100), country);
-      sets.push("country = @country");
-    }
+      if (country !== undefined) {
+        rq.input("country", sql.NVarChar(100), country);
+        sets.push("country = @country");
+      }
 
-    sets.push("updatedAt = SYSUTCDATETIME()");
+      sets.push("updatedAt = SYSUTCDATETIME()");
 
-    await rq.query(`
+      await rq.query(`
       UPDATE ${def.table}
       SET ${sets.join(", ")}
       WHERE id = @id
     `);
 
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("[ADMIN] PUT masters failed:", e?.message || e);
-    return res.status(500).json({ message: "Failed to update master row" });
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("[ADMIN] PUT masters failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to update master row" });
+    }
   }
-});
+);
 
-app.delete("/api/admin/masters/:key/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
-  const key = req.params.key;
-  const def = getMasterDef(key);
-  if (!def) return res.status(400).json({ message: "Invalid master key" });
+app.delete(
+  "/api/admin/masters/:key/:id",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const key = req.params.key;
+    const def = getMasterDef(key);
+    if (!def) return res.status(400).json({ message: "Invalid master key" });
 
-  try {
-    const pool = await getPool();
-    await pool
-      .request()
-      .input("id", sql.UniqueIdentifier, req.params.id)
-      .query(`
+    try {
+      const pool = await getPool();
+      await pool.request().input("id", sql.UniqueIdentifier, req.params.id)
+        .query(`
         UPDATE ${def.table}
         SET isActive = 0, updatedAt = SYSUTCDATETIME()
         WHERE id = @id
       `);
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("[ADMIN] DELETE masters failed:", e?.message || e);
-    return res.status(500).json({ message: "Failed to disable master row" });
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("[ADMIN] DELETE masters failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to disable master row" });
+    }
   }
-});
+);
 
 // ------------------------- Transporters -------------------------
 
-app.get("/api/admin/transporters", authenticate, requireAdminOrLogistics, async (req, res) => {
-  try {
-    const pool = await getPool();
-    const r = await pool.request().query(`
+app.get(
+  "/api/admin/transporters",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    try {
+      const pool = await getPool();
+      const r = await pool.request().query(`
       SELECT
         CAST(id AS NVARCHAR(50)) AS id,
         CAST(vendorCode AS NVARCHAR(150)) AS vendorCode,
@@ -2678,177 +2718,285 @@ app.get("/api/admin/transporters", authenticate, requireAdminOrLogistics, async 
       FROM dbo.Master_Transporters
       ORDER BY createdAt DESC
     `);
-    
-    return res.json(r.recordset || []);
-  } catch (e) {
-    console.error("[ADMIN] GET transporters failed:", e?.message || e);
-    return res.status(500).json({ message: "Failed to load transporters" });
+
+      return res.json(r.recordset || []);
+    } catch (e) {
+      console.error("[ADMIN] GET transporters failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to load transporters" });
+    }
   }
-});
+);
 
-app.post("/api/admin/transporters", authenticate, requireAdminOrLogistics, async (req, res) => {
-  const vendorCode = String(req.body?.vendorCode || "").trim();
-  const vendorName = String(req.body?.vendorName || "").trim();
-  const shortNameRaw = req.body?.shortName;
-  const vendorEmailRaw = req.body?.vendorEmail;
+app.post(
+  "/api/admin/transporters",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const vendorCode = String(req.body?.vendorCode || "").trim();
+    const vendorName = String(req.body?.vendorName || "").trim();
+    const shortNameRaw = req.body?.shortName;
+    const vendorEmailRaw = req.body?.vendorEmail;
 
-  // Parse multi emails from the same field
+    // Parse multi emails from the same field
     // ✅ Parse multi emails from the same field (UI provides one textbox)
     const emailList = parseEmailList(vendorEmailRaw);
     const vendorEmailPrimary = emailList[0] || null; // primary
     const vendorEmails = emailList.length ? emailList.join("\n") : null; // list
-  
-    const shortName = shortNameRaw == null ? null : String(shortNameRaw).trim() || null;
-  
+
+    const shortName =
+      shortNameRaw == null ? null : String(shortNameRaw).trim() || null;
+
     // store primary in vendorEmail, full list in vendorEmails
     const vendorEmail = vendorEmailPrimary;
-  
 
-  const isActive = req.body?.isActive === false ? 0 : 1;
+    const isActive = req.body?.isActive === false ? 0 : 1;
 
-  if (!vendorCode || !vendorName) {
-    return res.status(400).json({ message: "vendorCode and vendorName required" });
-  }
-
-  try {
-    const pool = await getPool();
-
-    const exists = await pool
-      .request()
-      .input("vendorCode", sql.NVarChar(150), vendorCode)
-      .query(`SELECT TOP 1 1 AS ok FROM dbo.Master_Transporters WHERE vendorCode=@vendorCode`);
-    if (exists.recordset?.length) {
-      return res.status(409).json({ message: "vendorCode already exists" });
+    if (!vendorCode || !vendorName) {
+      return res
+        .status(400)
+        .json({ message: "vendorCode and vendorName required" });
     }
 
-    await pool
-      .request()
-      .input("vendorCode", sql.NVarChar(150), vendorCode)
-      .input("vendorName", sql.NVarChar(255), vendorName)
-      .input("shortName", sql.NVarChar(100), shortName)
-      .input("vendorEmail", sql.NVarChar(255), vendorEmail)
-      .input("vendorEmails", sql.NVarChar(sql.MAX), vendorEmails)
-      .input("isActive", sql.Bit, isActive)
-      .query(`
+    try {
+      const pool = await getPool();
+
+      const exists = await pool
+        .request()
+        .input("vendorCode", sql.NVarChar(150), vendorCode)
+        .query(
+          `SELECT TOP 1 1 AS ok FROM dbo.Master_Transporters WHERE vendorCode=@vendorCode`
+        );
+      if (exists.recordset?.length) {
+        return res.status(409).json({ message: "vendorCode already exists" });
+      }
+
+      await pool
+        .request()
+        .input("vendorCode", sql.NVarChar(150), vendorCode)
+        .input("vendorName", sql.NVarChar(255), vendorName)
+        .input("shortName", sql.NVarChar(100), shortName)
+        .input("vendorEmail", sql.NVarChar(255), vendorEmail)
+        .input("vendorEmails", sql.NVarChar(sql.MAX), vendorEmails)
+        .input("isActive", sql.Bit, isActive).query(`
         INSERT INTO dbo.Master_Transporters
           (vendorCode, vendorName, shortName, vendorEmail, vendorEmails, isActive, createdAt)
         VALUES
           (@vendorCode, @vendorName, @shortName, @vendorEmail, @vendorEmails, @isActive, SYSUTCDATETIME())
       `);
 
+      // keep vendor user in sync (insert-only)
+      await ensureVendorUserFromTransporter(pool, {
+        vendorCode,
+        vendorName,
+        vendorEmail: vendorEmailPrimary,
+        isActive,
+      });
 
-    // keep vendor user in sync (insert-only)
-    await ensureVendorUserFromTransporter(pool, {
-      vendorCode,
-      vendorName,
-      vendorEmail: vendorEmailPrimary,
-      isActive
-    });
-    
-
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("[ADMIN] POST transporters failed:", e?.message || e);
-    return res.status(500).json({ message: "Failed to create transporter" });
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("[ADMIN] POST transporters failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to create transporter" });
+    }
   }
-});
+);
 
-app.put("/api/admin/transporters/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
-  const id = String(req.params.id || "").trim();
-  if (!id) return res.status(400).json({ message: "id required" });
+app.put(
+  "/api/admin/transporters/:id",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ message: "id required" });
 
-  const vendorCode = req.body?.vendorCode != null ? String(req.body.vendorCode).trim() : null;
-  const vendorName = req.body?.vendorName != null ? String(req.body.vendorName).trim() : null;
-  const shortName = "shortName" in (req.body || {})
-    ? (req.body.shortName == null ? null : String(req.body.shortName).trim() || null)
-    : undefined;
-  // vendorEmail textbox can contain multiple emails
-  const vendorEmailInput = "vendorEmail" in (req.body || {})
-    ? req.body.vendorEmail
-    : undefined;
+    const vendorCode =
+      req.body?.vendorCode != null ? String(req.body.vendorCode).trim() : null;
+    const vendorName =
+      req.body?.vendorName != null ? String(req.body.vendorName).trim() : null;
+    const shortName =
+      "shortName" in (req.body || {})
+        ? req.body.shortName == null
+          ? null
+          : String(req.body.shortName).trim() || null
+        : undefined;
+    // vendorEmail textbox can contain multiple emails
+    const vendorEmailInput =
+      "vendorEmail" in (req.body || {}) ? req.body.vendorEmail : undefined;
 
-  const vendorEmailParsed =
-    vendorEmailInput === undefined ? undefined : parseEmailList(vendorEmailInput);
+    const vendorEmailParsed =
+      vendorEmailInput === undefined
+        ? undefined
+        : parseEmailList(vendorEmailInput);
 
-  const vendorEmail =
-    vendorEmailParsed === undefined ? undefined : (vendorEmailParsed[0] || null);
+    const vendorEmail =
+      vendorEmailParsed === undefined
+        ? undefined
+        : vendorEmailParsed[0] || null;
 
-  const vendorEmails =
-    vendorEmailParsed === undefined ? undefined : (vendorEmailParsed.length ? vendorEmailParsed.join("\n") : null);
+    const vendorEmails =
+      vendorEmailParsed === undefined
+        ? undefined
+        : vendorEmailParsed.length
+        ? vendorEmailParsed.join("\n")
+        : null;
 
-  const isActive = req.body?.isActive;
+    const isActive = req.body?.isActive;
 
-  try {
-    const pool = await getPool();
+    try {
+      const pool = await getPool();
 
-    const rq = pool.request();
-    rq.input("id", sql.UniqueIdentifier, id);
+      const rq = pool.request();
+      rq.input("id", sql.UniqueIdentifier, id);
 
-    const sets = [];
-    if (vendorCode != null) {
-      if (!vendorCode) return res.status(400).json({ message: "vendorCode cannot be empty" });
-      rq.input("vendorCode", sql.NVarChar(150), vendorCode);
-      sets.push("vendorCode=@vendorCode");
-    }
-    if (vendorName != null) {
-      if (!vendorName) return res.status(400).json({ message: "vendorName cannot be empty" });
-      rq.input("vendorName", sql.NVarChar(255), vendorName);
-      sets.push("vendorName=@vendorName");
-    }
-    if (shortName !== undefined) {
-      rq.input("shortName", sql.NVarChar(100), shortName);
-      sets.push("shortName=@shortName");
-    }
-    if (vendorEmail !== undefined) {
-      rq.input("vendorEmail", sql.NVarChar(255), vendorEmail);
-      rq.input("vendorEmails", sql.NVarChar(sql.MAX), vendorEmails);
+      const sets = [];
+      if (vendorCode != null) {
+        if (!vendorCode)
+          return res
+            .status(400)
+            .json({ message: "vendorCode cannot be empty" });
+        rq.input("vendorCode", sql.NVarChar(150), vendorCode);
+        sets.push("vendorCode=@vendorCode");
+      }
+      if (vendorName != null) {
+        if (!vendorName)
+          return res
+            .status(400)
+            .json({ message: "vendorName cannot be empty" });
+        rq.input("vendorName", sql.NVarChar(255), vendorName);
+        sets.push("vendorName=@vendorName");
+      }
+      if (shortName !== undefined) {
+        rq.input("shortName", sql.NVarChar(100), shortName);
+        sets.push("shortName=@shortName");
+      }
+      if (vendorEmail !== undefined) {
+        rq.input("vendorEmail", sql.NVarChar(255), vendorEmail);
+        rq.input("vendorEmails", sql.NVarChar(sql.MAX), vendorEmails);
 
-      sets.push("vendorEmail=@vendorEmail");
-      sets.push("vendorEmails=@vendorEmails");
-    }
+        sets.push("vendorEmail=@vendorEmail");
+        sets.push("vendorEmails=@vendorEmails");
+      }
 
-    if (typeof isActive === "boolean") {
-      rq.input("isActive", sql.Bit, isActive);
-      sets.push("isActive=@isActive");
-    }
+      if (typeof isActive === "boolean") {
+        rq.input("isActive", sql.Bit, isActive);
+        sets.push("isActive=@isActive");
+      }
 
-    sets.push("updatedAt=SYSUTCDATETIME()");
+      sets.push("updatedAt=SYSUTCDATETIME()");
 
-    await rq.query(`
+      await rq.query(`
       UPDATE dbo.Master_Transporters
       SET ${sets.join(", ")}
       WHERE id=@id
     `);
 
-    // best-effort: keep vendor user insert-only
-    const after = await pool.request().input("id", sql.UniqueIdentifier, id).query(`
+      // best-effort: keep vendor user insert-only
+      const after = await pool.request().input("id", sql.UniqueIdentifier, id)
+        .query(`
       SELECT TOP 1 vendorCode, vendorName, vendorEmail, isActive
       FROM dbo.Master_Transporters WHERE id=@id
     `);
-    await ensureVendorUserFromTransporter(pool, after.recordset?.[0]);
+      await ensureVendorUserFromTransporter(pool, after.recordset?.[0]);
 
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("[ADMIN] PUT transporters failed:", e?.message || e);
-    return res.status(500).json({ message: "Failed to update transporter" });
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("[ADMIN] PUT transporters failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to update transporter" });
+    }
   }
-});
+);
 
-app.delete("/api/admin/transporters/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
-  try {
-    const pool = await getPool();
-    await pool
-      .request()
-      .input("id", sql.UniqueIdentifier, req.params.id)
-      .query(`
+app.delete(
+  "/api/admin/transporters/:id",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    try {
+      const pool = await getPool();
+      await pool.request().input("id", sql.UniqueIdentifier, req.params.id)
+        .query(`
         UPDATE dbo.Master_Transporters
         SET isActive=0, updatedAt=SYSUTCDATETIME()
         WHERE id=@id
       `);
-    return res.json({ ok: true });
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("[ADMIN] DELETE transporters failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to disable transporter" });
+    }
+  }
+);
+
+// ========================= ADMIN: REPORTS =========================
+// CMD+F: ADMIN: REPORTS
+
+app.get(
+  "/api/admin/reports/ocean-freight-top3",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    try {
+      const pool = await getPool();
+
+      // Top 3 LOWEST seaFreightPerContainer (USD) per (Port of Loading, Container Type)
+      const q = await pool.request().query(`
+        ;WITH X AS (
+          SELECT
+            r.portOfLoading AS portOfLoading,
+            COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+            CAST(r.numberOfContainers AS INT) AS containersQty,
+            CAST(q.seaFreightPerContainer AS FLOAT) AS oceanFreightUsd,
+            q.createdAt AS quoteDate,
+            ROW_NUMBER() OVER (
+              PARTITION BY
+                r.portOfLoading,
+                COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType)
+              ORDER BY
+                q.seaFreightPerContainer ASC,
+                q.createdAt DESC
+            ) AS rn
+          FROM dbo.Quotes q
+          INNER JOIN dbo.RFQs r ON r.id = q.rfqId
+          WHERE
+            r.portOfLoading IS NOT NULL
+            AND COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) IS NOT NULL
+            AND q.seaFreightPerContainer IS NOT NULL
+            AND q.seaFreightPerContainer > 0
+        )
+        SELECT
+          portOfLoading,
+          containerType,
+          containersQty,
+          oceanFreightUsd,
+          quoteDate
+        FROM X
+        WHERE rn <= 3
+        ORDER BY portOfLoading ASC, containerType ASC, oceanFreightUsd ASC, quoteDate DESC;
+      `);
+
+      return res.json(q.recordset || []);
+    } catch (e) {
+      console.error("[ADMIN] ocean-freight-top3 failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to load report" });
+    }
+  }
+);
+
+// ✅ Master: Ports of Loading (value + country) for Dashboard Country filter
+app.get("/api/master/ports-of-loading-meta", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const r = await pool.request().query(`
+      SELECT
+        value,
+        NULLIF(LTRIM(RTRIM(country)), '') AS country
+      FROM dbo.Master_PortsOfLoading
+      WHERE ISNULL(isActive, 1) = 1
+      ORDER BY value
+    `);
+    res.json(r.recordset || []);
   } catch (e) {
-    console.error("[ADMIN] DELETE transporters failed:", e?.message || e);
-    return res.status(500).json({ message: "Failed to disable transporter" });
+    console.error("[master] ports-of-loading-meta failed:", e?.message || e);
+    res.status(500).json({ error: "ports_of_loading_meta_failed" });
   }
 });
 
@@ -3188,14 +3336,14 @@ VALUES
       const all = [];
       for (const r of emRes.recordset || []) {
         const list = parseEmailList(
-          [r.vendorEmail, r.vendorEmails, r.userEmail].filter(Boolean).join("\n")
+          [r.vendorEmail, r.vendorEmails, r.userEmail]
+            .filter(Boolean)
+            .join("\n")
         );
         all.push(...list);
       }
       return parseEmailList(all); // dedupe + normalize
     })();
-
-   
 
     // notify vendors (best-effort) — NEVER fail RFQ creation if email fails
     if (emails.length) {
@@ -3644,8 +3792,7 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 
     const emailRes = await pool
       .request()
-      .input("company", sql.NVarChar, vendorName)
-      .query(`
+      .input("company", sql.NVarChar, vendorName).query(`
         SELECT TOP 1
           NULLIF(LTRIM(RTRIM(t.vendorEmail)), '') AS vendorEmail,
           NULLIF(CAST(t.vendorEmails AS NVARCHAR(MAX)), '') AS vendorEmails,
@@ -3668,7 +3815,6 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 
     // for template display, show the primary
     const vendorEmail = vendorEmailList[0] || "";
-
 
     if (rfq && totalAllocated >= Number(rfq.numberOfContainers || 0)) {
       await pool.request().input("rfqId", sql.UniqueIdentifier, rfqId).query(`
@@ -3741,6 +3887,8 @@ app.post("/api/allocations", authenticate, async (req, res) => {
         const allocatedMoowr = Number(containersAllottedMOOWR || 0);
 
         // Build professional dynamic email (scheme-aware)
+        const materialPONumberSafe = String(rfq?.materialPONumber || "").trim();
+
         const html = allocationEmailTemplate({
           rfq,
           quote,
@@ -3753,28 +3901,27 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 
         // Choose TO: vendorEmail (fallback to SENDER_EMAIL to avoid crashing if not found)
         const toList = vendorEmailList.length
-          ? graphRecipientsFromEmails(vendorEmailList)
-          : [{ emailAddress: { address: SENDER_EMAIL } }];
+        ? graphRecipientsFromEmails(vendorEmailList)
+        : [{ emailAddress: { address: SENDER_EMAIL } }];
+      
+      await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+        message: {
+          subject: `Allocation | RFQ ${rfq.rfqNumber} | ${vendorName} | ${materialPONumberSafe || "—"}`,
 
-
-        await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
-          message: {
-            subject: `Allocation | RFQ ${rfq.rfqNumber} | ${vendorName}`,
-            body: {
-              contentType: "HTML",
-              content: html,
-            },
-            toRecipients: toList,
-
-            // ✅ CC requirement
-            ccRecipients: graphRecipientsFromEmails([
-              "ramanjulu@premierenergies.com",
-              ...ALLOCATION_CC_ALWAYS,
-              ...(String(reason || "").trim() ? ALLOCATION_CC_WITH_REASON : []),
-            ]),
+          body: {
+            contentType: "HTML",
+            content: html,
           },
-          saveToSentItems: true,
-        });
+          toRecipients: toList,
+          ccRecipients: graphRecipientsFromEmails([
+            "ramanjulu@premierenergies.com",
+            ...ALLOCATION_CC_ALWAYS,
+            ...(String(reason || "").trim() ? ALLOCATION_CC_WITH_REASON : []),
+          ]),
+        },
+        saveToSentItems: true,
+      });
+      
       } catch (e) {
         console.error(
           "[GRAPH] Finalization email failed (ignored):",
