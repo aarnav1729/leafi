@@ -1,6 +1,7 @@
 // root/src/components/layout/Header.tsx
 import { useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
 import { useLocation, useNavigate } from "react-router-dom";
 
@@ -13,6 +14,7 @@ function getHomeForRole(role?: string) {
 
 export function Header() {
   const { user, logout } = useAuth();
+  const { refreshAll, lastRefreshedAt, isRefreshing } = useData();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -34,9 +36,19 @@ export function Header() {
     navigate("/app");
   };
 
+  const lastRefreshLabel = lastRefreshedAt
+    ? new Date(lastRefreshedAt).toLocaleString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "Not yet refreshed";
+
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-card/95 backdrop-blur">
-      <div className="container flex h-16 items-center justify-between">
+      <div className="flex h-16 w-full items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-2">
           <button
             onClick={handleBrandClick}
@@ -50,6 +62,21 @@ export function Header() {
         <div className="flex items-center gap-4">
           {user && (
             <>
+              <div className="hidden md:flex flex-col items-end text-xs text-muted-foreground leading-tight">
+                <span>Last refresh</span>
+                <span className="font-medium text-foreground">
+                  {lastRefreshLabel}
+                </span>
+              </div>
+
+              <Button
+                variant="outline"
+                onClick={() => void refreshAll()}
+                disabled={isRefreshing}
+              >
+                {isRefreshing ? "Refreshing..." : "Refresh"}
+              </Button>
+
               <div className="hidden md:flex items-center gap-2">
                 {user.role === "logistics" && (
                   <>

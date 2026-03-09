@@ -1,5 +1,6 @@
 // root/src/pages/admin/Users.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import { useData } from "@/contexts/DataContext";
 
 import { toast } from "sonner";
 
@@ -115,6 +116,7 @@ type EditState =
 const PAGE_SIZE = 12;
 
 export default function Users() {
+  const { refreshKey } = useData();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<UserRow[]>([]);
   const [query, setQuery] = useState("");
@@ -148,7 +150,7 @@ export default function Users() {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshKey]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

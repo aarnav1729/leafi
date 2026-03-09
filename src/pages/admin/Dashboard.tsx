@@ -53,7 +53,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 type AnyRecord = Record<string, any>;
 
 const AdminDashboard = () => {
-  const { rfqs, quotes, allocations } = useData();
+  const { rfqs, quotes, allocations, refreshKey } = useData();
 
   const fmt = React.useMemo(
     () => ({
@@ -125,7 +125,7 @@ const AdminDashboard = () => {
     const d = new Date();
     d.setDate(d.getDate() - 30);
     return d;
-  }, []);
+  }, [refreshKey]);
 
   const [rangePreset, setRangePreset] = React.useState<
     "7d" | "30d" | "90d" | "ytd" | "all" | "custom"
@@ -1700,23 +1700,23 @@ const AdminDashboard = () => {
               </CardTitle>
             </CardHeader>
             <CardContent className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-xs sm:text-sm">
                 <thead>
                   <tr className="border-b text-left">
-                    <th className="py-2 pr-4">Vendor</th>
-                    <th className="py-2 pr-4">Allocated Containers</th>
-                    <th className="py-2 pr-4">Spend</th>
-                    <th className="py-2 pr-4">Avg / Container</th>
+                    <th className="py-2 pr-3">Vendor</th>
+                    <th className="py-2 pr-3">Allocated Containers</th>
+                    <th className="py-2 pr-3">Spend</th>
+                    <th className="py-2 pr-3">Avg / Container</th>
                   </tr>
                 </thead>
                 <tbody>
                   {vendorWinShare.length ? (
                     vendorWinShare.map((v) => (
                       <tr key={v.vendor} className="border-b">
-                        <td className="py-2 pr-4 font-medium">{v.vendor}</td>
-                        <td className="py-2 pr-4">{v.containers}</td>
-                        <td className="py-2 pr-4">{fmt.money(v.spend)}</td>
-                        <td className="py-2 pr-4">{fmt.money(v.avg)}</td>
+                        <td className="py-2 pr-3 font-medium">{v.vendor}</td>
+                        <td className="py-2 pr-3">{v.containers}</td>
+                        <td className="py-2 pr-3">{fmt.money(v.spend)}</td>
+                        <td className="py-2 pr-3">{fmt.money(v.avg)}</td>
                       </tr>
                     ))
                   ) : (

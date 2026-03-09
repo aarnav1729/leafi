@@ -18,6 +18,13 @@ const axios = require("axios");
 
 const crypto = require("crypto");
 
+const IST_OFFSET_MINUTES = 330;
+const REPORT_EMAIL_RECIPIENTS = [
+  "vishnu.hazari@premierenergies.com",
+  "ramanjulu@premierenergies.com",
+  "aarnav.singh@premierenergies.com",
+];
+
 // In-memory OTP + session (MVP; resets on server restart)
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
@@ -346,6 +353,26 @@ BEGIN
     name NVARCHAR(100) NOT NULL,
     company NVARCHAR(150) NULL
   );
+END;
+
+IF OBJECT_ID('dbo.ReportEmailRuns','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.ReportEmailRuns (
+    id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ReportEmailRuns PRIMARY KEY DEFAULT NEWID(),
+    runType NVARCHAR(30) NOT NULL,
+    runKey NVARCHAR(30) NOT NULL,
+    sentAt DATETIME2 NOT NULL CONSTRAINT DF_ReportEmailRuns_sentAt DEFAULT SYSUTCDATETIME()
+  );
+END;
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE name = 'UQ_ReportEmailRuns_type_key'
+    AND object_id = OBJECT_ID('dbo.ReportEmailRuns')
+)
+BEGIN
+  CREATE UNIQUE NONCLUSTERED INDEX UQ_ReportEmailRuns_type_key
+  ON dbo.ReportEmailRuns(runType, runKey);
 END;
 
 -- Widen Users.username if needed (vendorCode/email may exceed 50)
@@ -2037,6 +2064,691 @@ function quoteSubmissionEmailTemplate({
 `;
 }
 
+function rfqDeletionInternalEmailTemplate({
+  rfq,
+  quotes,
+  deletedBy,
+  deletedAt,
+  reason,
+}) {
+  const fmtDateTime = (d) =>
+    d ? new Date(d).toLocaleString("en-IN", { hour12: true }) : "—";
+
+  const metaTable = (rows) => `
+    <table width="100%" cellpadding="0" cellspacing="0"
+      style="border-collapse:separate;border-spacing:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      ${rows
+        .map(
+          ([k, v]) => `
+        <tr>
+          <td style="padding:10px 12px;font-weight:600;color:#1f2937;border-bottom:1px solid #f1f5f9;width:220px;background:#fafafa;">${k}</td>
+          <td style="padding:10px 12px;color:#111827;border-bottom:1px solid #f1f5f9;">${
+            v == null || v === "" ? "—" : v
+          }</td>
+        </tr>
+      `
+        )
+        .join("")}
+    </table>
+  `;
+
+  const quoteSummaryRows =
+    (quotes || []).length > 0
+      ? (quotes || [])
+          .map(
+            (quote) => `
+              <tr>
+                <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#111827;">${
+                  quote.vendorName || "—"
+                }</td>
+                <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#111827;">${
+                  quote.numberOfContainers ?? "—"
+                }</td>
+                <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#111827;">${
+                  quote.homeTotal == null ? "—" : `₹${Number(quote.homeTotal).toFixed(2)}`
+                }</td>
+                <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#111827;">${
+                  quote.mooWRTotal == null ? "—" : `₹${Number(quote.mooWRTotal).toFixed(2)}`
+                }</td>
+              </tr>
+            `
+          )
+          .join("")
+      : `
+          <tr>
+            <td colspan="4" style="padding:12px;color:#6b7280;">No quotes were submitted for this RFQ.</td>
+          </tr>
+        `;
+
+  const rfqRows = [
+    ["RFQ Number", rfq?.rfqNumber],
+    ["Item Description", rfq?.itemDescription],
+    ["Company Name", rfq?.companyName],
+    ["Material PO Number", rfq?.materialPONumber],
+    ["Supplier Name", rfq?.supplierName],
+    ["Port of Loading", rfq?.portOfLoading],
+    ["Port of Destination", rfq?.portOfDestination],
+    ["Container Type", rfq?.containerType],
+    ["Incoterms", rfq?.incoterms],
+    ["Req’d Containers", rfq?.numberOfContainers],
+    ["Cargo Weight (tons)", rfq?.cargoWeight],
+    ["Cargo Readiness", fmtDateTime(rfq?.cargoReadinessDate)],
+    ["Description", rfq?.description],
+  ];
+
+  const deletionRows = [
+    ["Deleted By", deletedBy],
+    ["Deletion Timestamp", fmtDateTime(deletedAt)],
+    ["Deletion Reason", reason],
+    ["Quotes Deleted", String((quotes || []).length)],
+  ];
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Inter,Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table width="100%" cellpadding="0" cellspacing="0"
+          style="max-width:780px;background:#fff;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,0.08);overflow:hidden;">
+          <tr>
+            <td style="background:linear-gradient(135deg,#f97316,#dc2626);padding:20px 24px;color:white;">
+              <div style="font-size:18px;font-weight:900;">LEAFI</div>
+              <div style="font-size:13px;opacity:0.95;margin-top:4px;">
+                RFQ Deletion Notice • RFQ <span style="font-weight:900;">${
+                  rfq?.rfqNumber || "—"
+                }</span>
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:18px 24px 8px;">
+              <div style="font-size:13px;color:#475569;line-height:1.7;">
+                An RFQ was deleted before finalization. Full deletion context and the deleted RFQ details are included below.
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 24px 18px;">
+              <div style="font-size:13px;font-weight:900;color:#0f172a;margin:10px 0;">
+                Deletion Details
+              </div>
+              ${metaTable(deletionRows)}
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 24px 18px;">
+              <div style="font-size:13px;font-weight:900;color:#0f172a;margin:10px 0;">
+                RFQ Details
+              </div>
+              ${metaTable(rfqRows)}
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <div style="font-size:13px;font-weight:900;color:#0f172a;margin:10px 0;">
+                Deleted Quote Summary
+              </div>
+              <table width="100%" cellpadding="0" cellspacing="0"
+                style="border-collapse:separate;border-spacing:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+                <tr style="background:#f9fafb;">
+                  <th align="left" style="padding:10px 12px;font-size:12px;color:#374151;border-bottom:1px solid #e5e7eb;">Vendor</th>
+                  <th align="left" style="padding:10px 12px;font-size:12px;color:#374151;border-bottom:1px solid #e5e7eb;">Quoted Containers</th>
+                  <th align="left" style="padding:10px 12px;font-size:12px;color:#374151;border-bottom:1px solid #e5e7eb;">HOME Total</th>
+                  <th align="left" style="padding:10px 12px;font-size:12px;color:#374151;border-bottom:1px solid #e5e7eb;">MOOWR Total</th>
+                </tr>
+                ${quoteSummaryRows}
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;line-height:1.5;">
+              Internal LEAFI deletion audit notification • Do not reply
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
+function rfqDeletionVendorEmailTemplate({ rfq, vendorName }) {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Inter,Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table width="100%" cellpadding="0" cellspacing="0"
+          style="max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background:linear-gradient(135deg,#f59e0b,#d97706);padding:20px 24px;color:white;">
+              <div style="font-size:18px;font-weight:900;">LEAFI</div>
+              <div style="font-size:13px;opacity:0.95;margin-top:4px;">
+                RFQ Deleted
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:22px 24px 10px;">
+              <div style="font-size:13px;color:#64748b;">Vendor</div>
+              <div style="font-size:24px;font-weight:900;color:#0f172a;">${
+                vendorName || "Vendor"
+              }</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 24px 16px;color:#334155;font-size:14px;line-height:1.7;">
+              RFQ <strong>${rfq?.rfqNumber || "—"}</strong> has been deleted in LEAFI. For more information, please contact <strong>ramanjulu@premierenergies.com</strong>.
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 24px 24px;">
+              <table width="100%" cellpadding="0" cellspacing="0"
+                style="border-collapse:separate;border-spacing:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+                <tr>
+                  <td style="padding:10px 12px;font-weight:600;color:#1f2937;border-bottom:1px solid #f1f5f9;width:180px;background:#fafafa;">RFQ Number</td>
+                  <td style="padding:10px 12px;color:#111827;border-bottom:1px solid #f1f5f9;">${
+                    rfq?.rfqNumber || "—"
+                  }</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 12px;font-weight:600;color:#1f2937;border-bottom:1px solid #f1f5f9;width:180px;background:#fafafa;">Item Description</td>
+                  <td style="padding:10px 12px;color:#111827;border-bottom:1px solid #f1f5f9;">${
+                    rfq?.itemDescription || "—"
+                  }</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 12px;font-weight:600;color:#1f2937;border-bottom:1px solid #f1f5f9;width:180px;background:#fafafa;">Material PO Number</td>
+                  <td style="padding:10px 12px;color:#111827;border-bottom:1px solid #f1f5f9;">${
+                    rfq?.materialPONumber || "—"
+                  }</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;line-height:1.6;">
+              This is an automated message from LEAFI. Please do not reply.
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
+function getIstDate(date = new Date()) {
+  return new Date(date.getTime() + IST_OFFSET_MINUTES * 60 * 1000);
+}
+
+function istDayKey(date = new Date()) {
+  const d = getIstDate(date);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function istDateLabel(dateKey) {
+  const [yyyy, mm, dd] = String(dateKey || "").split("-").map(Number);
+  if (!yyyy || !mm || !dd) return "—";
+  const utc = new Date(Date.UTC(yyyy, mm - 1, dd));
+  return utc.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Kolkata",
+  });
+}
+
+function istRangeUtc(dateKeyFrom, dateKeyTo) {
+  const [fy, fm, fd] = dateKeyFrom.split("-").map(Number);
+  const [ty, tm, td] = dateKeyTo.split("-").map(Number);
+  const fromUtc = new Date(Date.UTC(fy, fm - 1, fd, 0, -IST_OFFSET_MINUTES, 0, 0));
+  const toUtc = new Date(Date.UTC(ty, tm - 1, td, 23, 59 - IST_OFFSET_MINUTES, 59, 999));
+  return { fromUtc, toUtc };
+}
+
+function previousIstDayKey(dateKey, daysBack = 1) {
+  const [yyyy, mm, dd] = String(dateKey || "").split("-").map(Number);
+  const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+  d.setUTCDate(d.getUTCDate() - daysBack);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatDateTimeIst(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata",
+  });
+}
+
+function formatMoneyInr(value) {
+  const n = Number(value);
+  return Number.isFinite(n)
+    ? `₹${n.toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`
+    : "—";
+}
+
+function formatUsd(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? `${n.toFixed(2)} USD` : "—";
+}
+
+function buildQuoteBreakdownHtml(quote) {
+  return `
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <tr style="background:#f8fafc;">
+        <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Field</th>
+        <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Value</th>
+      </tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Shipping Line</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${quote.shippingLineName || "—"}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Quoted Containers</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${quote.numberOfContainers ?? "—"}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Sea Freight</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatUsd(quote.seaFreightPerContainer)}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">HDO / BOL</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.houseDeliveryOrderPerBOL)}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">CFS</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.cfsPerContainer)}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Transportation</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.transportationPerContainer)}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">EDI / BOE</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.ediChargesPerBOE)}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">CHA HOME</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.chaChargesHome)}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">CHA MOOWR</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.chaChargesMOOWR)}</td></tr>
+      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Re-warehousing</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.mooWRReeWarehousingCharges)}</td></tr>
+      <tr style="background:#fafafa;"><td style="padding:8px 10px;font-weight:700;">HOME Total</td><td style="padding:8px 10px;font-weight:700;">${formatMoneyInr(quote.homeTotal)}</td></tr>
+      <tr style="background:#fafafa;"><td style="padding:8px 10px;font-weight:700;">MOOWR Total</td><td style="padding:8px 10px;font-weight:700;">${formatMoneyInr(quote.mooWRTotal)}</td></tr>
+    </table>
+  `;
+}
+
+function reportDigestEmailTemplate({ title, subtitle, dayGroups, generatedAt }) {
+  const renderRfq = (entry) => {
+    const rfq = entry.rfq;
+    const quoteRows = entry.quoteRows || [];
+    const allocationSummary = entry.allocationSummary || [];
+    const quoteTableRows = quoteRows.length
+      ? quoteRows
+          .map(
+            (quote) => `
+          <tr>
+            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">
+              <div style="font-weight:700;color:#0f172a;">${quote.vendorName || "—"}</div>
+              <div style="font-size:12px;color:#64748b;">Submitted ${formatDateTimeIst(
+                quote.createdAt
+              )}</div>
+            </td>
+            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
+              quote.homeTotal
+            )}</td>
+            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
+              quote.mooWRTotal
+            )}</td>
+            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${buildQuoteBreakdownHtml(
+              quote
+            )}</td>
+          </tr>
+        `
+          )
+          .join("")
+      : `
+        <tr>
+          <td colspan="4" style="padding:10px;color:#64748b;">No quotes received for this RFQ.</td>
+        </tr>
+      `;
+
+    const allocationRows = allocationSummary.length
+      ? allocationSummary
+          .map(
+            (allocation) => `
+          <tr>
+            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${allocation.vendorName}</td>
+            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${allocation.home}</td>
+            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${allocation.moowr}</td>
+            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">
+              ${
+                allocation.reasons.length
+                  ? `<span style="display:inline-block;padding:3px 8px;border-radius:999px;background:#fee2e2;color:#b91c1c;font-size:12px;font-weight:700;">Deviation</span><div style="margin-top:6px;color:#991b1b;font-size:12px;">${allocation.reasons.join(
+                      " | "
+                    )}</div>`
+                  : `<span style="color:#64748b;">—</span>`
+              }
+            </td>
+          </tr>
+        `
+          )
+          .join("")
+      : `
+        <tr>
+          <td colspan="4" style="padding:10px;color:#64748b;">No allocation recorded for this RFQ.</td>
+        </tr>
+      `;
+
+    return `
+      <div style="margin-top:18px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#ffffff;">
+        <div style="padding:16px 18px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
+          <div style="font-size:18px;font-weight:800;color:#0f172a;">RFQ #${rfq.rfqNumber}</div>
+          <div style="margin-top:6px;font-size:13px;color:#334155;">${rfq.itemDescription || "—"}</div>
+          <div style="margin-top:8px;font-size:12px;color:#64748b;line-height:1.7;">
+            Company: ${rfq.companyName || "—"} | Material PO: ${rfq.materialPONumber || "—"} | Route: ${
+      rfq.portOfLoading || "—"
+    } to ${rfq.portOfDestination || "—"} | Status: ${rfq.status || "—"}
+          </div>
+        </div>
+
+        <div style="padding:16px 18px;">
+          <div style="font-size:13px;font-weight:800;color:#0f172a;margin-bottom:10px;">Quotes Received</div>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+            <tr style="background:#f8fafc;">
+              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Vendor</th>
+              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">HOME Total</th>
+              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">MOOWR Total</th>
+              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Breakdown</th>
+            </tr>
+            ${quoteTableRows}
+          </table>
+
+          <div style="font-size:13px;font-weight:800;color:#0f172a;margin:16px 0 10px;">Allocated Quote Details</div>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+            <tr style="background:#f8fafc;">
+              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Vendor</th>
+              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">HOME</th>
+              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">MOOWR</th>
+              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Deviation / Reason</th>
+            </tr>
+            ${allocationRows}
+          </table>
+        </div>
+      </div>
+    `;
+  };
+
+  const daySections =
+    dayGroups.length > 0
+      ? dayGroups
+          .map(
+            (group) => `
+        <div style="margin-top:24px;">
+          <div style="padding:12px 16px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;">
+            <div style="font-size:18px;font-weight:800;color:#1d4ed8;">${group.label}</div>
+            <div style="margin-top:4px;font-size:13px;color:#475569;">${group.items.length} RFQ(s) floated</div>
+          </div>
+          ${group.items.map(renderRfq).join("")}
+        </div>
+      `
+          )
+          .join("")
+      : `
+        <div style="margin-top:18px;padding:16px;border-radius:12px;border:1px solid #e5e7eb;background:#ffffff;color:#64748b;">
+          No RFQ activity found for this reporting window.
+        </div>
+      `;
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:0;background:#f4f6fb;font-family:Inter,Segoe UI,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:980px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background:linear-gradient(135deg,#0ea5e9,#2563eb);padding:22px 26px;color:white;">
+              <div style="font-size:20px;font-weight:900;">LEAFI</div>
+              <div style="margin-top:4px;font-size:14px;opacity:0.95;">${title}</div>
+              <div style="margin-top:6px;font-size:12px;opacity:0.85;">${subtitle}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 24px 0;color:#475569;font-size:13px;line-height:1.7;">
+              Generated at ${formatDateTimeIst(generatedAt)} IST
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 24px;">
+              ${daySections}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px;background:#f9fafb;color:#6b7280;font-size:12px;line-height:1.6;">
+              Automated LEAFI report mail. Please do not reply.
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
+async function getReportDigestDayGroups(pool, dateKeyFrom, dateKeyTo) {
+  const { fromUtc, toUtc } = istRangeUtc(dateKeyFrom, dateKeyTo);
+
+  const rfqRes = await pool
+    .request()
+    .input("fromUtc", sql.DateTime2, fromUtc)
+    .input("toUtc", sql.DateTime2, toUtc).query(`
+      SELECT *
+      FROM dbo.RFQs
+      WHERE createdAt >= @fromUtc AND createdAt <= @toUtc
+      ORDER BY createdAt DESC
+    `);
+
+  const rfqs = rfqRes.recordset || [];
+  if (!rfqs.length) return [];
+
+  const rfqIdsCte = rfqs
+    .map((_, i) => `SELECT @rfqId${i} AS rfqId`)
+    .join(" UNION ALL ");
+
+  let quotesReq = pool.request();
+  rfqs.forEach((rfq, i) => quotesReq.input(`rfqId${i}`, sql.UniqueIdentifier, rfq.id));
+  const quotesRes = await quotesReq.query(`
+    ;WITH R AS (${rfqIdsCte})
+    SELECT q.*
+    FROM dbo.Quotes q
+    INNER JOIN R ON R.rfqId = q.rfqId
+    ORDER BY q.createdAt DESC
+  `);
+  const quotes = quotesRes.recordset || [];
+
+  let allocationsReq = pool.request();
+  rfqs.forEach((rfq, i) =>
+    allocationsReq.input(`allocRfqId${i}`, sql.UniqueIdentifier, rfq.id)
+  );
+  const allocIdsCte = rfqs
+    .map((_, i) => `SELECT @allocRfqId${i} AS rfqId`)
+    .join(" UNION ALL ");
+  const allocationsRes = await allocationsReq.query(`
+    ;WITH R AS (${allocIdsCte})
+    SELECT a.*
+    FROM dbo.Allocations a
+    INNER JOIN R ON R.rfqId = a.rfqId
+    ORDER BY a.createdAt DESC
+  `);
+  const allocations = allocationsRes.recordset || [];
+
+  const groups = new Map();
+  for (const rfq of rfqs) {
+    const rfqQuotes = quotes.filter((q) => q.rfqId === rfq.id);
+    const rfqAllocations = allocations.filter((a) => a.rfqId === rfq.id);
+
+    const allocationSummary = Array.from(
+      rfqAllocations.reduce((map, allocation) => {
+        const existing = map.get(allocation.vendorName) || {
+          vendorName: allocation.vendorName,
+          home: 0,
+          moowr: 0,
+          reasons: [],
+        };
+        existing.home += Number(allocation.containersAllottedHome || 0);
+        existing.moowr += Number(allocation.containersAllottedMOOWR || 0);
+        if (allocation.reason && String(allocation.reason).trim()) {
+          existing.reasons.push(String(allocation.reason).trim());
+        }
+        map.set(allocation.vendorName, existing);
+        return map;
+      }, new Map())
+    ).map(([, value]) => ({
+      ...value,
+      reasons: Array.from(new Set(value.reasons)),
+    }));
+
+    const key = istDayKey(rfq.createdAt);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({
+      rfq,
+      quoteRows: rfqQuotes,
+      allocationSummary,
+    });
+  }
+
+  return Array.from(groups.entries())
+    .sort((a, b) => String(b[0]).localeCompare(String(a[0])))
+    .map(([key, items]) => ({
+      key,
+      label: istDateLabel(key),
+      items,
+    }));
+}
+
+async function hasReportRun(pool, runType, runKey) {
+  const res = await pool
+    .request()
+    .input("runType", sql.NVarChar(30), runType)
+    .input("runKey", sql.NVarChar(30), runKey)
+    .query(`
+      SELECT TOP 1 1 AS ok
+      FROM dbo.ReportEmailRuns
+      WHERE runType = @runType AND runKey = @runKey
+    `);
+  return Boolean(res.recordset?.[0]?.ok);
+}
+
+async function markReportRun(pool, runType, runKey) {
+  await pool
+    .request()
+    .input("runType", sql.NVarChar(30), runType)
+    .input("runKey", sql.NVarChar(30), runKey)
+    .query(`
+      INSERT INTO dbo.ReportEmailRuns (runType, runKey, sentAt)
+      VALUES (@runType, @runKey, SYSUTCDATETIME())
+    `);
+}
+
+async function sendReportDigestEmail({ subject, title, subtitle, dayGroups }) {
+  const html = reportDigestEmailTemplate({
+    title,
+    subtitle,
+    dayGroups,
+    generatedAt: new Date(),
+  });
+
+  await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+    message: {
+      subject,
+      body: {
+        contentType: "HTML",
+        content: html,
+      },
+      toRecipients: graphRecipientsFromEmails(REPORT_EMAIL_RECIPIENTS),
+    },
+    saveToSentItems: true,
+  });
+}
+
+async function maybeSendDailyAndWeeklyDigests() {
+  try {
+    const now = new Date();
+    const istNow = getIstDate(now);
+    const hour = istNow.getUTCHours();
+    const minute = istNow.getUTCMinutes();
+
+    if (hour !== 23 || minute !== 59) return;
+
+    const pool = await getPool();
+    const todayKey = istDayKey(now);
+
+    if (!(await hasReportRun(pool, "daily", todayKey))) {
+      const dailyGroups = await getReportDigestDayGroups(pool, todayKey, todayKey);
+      await sendReportDigestEmail({
+        subject: `LEAFI Daily RFQ Report | ${istDateLabel(todayKey)}`,
+        title: "Daily RFQ Activity Report",
+        subtitle: `RFQs floated, quotes received, and allocated quote details for ${istDateLabel(
+          todayKey
+        )}`,
+        dayGroups: dailyGroups,
+      });
+      await markReportRun(pool, "daily", todayKey);
+      console.log("[REPORT] Daily digest sent for", todayKey);
+    }
+
+    const istDayOfWeek = istNow.getUTCDay();
+    if (istDayOfWeek === 0 && !(await hasReportRun(pool, "weekly", todayKey))) {
+      const weekStartKey = previousIstDayKey(todayKey, 6);
+      const weeklyGroups = await getReportDigestDayGroups(
+        pool,
+        weekStartKey,
+        todayKey
+      );
+      await sendReportDigestEmail({
+        subject: `LEAFI Weekly RFQ Summary | ${istDateLabel(
+          weekStartKey
+        )} to ${istDateLabel(todayKey)}`,
+        title: "Weekly RFQ Activity Summary",
+        subtitle: `Week ending ${istDateLabel(todayKey)} (Sunday, 11:59 PM IST)`,
+        dayGroups: weeklyGroups,
+      });
+      await markReportRun(pool, "weekly", todayKey);
+      console.log("[REPORT] Weekly digest sent for week ending", todayKey);
+    }
+  } catch (err) {
+    console.error("[REPORT] Scheduled digest failed:", err);
+  }
+}
+
 function requireBasicAuth(req) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith("Basic ")) return null;
@@ -3405,6 +4117,169 @@ VALUES
   }
 });
 
+app.delete("/api/rfqs/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
+  const { id } = req.params;
+  const reason = String(req.body?.reason || "").trim();
+
+  if (!reason) {
+    return res.status(400).json({ message: "Deletion reason is required" });
+  }
+
+  try {
+    const pool = await getPool();
+    const tx = new sql.Transaction(pool);
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    let rolledBack = false;
+    let rfq = null;
+    let quotes = [];
+    let uniqueVendors = [];
+    let deletedAtIso = new Date().toISOString();
+
+    try {
+      const rfqRes = await tx
+        .request()
+        .input("id", sql.UniqueIdentifier, id)
+        .query("SELECT TOP 1 * FROM dbo.RFQs WHERE id = @id");
+
+      rfq = rfqRes.recordset[0] || null;
+      if (!rfq) {
+        await tx.rollback();
+        rolledBack = true;
+        return res.status(404).json({ message: "RFQ not found" });
+      }
+
+      if (rfq.status === "closed") {
+        await tx.rollback();
+        rolledBack = true;
+        return res.status(409).json({
+          message: "Finalized RFQs cannot be deleted",
+        });
+      }
+
+      const quoteRes = await tx
+        .request()
+        .input("rfqId", sql.UniqueIdentifier, id)
+        .query("SELECT * FROM dbo.Quotes WHERE rfqId = @rfqId ORDER BY createdAt DESC");
+      quotes = quoteRes.recordset || [];
+      uniqueVendors = [...new Set(quotes.map((q) => String(q.vendorName || "").trim()).filter(Boolean))];
+
+      await tx
+        .request()
+        .input("rfqId", sql.UniqueIdentifier, id)
+        .query("DELETE FROM dbo.Allocations WHERE rfqId = @rfqId");
+
+      await tx
+        .request()
+        .input("rfqId", sql.UniqueIdentifier, id)
+        .query("DELETE FROM dbo.Quotes WHERE rfqId = @rfqId");
+
+      await tx
+        .request()
+        .input("id", sql.UniqueIdentifier, id)
+        .query("DELETE FROM dbo.RFQs WHERE id = @id");
+
+      deletedAtIso = new Date().toISOString();
+      await tx.commit();
+    } catch (innerErr) {
+      if (!rolledBack) {
+        await tx.rollback().catch(() => undefined);
+      }
+      throw innerErr;
+    }
+
+    const deletedBy = [req.user?.name, req.user?.username].filter(Boolean).join(" • ");
+
+    try {
+      const internalHtml = rfqDeletionInternalEmailTemplate({
+        rfq,
+        quotes,
+        deletedBy: deletedBy || req.user?.username || "Unknown user",
+        deletedAt: deletedAtIso,
+        reason,
+      });
+
+      await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+        message: {
+          subject: `RFQ Deleted | RFQ ${rfq?.rfqNumber || "—"} | ${rfq?.materialPONumber || "—"}`,
+          body: {
+            contentType: "HTML",
+            content: internalHtml,
+          },
+          toRecipients: graphRecipientsFromEmails([
+            "vishnu.hazari@premierenergies.com",
+            "ramanjulu@premierenergies.com",
+            "aarnav.singh@premierenergies.com",
+          ]),
+        },
+        saveToSentItems: true,
+      });
+    } catch (e) {
+      console.error("[GRAPH] RFQ deletion internal email failed (ignored):", e?.message || e);
+    }
+
+    if (uniqueVendors.length) {
+      const codesCte = uniqueVendors
+        .map((_, i) => `SELECT @c${i} AS code`)
+        .join(" UNION ALL ");
+
+      let req2 = pool.request();
+      uniqueVendors.forEach((code, i) =>
+        req2.input(`c${i}`, sql.NVarChar(150), code)
+      );
+
+      try {
+        const vendorEmailRes = await req2.query(`
+          ;WITH V AS (${codesCte})
+          SELECT
+            V.code AS vendorCode,
+            NULLIF(LTRIM(RTRIM(t.vendorEmail)), '') AS vendorEmail,
+            NULLIF(CAST(t.vendorEmails AS NVARCHAR(MAX)), '') AS vendorEmails,
+            CASE WHEN u.username LIKE '%@%' THEN u.username ELSE NULL END AS userEmail
+          FROM V
+          LEFT JOIN dbo.Master_Transporters t
+            ON t.vendorCode = V.code AND ISNULL(t.isActive, 1) = 1
+          LEFT JOIN dbo.Users u
+            ON u.company = V.code AND u.role = 'vendor'
+        `);
+
+        for (const row of vendorEmailRes.recordset || []) {
+          const vendorEmailList = parseEmailList(
+            [row.vendorEmail, row.vendorEmails, row.userEmail]
+              .filter(Boolean)
+              .join("\n")
+          );
+          if (!vendorEmailList.length) continue;
+
+          const vendorHtml = rfqDeletionVendorEmailTemplate({
+            rfq,
+            vendorName: row.vendorCode,
+          });
+
+          await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+            message: {
+              subject: `RFQ Deleted | RFQ ${rfq?.rfqNumber || "—"}`,
+              body: {
+                contentType: "HTML",
+                content: vendorHtml,
+              },
+              toRecipients: graphRecipientsFromEmails(vendorEmailList),
+            },
+            saveToSentItems: true,
+          });
+        }
+      } catch (e) {
+        console.error("[GRAPH] RFQ deletion vendor email failed (ignored):", e?.message || e);
+      }
+    }
+
+    return res.json({ message: "RFQ deleted successfully" });
+  } catch (err) {
+    console.error("[API] Delete RFQ error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
 // List quotes for RFQ
 app.get("/api/quotes/:rfqId", authenticate, async (req, res) => {
   try {
@@ -3482,81 +4357,152 @@ app.post("/api/quotes", authenticate, async (req, res) => {
       homeTotal +
       Number(d.mooWRReeWarehousingCharges || 0) +
       Number(d.chaChargesMOOWR || 0);
+    const tx = new sql.Transaction(pool);
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    await pool
-      .request()
-      .input("rfqId", sql.UniqueIdentifier, d.rfqId)
-      .input("vendorName", sql.NVarChar, req.user.company)
-      .input("numberOfContainers", sql.Int, Number(d.numberOfContainers || 0))
-      .input("shippingLineName", sql.NVarChar, d.shippingLineName || "")
-      .input("containerType", sql.NVarChar, d.containerType || "")
-      .input("vesselName", sql.NVarChar, d.vesselName || "")
-      .input("vesselETD", sql.DateTime2, d.vesselETD)
-      .input("vesselETA", sql.DateTime2, d.vesselETA)
-      .input(
-        "seaFreightPerContainer",
-        sql.Float,
-        Number(d.seaFreightPerContainer || 0)
-      )
-      .input(
-        "houseDeliveryOrderPerBOL",
-        sql.Float,
-        Number(d.houseDeliveryOrderPerBOL || 0)
-      )
-      .input("cfsPerContainer", sql.Float, Number(d.cfsPerContainer || 0))
-      .input(
-        "transportationPerContainer",
-        sql.Float,
-        Number(d.transportationPerContainer || 0)
-      )
-      .input("chaChargesHome", sql.Float, Number(d.chaChargesHome || 0))
-      .input("chaChargesMOOWR", sql.Float, Number(d.chaChargesMOOWR || 0))
-      .input("ediChargesPerBOE", sql.Float, Number(d.ediChargesPerBOE || 0))
-      .input(
-        "mooWRReeWarehousingCharges",
-        sql.Float,
-        Number(d.mooWRReeWarehousingCharges || 0)
-      )
-      .input("transshipOrDirect", sql.NVarChar, d.transshipOrDirect || "")
-      .input("quoteValidityDate", sql.DateTime2, d.quoteValidityDate)
-      .input("message", sql.NVarChar, d.message || null)
-      .input("homeTotal", sql.Float, homeTotal)
-      .input("mooWRTotal", sql.Float, mooWRTotal).query(`
-        INSERT INTO dbo.Quotes
-          (rfqId, vendorName, numberOfContainers, shippingLineName, containerType,
-           vesselName, vesselETD, vesselETA, seaFreightPerContainer,
-           houseDeliveryOrderPerBOL, cfsPerContainer, transportationPerContainer,
-           chaChargesHome, chaChargesMOOWR, ediChargesPerBOE,
-           mooWRReeWarehousingCharges, transshipOrDirect, quoteValidityDate,
-           message, createdAt, homeTotal, mooWRTotal)
-        VALUES
-          (@rfqId, @vendorName, @numberOfContainers, @shippingLineName, @containerType,
-           @vesselName, @vesselETD, @vesselETA, @seaFreightPerContainer,
-           @houseDeliveryOrderPerBOL, @cfsPerContainer, @transportationPerContainer,
-           @chaChargesHome, @chaChargesMOOWR, @ediChargesPerBOE,
-           @mooWRReeWarehousingCharges, @transshipOrDirect, @quoteValidityDate,
-           @message, SYSUTCDATETIME(), @homeTotal, @mooWRTotal)
-      `);
+    let action = "created";
+    let rfq;
+    let rolledBack = false;
 
-    // bump RFQ status
-    await pool.request().input("rfqId", sql.UniqueIdentifier, d.rfqId).query(`
-        UPDATE dbo.RFQs
-        SET status = 'evaluation'
-        WHERE id = @rfqId AND status = 'initial'
-      `);
+    try {
+      const rfqRes = await tx
+        .request()
+        .input("id", sql.UniqueIdentifier, d.rfqId)
+        .query(`
+          SELECT id, status, rfqNumber, itemDescription, companyName, materialPONumber,
+                 supplierName, portOfLoading, portOfDestination, containerType, incoterms,
+                 numberOfContainers, cargoWeight, cargoReadinessDate, cargoReadinessFrom, cargoReadinessTo,
+                 description
+          FROM dbo.RFQs
+          WHERE id = @id
+        `);
 
-    // fetch RFQ for email
-    const rfqRes = await pool
-      .request()
-      .input("id", sql.UniqueIdentifier, d.rfqId).query(`
-        SELECT rfqNumber, itemDescription, companyName, materialPONumber,
-               supplierName, portOfLoading, portOfDestination, containerType, incoterms,
-               numberOfContainers, cargoWeight, cargoReadinessDate, cargoReadinessFrom, cargoReadinessTo,
-               description
-        FROM dbo.RFQs
-        WHERE id = @id
-      `);
-    const rfq = rfqRes.recordset[0];
+      rfq = rfqRes.recordset[0];
+      if (!rfq) {
+        await tx.rollback();
+        rolledBack = true;
+        return res.status(404).json({ message: "RFQ not found" });
+      }
+
+      if (rfq.status === "closed") {
+        await tx.rollback();
+        rolledBack = true;
+        return res.status(409).json({
+          message: "This RFQ has already been finalized. Quotes can no longer be updated.",
+        });
+      }
+
+      const request = tx
+        .request()
+        .input("rfqId", sql.UniqueIdentifier, d.rfqId)
+        .input("vendorName", sql.NVarChar, req.user.company)
+        .input("numberOfContainers", sql.Int, Number(d.numberOfContainers || 0))
+        .input("shippingLineName", sql.NVarChar, d.shippingLineName || "")
+        .input("containerType", sql.NVarChar, d.containerType || "")
+        .input("vesselName", sql.NVarChar, d.vesselName || "")
+        .input("vesselETD", sql.DateTime2, d.vesselETD)
+        .input("vesselETA", sql.DateTime2, d.vesselETA)
+        .input(
+          "seaFreightPerContainer",
+          sql.Float,
+          Number(d.seaFreightPerContainer || 0)
+        )
+        .input(
+          "houseDeliveryOrderPerBOL",
+          sql.Float,
+          Number(d.houseDeliveryOrderPerBOL || 0)
+        )
+        .input("cfsPerContainer", sql.Float, Number(d.cfsPerContainer || 0))
+        .input(
+          "transportationPerContainer",
+          sql.Float,
+          Number(d.transportationPerContainer || 0)
+        )
+        .input("chaChargesHome", sql.Float, Number(d.chaChargesHome || 0))
+        .input("chaChargesMOOWR", sql.Float, Number(d.chaChargesMOOWR || 0))
+        .input("ediChargesPerBOE", sql.Float, Number(d.ediChargesPerBOE || 0))
+        .input(
+          "mooWRReeWarehousingCharges",
+          sql.Float,
+          Number(d.mooWRReeWarehousingCharges || 0)
+        )
+        .input("transshipOrDirect", sql.NVarChar, d.transshipOrDirect || "")
+        .input("quoteValidityDate", sql.DateTime2, d.quoteValidityDate)
+        .input("message", sql.NVarChar, d.message || null)
+        .input("homeTotal", sql.Float, homeTotal)
+        .input("mooWRTotal", sql.Float, mooWRTotal);
+
+      const existingQuote = (
+        await tx
+          .request()
+          .input("rfqId", sql.UniqueIdentifier, d.rfqId)
+          .input("vendorName", sql.NVarChar, req.user.company).query(`
+            SELECT TOP 1 id
+            FROM dbo.Quotes WITH (UPDLOCK, HOLDLOCK)
+            WHERE rfqId = @rfqId AND vendorName = @vendorName
+            ORDER BY createdAt DESC
+          `)
+      ).recordset[0];
+
+      if (existingQuote?.id) {
+        action = "updated";
+        await request
+          .input("quoteId", sql.UniqueIdentifier, existingQuote.id).query(`
+            UPDATE dbo.Quotes
+            SET numberOfContainers = @numberOfContainers,
+                shippingLineName = @shippingLineName,
+                containerType = @containerType,
+                vesselName = @vesselName,
+                vesselETD = @vesselETD,
+                vesselETA = @vesselETA,
+                seaFreightPerContainer = @seaFreightPerContainer,
+                houseDeliveryOrderPerBOL = @houseDeliveryOrderPerBOL,
+                cfsPerContainer = @cfsPerContainer,
+                transportationPerContainer = @transportationPerContainer,
+                chaChargesHome = @chaChargesHome,
+                chaChargesMOOWR = @chaChargesMOOWR,
+                ediChargesPerBOE = @ediChargesPerBOE,
+                mooWRReeWarehousingCharges = @mooWRReeWarehousingCharges,
+                transshipOrDirect = @transshipOrDirect,
+                quoteValidityDate = @quoteValidityDate,
+                message = @message,
+                createdAt = SYSUTCDATETIME(),
+                homeTotal = @homeTotal,
+                mooWRTotal = @mooWRTotal
+            WHERE id = @quoteId
+          `);
+      } else {
+        await request.query(`
+          INSERT INTO dbo.Quotes
+            (rfqId, vendorName, numberOfContainers, shippingLineName, containerType,
+             vesselName, vesselETD, vesselETA, seaFreightPerContainer,
+             houseDeliveryOrderPerBOL, cfsPerContainer, transportationPerContainer,
+             chaChargesHome, chaChargesMOOWR, ediChargesPerBOE,
+             mooWRReeWarehousingCharges, transshipOrDirect, quoteValidityDate,
+             message, createdAt, homeTotal, mooWRTotal)
+          VALUES
+            (@rfqId, @vendorName, @numberOfContainers, @shippingLineName, @containerType,
+             @vesselName, @vesselETD, @vesselETA, @seaFreightPerContainer,
+             @houseDeliveryOrderPerBOL, @cfsPerContainer, @transportationPerContainer,
+             @chaChargesHome, @chaChargesMOOWR, @ediChargesPerBOE,
+             @mooWRReeWarehousingCharges, @transshipOrDirect, @quoteValidityDate,
+             @message, SYSUTCDATETIME(), @homeTotal, @mooWRTotal)
+        `);
+      }
+
+      await tx.request().input("rfqId", sql.UniqueIdentifier, d.rfqId).query(`
+          UPDATE dbo.RFQs
+          SET status = 'evaluation'
+          WHERE id = @rfqId AND status = 'initial'
+        `);
+
+      await tx.commit();
+    } catch (innerErr) {
+      if (!rolledBack) {
+        await tx.rollback().catch(() => undefined);
+      }
+      throw innerErr;
+    }
 
     if (rfq) {
       const rfqRows = [
@@ -3659,10 +4605,150 @@ app.post("/api/quotes", authenticate, async (req, res) => {
       });
     }
 
-    res.json({ message: "Quote submitted and notification sent" });
+    res.json({
+      action,
+      message:
+        action === "updated"
+          ? "Quote updated successfully"
+          : "Quote submitted successfully",
+    });
   } catch (err) {
     console.error("[API] Submit quote error:", err);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.put("/api/quotes/:quoteId/logistics-pricing", authenticate, async (req, res) => {
+  if (req.user.role !== "logistics") return res.sendStatus(403);
+
+  const { quoteId } = req.params;
+  const body = req.body || {};
+
+  try {
+    const pool = await getPool();
+
+    const existingQuoteRes = await pool
+      .request()
+      .input("quoteId", sql.UniqueIdentifier, quoteId)
+      .query("SELECT TOP 1 * FROM dbo.Quotes WHERE id = @quoteId");
+
+    const existingQuote = existingQuoteRes.recordset[0];
+    if (!existingQuote) {
+      return res.status(404).json({ message: "Quote not found" });
+    }
+
+    const rfqRes = await pool
+      .request()
+      .input("rfqId", sql.UniqueIdentifier, existingQuote.rfqId)
+      .query("SELECT TOP 1 status FROM dbo.RFQs WHERE id = @rfqId");
+
+    const rfq = rfqRes.recordset[0];
+    if (!rfq) {
+      return res.status(404).json({ message: "RFQ not found" });
+    }
+
+    if (rfq.status === "closed") {
+      return res.status(409).json({
+        message: "This RFQ has already been finalized. Logistics pricing can no longer be edited.",
+      });
+    }
+
+    let usdToInr = Number(body.usdToInr);
+    if (!Number.isFinite(usdToInr) || usdToInr <= 0) {
+      usdToInr = 75;
+      try {
+        const rateRes = await axios.get(EXCHANGE_URL);
+        usdToInr = Number(rateRes.data?.conversion_rate || 75);
+      } catch (e) {
+        console.error("[FX] Exchange API failed, using fallback 75:", e.message);
+      }
+    }
+
+    const num = (incoming, fallback) => {
+      const parsed = Number(incoming);
+      return Number.isFinite(parsed) ? parsed : Number(fallback || 0);
+    };
+
+    const seaFreightPerContainer = num(
+      body.seaFreightPerContainer,
+      existingQuote.seaFreightPerContainer
+    );
+    const houseDeliveryOrderPerBOL = num(
+      body.houseDeliveryOrderPerBOL,
+      existingQuote.houseDeliveryOrderPerBOL
+    );
+    const cfsPerContainer = num(body.cfsPerContainer, existingQuote.cfsPerContainer);
+    const transportationPerContainer = num(
+      body.transportationPerContainer,
+      existingQuote.transportationPerContainer
+    );
+    const ediChargesPerBOE = num(body.ediChargesPerBOE, existingQuote.ediChargesPerBOE);
+    const chaChargesHome = num(body.chaChargesHome, existingQuote.chaChargesHome);
+    const chaChargesMOOWR = num(body.chaChargesMOOWR, existingQuote.chaChargesMOOWR);
+    const mooWRReeWarehousingCharges = num(
+      body.mooWRReeWarehousingCharges,
+      existingQuote.mooWRReeWarehousingCharges
+    );
+
+    const seaInINR = seaFreightPerContainer * usdToInr;
+    const homeTotal =
+      seaInINR +
+      houseDeliveryOrderPerBOL +
+      cfsPerContainer +
+      transportationPerContainer +
+      ediChargesPerBOE +
+      chaChargesHome;
+    const mooWRTotal =
+      seaInINR +
+      houseDeliveryOrderPerBOL +
+      cfsPerContainer +
+      transportationPerContainer +
+      ediChargesPerBOE +
+      chaChargesMOOWR +
+      mooWRReeWarehousingCharges;
+
+    const updatedQuote = (
+      await pool
+        .request()
+        .input("quoteId", sql.UniqueIdentifier, quoteId)
+        .input("seaFreightPerContainer", sql.Float, seaFreightPerContainer)
+        .input("houseDeliveryOrderPerBOL", sql.Float, houseDeliveryOrderPerBOL)
+        .input("cfsPerContainer", sql.Float, cfsPerContainer)
+        .input("transportationPerContainer", sql.Float, transportationPerContainer)
+        .input("ediChargesPerBOE", sql.Float, ediChargesPerBOE)
+        .input("chaChargesHome", sql.Float, chaChargesHome)
+        .input("chaChargesMOOWR", sql.Float, chaChargesMOOWR)
+        .input(
+          "mooWRReeWarehousingCharges",
+          sql.Float,
+          mooWRReeWarehousingCharges
+        )
+        .input("homeTotal", sql.Float, homeTotal)
+        .input("mooWRTotal", sql.Float, mooWRTotal)
+        .query(`
+          UPDATE dbo.Quotes
+          SET seaFreightPerContainer = @seaFreightPerContainer,
+              houseDeliveryOrderPerBOL = @houseDeliveryOrderPerBOL,
+              cfsPerContainer = @cfsPerContainer,
+              transportationPerContainer = @transportationPerContainer,
+              ediChargesPerBOE = @ediChargesPerBOE,
+              chaChargesHome = @chaChargesHome,
+              chaChargesMOOWR = @chaChargesMOOWR,
+              mooWRReeWarehousingCharges = @mooWRReeWarehousingCharges,
+              homeTotal = @homeTotal,
+              mooWRTotal = @mooWRTotal
+          OUTPUT INSERTED.*
+          WHERE id = @quoteId
+        `)
+    ).recordset[0];
+
+    return res.json({
+      message: "Logistics pricing saved",
+      quote: updatedQuote,
+    });
+  } catch (err) {
+    console.error("[API] Logistics quote pricing update error:", err);
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -4837,11 +5923,18 @@ getPool().catch((err) => {
   console.error("[BOOT] DB warmup failed:", err);
 });
 
+const reportScheduler = setInterval(() => {
+  void maybeSendDailyAndWeeklyDigests();
+}, 60 * 1000);
+
+void maybeSendDailyAndWeeklyDigests();
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GRACEFUL SHUTDOWN (match reference)
 // ─────────────────────────────────────────────────────────────────────────────
 function shutdown(signal) {
   console.log(`[LEAFINBOUND] Received ${signal}, shutting down gracefully...`);
+  clearInterval(reportScheduler);
   httpsServer.close(() => {
     console.log("[LEAFINBOUND] HTTPS server closed.");
     if (poolPromise) {

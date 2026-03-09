@@ -23,10 +23,12 @@ import { RFQ } from "@/types/rfq.types";
 
 const VendorRFQList = () => {
   const { user } = useAuth();
-  const { getVendorRFQs, createQuote, getQuotesByRFQId } = useData();
+  const { getVendorRFQs, createQuote, getQuotesByRFQId, refreshKey } =
+    useData();
 
   const [selectedRFQ, setSelectedRFQ] = useState<RFQ | null>(null);
   const [quoteModalOpen, setQuoteModalOpen] = useState(false);
+  const [hasExistingQuote, setHasExistingQuote] = useState(false);
   const [usdToInr, setUsdToInr] = useState<number>(75);
   const [isSubmittingQuote, setIsSubmittingQuote] = useState(false);
   // Form state
@@ -72,7 +74,7 @@ const VendorRFQList = () => {
       .then((res) => res.json())
       .then(({ rate }) => setUsdToInr(rate))
       .catch(() => setUsdToInr(75));
-  }, []);
+  }, [refreshKey]);
 
   const resetForm = () => {
     setShippingLineName("");
@@ -260,6 +262,7 @@ const VendorRFQList = () => {
     setAttachmentPreviewError(false);
     setActiveAttachment(null);
     setIsSubmittingQuote(false);
+    setHasExistingQuote(false);
 
     setSelectedRFQ(rfq);
 
@@ -279,6 +282,8 @@ const VendorRFQList = () => {
         (a: any, b: any) =>
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       )[0];
+
+    setHasExistingQuote(Boolean(latestMine));
 
     if (latestMine) {
       const toStr = (v: any) =>
@@ -473,15 +478,21 @@ const VendorRFQList = () => {
                 rfqs.map((rfq) => (
                   <tr key={rfq.id}>
                     <td>
-                      {isQuoteAllowed(rfq) ? (
-                        <Button size="sm" onClick={() => openQuoteModal(rfq)}>
-                          Quote
-                        </Button>
-                      ) : (
-                        <Button size="sm" variant="outline" disabled>
-                          Quote
-                        </Button>
-                      )}
+                      {(() => {
+                        const hasSubmittedQuote = getQuotesByRFQId(rfq.id).some(
+                          (quote) => quote.vendorName === user?.company
+                        );
+
+                        return isQuoteAllowed(rfq) ? (
+                          <Button size="sm" onClick={() => openQuoteModal(rfq)}>
+                            {hasSubmittedQuote ? "Update Quote" : "Quote"}
+                          </Button>
+                        ) : (
+                          <Button size="sm" variant="outline" disabled>
+                            {hasSubmittedQuote ? "Quote Locked" : "Quote"}
+                          </Button>
+                        );
+                      })()}
                     </td>
                     <td>{(rfq as any).rfqNumber}</td>
                     <td>{(rfq as any).itemDescription}</td>
@@ -715,6 +726,11 @@ const VendorRFQList = () => {
               {/* Quote form */}
               <div className="border-t mt-4 pt-4">
                 <h3 className="text-lg font-medium mb-4">Quote Details</h3>
+                <div className="mb-4 text-sm text-muted-foreground">
+                  {hasExistingQuote
+                    ? "You already submitted a quote for this RFQ. Saving now will overwrite that quote."
+                    : "Each vendor can submit one quote per RFQ. You can update it until the RFQ is finalized."}
+                </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -976,7 +992,13 @@ const VendorRFQList = () => {
                 className="mt-4"
                 disabled={isSubmittingQuote}
               >
-                {isSubmittingQuote ? "Submitting..." : "Submit Quote"}
+                {isSubmittingQuote
+                  ? hasExistingQuote
+                    ? "Updating..."
+                    : "Submitting..."
+                  : hasExistingQuote
+                  ? "Update Quote"
+                  : "Submit Quote"}
               </Button>
             </div>
           )}

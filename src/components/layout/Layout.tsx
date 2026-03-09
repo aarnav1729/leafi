@@ -57,7 +57,7 @@ export function Layout({ requiredRole, requiredRoles }: LayoutProps) {
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
-      <main className="flex-1 container py-6">
+      <main className="flex-1 w-full px-4 py-6 sm:px-6 lg:px-8">
         <Outlet />
       </main>
     </div>

@@ -1,6 +1,7 @@
 // root/src/pages/logistics/Masters.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import api from "@/lib/api";
+import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -119,6 +120,7 @@ function normalizeValue(v: string) {
 }
 
 const Masters: React.FC = () => {
+  const { refreshKey } = useData();
   const [meta, setMeta] = useState<MasterMeta[]>(FALLBACK_META);
 
   const [rowsByKey, setRowsByKey] = useState<Record<string, MasterRow[]>>({});
@@ -262,7 +264,7 @@ const Masters: React.FC = () => {
       await fetchTransporters().catch(() => {});
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshKey]);
 
   const openAdd = (key: MasterKey) => {
     setAddOpenKey(key);
@@ -653,28 +655,28 @@ const Masters: React.FC = () => {
               </div>
 
               <div className="rounded-md border overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-xs sm:text-sm">
                   <thead className="border-b">
                     <tr className="text-left">
-                      <th className="p-3 w-[160px]">Code</th>
-                      <th className="p-3">Name</th>
-                      <th className="p-3 w-[220px]">Short Name</th>
-                      <th className="p-3">Email</th>
-                      <th className="p-3 w-[120px]">Active</th>
-                      <th className="p-3 w-[220px]">Actions</th>
+                      <th className="p-2 sm:p-3 w-[160px]">Code</th>
+                      <th className="p-2 sm:p-3">Name</th>
+                      <th className="p-2 sm:p-3 w-[220px]">Short Name</th>
+                      <th className="p-2 sm:p-3">Email</th>
+                      <th className="p-2 sm:p-3 w-[120px]">Active</th>
+                      <th className="p-2 sm:p-3 w-[220px]">Actions</th>
                     </tr>
                   </thead>
 
                   <tbody>
                     {transportersLoading ? (
                       <tr>
-                        <td className="p-3" colSpan={6}>
+                        <td className="p-2 sm:p-3" colSpan={6}>
                           Loading...
                         </td>
                       </tr>
                     ) : filteredTransporters.length === 0 ? (
                       <tr>
-                        <td className="p-3 text-muted-foreground" colSpan={6}>
+                        <td className="p-2 sm:p-3 text-muted-foreground" colSpan={6}>
                           No transporters found.
                         </td>
                       </tr>
@@ -688,7 +690,7 @@ const Masters: React.FC = () => {
                             key={t.id}
                             className="border-b last:border-b-0 align-top"
                           >
-                            <td className="p-3">
+                            <td className="p-2 sm:p-3">
                               {isEditing ? (
                                 <Input
                                   value={et.vendorCode}
@@ -705,7 +707,7 @@ const Masters: React.FC = () => {
                               )}
                             </td>
 
-                            <td className="p-3">
+                            <td className="p-2 sm:p-3">
                               {isEditing ? (
                                 <Input
                                   value={et.vendorName}

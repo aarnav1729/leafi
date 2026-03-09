@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useData } from "@/contexts/DataContext";
@@ -85,8 +85,14 @@ const fmt = {
 const FinalizeRFQ: React.FC = () => {
   const { rfqId } = useParams<{ rfqId: string }>();
   const navigate = useNavigate();
-  const { getRFQById, getQuotesByRFQId, getAllocationsByRFQId, finalizeRFQ } =
-    useData();
+  const {
+    getRFQById,
+    getQuotesByRFQId,
+    getAllocationsByRFQId,
+    finalizeRFQ,
+    updateQuotePricing,
+    refreshKey,
+  } = useData();
 
   const rfq = getRFQById(rfqId || "");
   const quotes = getQuotesByRFQId(rfqId || "");
@@ -102,7 +108,7 @@ const FinalizeRFQ: React.FC = () => {
         setUsdToInr(Number.isFinite(rate) ? rate : 75);
       })
       .catch(() => setUsdToInr(75));
-  }, []);
+  }, [refreshKey]);
 
   // Load all saved allocations for this RFQ (may be multiple partials)
   const existingAllocations = useMemo(
@@ -156,10 +162,58 @@ const FinalizeRFQ: React.FC = () => {
     mode: TableMode;
     scheme: Scheme;
   }>({ open: false, title: "", mode: "leafi", scheme: "home" });
+  const fullscreenDialogRef = useRef<HTMLDivElement | null>(null);
 
   const openFullscreen = (title: string, mode: TableMode, scheme: Scheme) => {
     setTableFs({ open: true, title, mode, scheme });
   };
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      if (
+        !document.fullscreenElement &&
+        fullscreenDialogRef.current &&
+        tableFs.open
+      ) {
+        setTableFs((s) => ({ ...s, open: false }));
+      }
+    };
+
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () =>
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, [tableFs.open]);
+
+  useEffect(() => {
+    const target = fullscreenDialogRef.current;
+    if (!tableFs.open || !target) return;
+
+    const requestBrowserFullscreen = async () => {
+      if (document.fullscreenElement === target) return;
+      if (!target.requestFullscreen) return;
+
+      try {
+        await target.requestFullscreen();
+      } catch {
+        // Keep the enlarged dialog open as a fallback if the browser denies fullscreen.
+      }
+    };
+
+    const frame = window.requestAnimationFrame(() => {
+      void requestBrowserFullscreen();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [tableFs.open]);
+
+  useEffect(() => {
+    if (tableFs.open) return;
+    if (document.fullscreenElement !== fullscreenDialogRef.current) return;
+    const exitPromise = document.exitFullscreen?.();
+    if (exitPromise) {
+      void exitPromise.catch(() => undefined);
+    }
+  }, [tableFs.open]);
 
   const getQuoteValue = (q: any, quoteId: string, field: PriceField) => {
     const edited = priceEdits[quoteId]?.[field];
@@ -558,6 +612,20 @@ const FinalizeRFQ: React.FC = () => {
     }));
   };
 
+  const persistPriceEdits = async () => {
+    const entries = Object.entries(priceEdits).filter(
+      ([, fields]) => fields && Object.keys(fields).length > 0
+    );
+
+    if (!rfq || entries.length === 0) return;
+
+    for (const [quoteId, fields] of entries) {
+      await updateQuotePricing(rfq.id, quoteId, fields, usdToInr);
+    }
+
+    setPriceEdits({});
+  };
+
   const storeFinalisation = async () => {
     if (requiresDeviationReason && !deviationReason.trim()) {
       toast.error(
@@ -567,6 +635,8 @@ const FinalizeRFQ: React.FC = () => {
     }
 
     if (!rfq) return;
+
+    await persistPriceEdits();
 
     for (const [qid, a] of Object.entries(alloc)) {
       const existed = existingMap[qid] || {
@@ -1742,6 +1812,7 @@ const FinalizeRFQ: React.FC = () => {
         onOpenChange={(open) => setTableFs((s) => ({ ...s, open }))}
       >
         <DialogContent className="max-w-[98vw] w-[98vw] h-[92vh] p-0 overflow-hidden">
+          <div ref={fullscreenDialogRef} className="flex h-full flex-col bg-background">
           <div className="flex items-center justify-between gap-2 px-4 py-3 border-b">
             <div className="flex flex-col">
               <div className="text-base font-semibold">{tableFs.title}</div>
@@ -1760,7 +1831,7 @@ const FinalizeRFQ: React.FC = () => {
                   </span>
                 </span>
                 <span className="hidden md:inline">
-                  (Scroll inside table; page stays fixed)
+                  (Real browser fullscreen with in-table scrolling)
                 </span>
               </div>
             </div>
@@ -1787,6 +1858,7 @@ const FinalizeRFQ: React.FC = () => {
                 {renderTableBody(tableFs.mode, tableFs.scheme)}
               </div>
             </div>
+          </div>
           </div>
         </DialogContent>
       </Dialog>

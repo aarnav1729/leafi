@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { RFQ } from "@/types/rfq.types";
@@ -31,7 +32,11 @@ interface Vendor {
   company: string;
 }
 
-type LookupRow = { id: string | number; value: string };
+type LookupRow = {
+  id: string | number;
+  value: string;
+  shortName?: string | null;
+};
 
 type LookupsResponse = {
   itemDescriptions: LookupRow[];
@@ -62,10 +67,14 @@ const DEFAULT_INCOTERMS = [
 ];
 
 const RFQList: React.FC = () => {
-  const { getUserRFQs, createRFQ } = useData();
+  const { getUserRFQs, createRFQ, deleteRFQ, refreshKey } = useData();
   const navigate = useNavigate();
   const location = useLocation();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [rfqToDelete, setRfqToDelete] = useState<RFQ | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [isDeletingRFQ, setIsDeletingRFQ] = useState(false);
   const [lookups, setLookups] = useState<LookupsResponse | null>(null);
 
   // Form state
@@ -354,6 +363,18 @@ const RFQList: React.FC = () => {
     return sorted;
   }, [rfqs, globalQuery, colFilters, sort]);
 
+  const companyShortNameMap = useMemo(() => {
+    const entries =
+      (lookups?.companyNames || []).map((row) => [
+        String(row.value || "").trim(),
+        String(row.shortName || "").trim(),
+      ]) || [];
+
+    return new Map(
+      entries.filter(([value, shortName]) => value && shortName)
+    );
+  }, [lookups]);
+
   const total = filteredSorted.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -383,7 +404,7 @@ const RFQList: React.FC = () => {
       }
     };
     fetchLookups();
-  }, []);
+  }, [refreshKey]);
 
   // Fetch vendor list from server
   useEffect(() => {
@@ -396,7 +417,7 @@ const RFQList: React.FC = () => {
       }
     };
     fetchVendors();
-  }, []);
+  }, [refreshKey]);
 
   const handleCreateRFQ = () => {
     const po = String(materialPONumber || "").trim();
@@ -469,6 +490,32 @@ const RFQList: React.FC = () => {
   const handleFinalize = (rfqId: string) => {
     const isAdmin = location.pathname.startsWith("/admin");
     navigate(`${isAdmin ? "/admin" : "/logistics"}/finalize/${rfqId}`);
+  };
+
+  const openDeleteDialog = (rfq: RFQ) => {
+    setRfqToDelete(rfq);
+    setDeleteReason("");
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteRFQ = async () => {
+    if (!rfqToDelete) return;
+
+    const reason = deleteReason.trim();
+    if (!reason) {
+      toast.error("Deletion reason is required");
+      return;
+    }
+
+    setIsDeletingRFQ(true);
+    try {
+      await deleteRFQ(rfqToDelete.id, reason);
+      setDeleteDialogOpen(false);
+      setRfqToDelete(null);
+      setDeleteReason("");
+    } finally {
+      setIsDeletingRFQ(false);
+    }
   };
 
   return (
@@ -1228,28 +1275,39 @@ const RFQList: React.FC = () => {
                   paged.map((rfq) => (
                     <tr key={rfq.id}>
                       <td>
-                        {rfq.status !== "closed" && (
+                        <div className="flex flex-wrap gap-2">
+                          {rfq.status !== "closed" && (
+                            <Button
+                              size="sm"
+                              onClick={() => handleFinalize(rfq.id)}
+                            >
+                              Finalize
+                            </Button>
+                          )}
+                          {rfq.status === "closed" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleFinalize(rfq.id)}
+                            >
+                              View
+                            </Button>
+                          )}
                           <Button
                             size="sm"
-                            onClick={() => handleFinalize(rfq.id)}
+                            variant="destructive"
+                            disabled={rfq.status === "closed"}
+                            onClick={() => openDeleteDialog(rfq)}
                           >
-                            Finalize
+                            Delete
                           </Button>
-                        )}
-                        {rfq.status === "closed" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleFinalize(rfq.id)}
-                          >
-                            View
-                          </Button>
-                        )}
+                        </div>
                       </td>
                       <td>{rfq.rfqNumber}</td>
                       <td>{rfq.itemDescription}</td>
                       <td className="whitespace-pre-wrap break-words max-w-[320px]">
-                        {rfq.companyName}
+                        {companyShortNameMap.get(rfq.companyName) ||
+                          rfq.companyName}
                       </td>
 
                       <td>{rfq.materialPONumber}</td>
@@ -1312,6 +1370,58 @@ const RFQList: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Delete RFQ</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="text-sm text-muted-foreground">
+              {rfqToDelete ? (
+                <>
+                  You are deleting RFQ #{rfqToDelete.rfqNumber}. This will also
+                  remove all associated quotes and allocations. This action
+                  cannot be undone.
+                </>
+              ) : (
+                "Delete this RFQ and all associated quotes."
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="deleteReason">Reason for deletion</Label>
+              <Textarea
+                id="deleteReason"
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Enter the reason for deleting this RFQ"
+                disabled={isDeletingRFQ}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setDeleteDialogOpen(false)}
+                disabled={isDeletingRFQ}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={handleDeleteRFQ}
+                disabled={isDeletingRFQ}
+              >
+                {isDeletingRFQ ? "Deleting..." : "Confirm Delete"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
