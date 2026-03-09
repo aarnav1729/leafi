@@ -60,12 +60,6 @@ const HeroContent: React.FC<HeroContentProps> = ({
               autoFocus
               inputMode={step === "otp" ? "numeric" : "email"} // optional nicety
             />
-
-            {step === "otp" && (
-              <p className="text-xs text-[#1a1b4b]/45 mt-1">
-                OTP is printed in the server console (MVP).
-              </p>
-            )}
           </div>
 
           <div className="flex justify-end">
