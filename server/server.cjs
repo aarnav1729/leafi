@@ -4619,7 +4619,9 @@ app.post("/api/quotes", authenticate, async (req, res) => {
 });
 
 app.put("/api/quotes/:quoteId/logistics-pricing", authenticate, async (req, res) => {
-  if (req.user.role !== "logistics") return res.sendStatus(403);
+  if (req.user.role !== "logistics" && req.user.role !== "admin") {
+    return res.sendStatus(403);
+  }
 
   const { quoteId } = req.params;
   const body = req.body || {};
@@ -4752,9 +4754,11 @@ app.put("/api/quotes/:quoteId/logistics-pricing", authenticate, async (req, res)
   }
 });
 
-// Allocate containers (logistics only)
+// Allocate containers (logistics and admin)
 app.post("/api/allocations", authenticate, async (req, res) => {
-  if (req.user.role !== "logistics") return res.sendStatus(403);
+  if (req.user.role !== "logistics" && req.user.role !== "admin") {
+    return res.sendStatus(403);
+  }
 
   const {
     rfqId,
