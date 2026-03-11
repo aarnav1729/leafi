@@ -3828,9 +3828,11 @@ app.get("/api/rfqs/:id", authenticate, async (req, res) => {
   }
 });
 
-// Create RFQ (logistics only)
+// Create RFQ (logistics and admin)
 app.post("/api/rfqs", authenticate, async (req, res) => {
-  if (req.user.role !== "logistics") return res.sendStatus(403);
+  if (req.user.role !== "logistics" && req.user.role !== "admin") {
+    return res.sendStatus(403);
+  }
 
   const {
     itemDescription,
