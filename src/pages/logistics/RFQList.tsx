@@ -89,8 +89,8 @@ const RFQList: React.FC = () => {
     useState<RFQ["portOfDestination"]>("");
   const [incoterms, setIncoterms] = useState<NonNullable<RFQ["incoterms"]>>("");
   const [containerType, setContainerType] = useState<RFQ["containerType"]>("");
-  const [numberOfContainers, setNumberOfContainers] = useState(1);
-  const [cargoWeight, setCargoWeight] = useState(1);
+  const [numberOfContainers, setNumberOfContainers] = useState("");
+  const [cargoWeight, setCargoWeight] = useState("");
   const [cargoReadinessFrom, setCargoReadinessFrom] = useState("");
   const [cargoReadinessTo, setCargoReadinessTo] = useState("");
 
@@ -437,13 +437,31 @@ const RFQList: React.FC = () => {
       return;
     }
 
-    const fromT = new Date(cargoReadinessFrom).getTime();
-    const toT = new Date(cargoReadinessTo).getTime();
-    if (!Number.isFinite(fromT) || !Number.isFinite(toT)) {
-      toast.error("Invalid cargo readiness date/time");
+    const parsedNumberOfContainers = Number(numberOfContainers);
+    const parsedCargoWeight = Number(cargoWeight);
+
+    if (
+      !Number.isFinite(parsedNumberOfContainers) ||
+      parsedNumberOfContainers <= 0
+    ) {
+      toast.error("Number of Containers must be greater than 0");
       return;
     }
-    if (toT < fromT) {
+
+    if (!Number.isFinite(parsedCargoWeight) || parsedCargoWeight <= 0) {
+      toast.error("Cargo Weight must be greater than 0");
+      return;
+    }
+
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(cargoReadinessFrom) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(cargoReadinessTo)
+    ) {
+      toast.error("Invalid cargo readiness date");
+      return;
+    }
+
+    if (cargoReadinessTo < cargoReadinessFrom) {
       toast.error("Cargo Readiness To cannot be before From");
       return;
     }
@@ -457,8 +475,8 @@ const RFQList: React.FC = () => {
       portOfDestination,
       incoterms,
       containerType,
-      numberOfContainers,
-      cargoWeight,
+      numberOfContainers: parsedNumberOfContainers,
+      cargoWeight: parsedCargoWeight,
 
       // ✅ Send separately (backend expects these)
       cargoReadinessFrom,
@@ -477,8 +495,8 @@ const RFQList: React.FC = () => {
 
     // Reset form
     setMaterialPONumber("");
-    setNumberOfContainers(1);
-    setCargoWeight(1);
+    setNumberOfContainers("");
+    setCargoWeight("");
     setCargoReadinessFrom("");
     setCargoReadinessTo("");
     setIncoterms("");
@@ -710,10 +728,9 @@ const RFQList: React.FC = () => {
                     id="numberOfContainers"
                     type="number"
                     min="1"
+                    placeholder="Enter number of containers"
                     value={numberOfContainers}
-                    onChange={(e) =>
-                      setNumberOfContainers(parseInt(e.target.value) || 1)
-                    }
+                    onChange={(e) => setNumberOfContainers(e.target.value)}
                     required
                   />
                 </div>
@@ -727,10 +744,9 @@ const RFQList: React.FC = () => {
                     type="number"
                     min="0.1"
                     step="0.1"
+                    placeholder="Enter cargo weight"
                     value={cargoWeight}
-                    onChange={(e) =>
-                      setCargoWeight(parseFloat(e.target.value) || 0.1)
-                    }
+                    onChange={(e) => setCargoWeight(e.target.value)}
                     required
                   />
                 </div>
@@ -748,7 +764,7 @@ const RFQList: React.FC = () => {
                       </Label>
                       <Input
                         id="cargoReadinessFrom"
-                        type="datetime-local"
+                        type="date"
                         value={cargoReadinessFrom}
                         onChange={(e) => setCargoReadinessFrom(e.target.value)}
                         required
@@ -764,7 +780,7 @@ const RFQList: React.FC = () => {
                       </Label>
                       <Input
                         id="cargoReadinessTo"
-                        type="datetime-local"
+                        type="date"
                         value={cargoReadinessTo}
                         onChange={(e) => setCargoReadinessTo(e.target.value)}
                         required
@@ -776,7 +792,7 @@ const RFQList: React.FC = () => {
 
               <div className="space-y-2">
                 <Label htmlFor="description">
-                  Description (Optional) — you can paste images here
+                  Description (Optional): you can paste images here
                 </Label>
 
                 {/* Keep description as text; pasted images go into attachments automatically */}

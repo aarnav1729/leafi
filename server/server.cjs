@@ -251,7 +251,7 @@ const dbConfig = {
   password: process.env.DB_PASSWORD || "V@aN3#@VaN",
   server: process.env.DB_SERVER || "10.0.50.17",
   port: Number(process.env.DB_PORT || 1433),
-  database: process.env.DB_NAME || "leafinbound",
+  database: process.env.DB_NAME || "leafidev",
   // --- timeouts (ms) ---
   requestTimeout: Number(process.env.DB_REQUEST_TIMEOUT || 100000),
   connectionTimeout: Number(process.env.DB_CONNECTION_TIMEOUT || 10000000),
@@ -268,10 +268,84 @@ const dbConfig = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Exchange-rate API
+// Frankfurter is a free ECB-backed API with no key requirement.
+// We keep a cached server-side rate so the frontend and quote flows
+// continue to use the same /api/rate/usdinr contract without quota issues.
 // ─────────────────────────────────────────────────────────────────────────────
-const EXCHANGE_API_KEY =
-  process.env.EXCHANGE_API_KEY || "d2406e1855e3251be1c691b4";
-const EXCHANGE_URL = `https://v6.exchangerate-api.com/v6/${EXCHANGE_API_KEY}/pair/USD/INR`;
+const USD_INR_FALLBACK_RATE = Number(process.env.USD_INR_FALLBACK_RATE || 75);
+const USD_INR_RATE_URL =
+  process.env.USD_INR_RATE_URL ||
+  "https://api.frankfurter.app/latest?from=USD&to=INR";
+const USD_INR_CACHE_TTL_MS = Number(
+  process.env.USD_INR_CACHE_TTL_MS || 60 * 60 * 1000
+);
+let usdInrRateCache = {
+  rate: USD_INR_FALLBACK_RATE,
+  asOf: null,
+  fetchedAt: 0,
+  source: "fallback",
+};
+
+async function getUsdToInrRate({ forceRefresh = false } = {}) {
+  const now = Date.now();
+  const hasFreshCache =
+    !forceRefresh &&
+    usdInrRateCache.fetchedAt > 0 &&
+    now - usdInrRateCache.fetchedAt < USD_INR_CACHE_TTL_MS &&
+    Number.isFinite(usdInrRateCache.rate) &&
+    usdInrRateCache.rate > 0;
+
+  if (hasFreshCache) {
+    return {
+      ...usdInrRateCache,
+      cached: true,
+    };
+  }
+
+  try {
+    const resp = await axios.get(USD_INR_RATE_URL, {
+      timeout: 8000,
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    const rate = Number(resp.data?.rates?.INR);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      throw new Error("Invalid USD/INR rate received");
+    }
+
+    usdInrRateCache = {
+      rate,
+      asOf: resp.data?.date || null,
+      fetchedAt: now,
+      source: "frankfurter",
+    };
+
+    return {
+      ...usdInrRateCache,
+      cached: false,
+    };
+  } catch (err) {
+    console.error(
+      "[FX] USD/INR lookup failed, using cached/fallback rate:",
+      err?.message || err
+    );
+
+    const fallbackRate =
+      Number.isFinite(usdInrRateCache.rate) && usdInrRateCache.rate > 0
+        ? usdInrRateCache.rate
+        : USD_INR_FALLBACK_RATE;
+
+    return {
+      rate: fallbackRate,
+      asOf: usdInrRateCache.asOf || null,
+      fetchedAt: usdInrRateCache.fetchedAt || now,
+      source: usdInrRateCache.fetchedAt ? usdInrRateCache.source : "fallback",
+      cached: true,
+    };
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Graph creds (env override allowed)
@@ -2375,26 +2449,134 @@ function formatUsd(value) {
   return Number.isFinite(n) ? `${n.toFixed(2)} USD` : "—";
 }
 
-function buildQuoteBreakdownHtml(quote) {
-  return `
-    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
-      <tr style="background:#f8fafc;">
-        <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Field</th>
-        <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Value</th>
+function buildReportDigestQuoteTable(quoteRows, scheme) {
+  const isHome = scheme === "home";
+  const title = isHome ? "HOME Quotes" : "MOOWR Quotes";
+  const allocatedField = isHome ? "home" : "moowr";
+  const totalValueKey = isHome ? "homeTotal" : "mooWRTotal";
+  const chargeValueKey = isHome ? "chaChargesHome" : "chaChargesMOOWR";
+  const chargeLabel = isHome ? "CHA HOME" : "CHA MOOWR";
+  const colSpan = isHome ? 10 : 11;
+
+  const rows = quoteRows.length
+    ? quoteRows
+        .map((quote) => {
+          const allocation = quote.allocation || {
+            home: 0,
+            moowr: 0,
+            reasons: [],
+          };
+          const allocatedQty = Number(allocation[allocatedField] || 0);
+          const isAllocated = allocatedQty > 0;
+          const deviationReasons = Array.from(
+            new Set(quote.deviationReasons || allocation.reasons || [])
+          );
+
+          return `
+            <tr style="${isAllocated ? "background:#ecfdf5;" : ""}">
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">
+                <div style="font-weight:700;color:#0f172a;">${quote.vendorName || "—"}</div>
+                <div style="margin-top:4px;font-size:11px;color:#64748b;">Submitted ${formatDateTimeIst(
+                  quote.createdAt
+                )}</div>
+                <div style="margin-top:4px;font-size:11px;color:#64748b;line-height:1.5;">
+                  Containers: ${quote.numberOfContainers ?? "—"}<br />
+                  Shipping Line: ${quote.shippingLineName || "—"}<br />
+                  Service: ${quote.transshipOrDirect || "—"}
+                </div>
+              </td>
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatUsd(
+                quote.seaFreightPerContainer
+              )}</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
+                quote.houseDeliveryOrderPerBOL
+              )}</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
+                quote.cfsPerContainer
+              )}</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
+                quote.transportationPerContainer
+              )}</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
+                quote.ediChargesPerBOE
+              )}</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
+                quote[chargeValueKey]
+              )}</td>
+              ${
+                isHome
+                  ? ""
+                  : `<td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
+                      quote.mooWRReeWarehousingCharges
+                    )}</td>`
+              }
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;font-weight:700;">${formatMoneyInr(
+                quote[totalValueKey]
+              )}</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${
+                allocatedQty > 0 ? allocatedQty : "—"
+              }</td>
+              <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">
+                <div>
+                  <span style="display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;${
+                    isAllocated
+                      ? "background:#dcfce7;color:#166534;"
+                      : "background:#f8fafc;color:#475569;border:1px solid #e2e8f0;"
+                  }">
+                    ${isAllocated ? "Allocated" : "Quoted"}
+                  </span>
+                  ${
+                    deviationReasons.length
+                      ? `<span style="display:inline-block;margin-left:6px;padding:3px 8px;border-radius:999px;background:#fee2e2;color:#b91c1c;font-size:11px;font-weight:700;">Deviation</span>`
+                      : ""
+                  }
+                </div>
+                ${
+                  deviationReasons.length
+                    ? `<div style="margin-top:6px;color:#991b1b;font-size:11px;line-height:1.5;">${deviationReasons.join(
+                        " | "
+                      )}</div>`
+                    : `<div style="margin-top:6px;color:#64748b;font-size:11px;">—</div>`
+                }
+              </td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `
+      <tr>
+        <td colspan="${colSpan}" style="padding:10px;color:#64748b;">No quotes received for this RFQ.</td>
       </tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Shipping Line</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${quote.shippingLineName || "—"}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Quoted Containers</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${quote.numberOfContainers ?? "—"}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Sea Freight</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatUsd(quote.seaFreightPerContainer)}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">HDO / BOL</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.houseDeliveryOrderPerBOL)}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">CFS</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.cfsPerContainer)}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Transportation</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.transportationPerContainer)}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">EDI / BOE</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.ediChargesPerBOE)}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">CHA HOME</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.chaChargesHome)}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">CHA MOOWR</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.chaChargesMOOWR)}</td></tr>
-      <tr><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">Re-warehousing</td><td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${formatMoneyInr(quote.mooWRReeWarehousingCharges)}</td></tr>
-      <tr style="background:#fafafa;"><td style="padding:8px 10px;font-weight:700;">HOME Total</td><td style="padding:8px 10px;font-weight:700;">${formatMoneyInr(quote.homeTotal)}</td></tr>
-      <tr style="background:#fafafa;"><td style="padding:8px 10px;font-weight:700;">MOOWR Total</td><td style="padding:8px 10px;font-weight:700;">${formatMoneyInr(quote.mooWRTotal)}</td></tr>
-    </table>
+    `;
+
+  return `
+    <div style="margin-top:16px;">
+      <div style="font-size:13px;font-weight:800;color:#0f172a;margin-bottom:10px;">${title}</div>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+        <tr style="background:#f8fafc;">
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Vendor / Quote Meta</th>
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Sea Freight</th>
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">HDO / BOL</th>
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">CFS</th>
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Transportation</th>
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">EDI / BOE</th>
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">${chargeLabel}</th>
+          ${
+            isHome
+              ? ""
+              : `<th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Re-warehousing</th>`
+          }
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">${
+            isHome ? "HOME Total" : "MOOWR Total"
+          }</th>
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Allocated ${
+            isHome ? "HOME" : "MOOWR"
+          }</th>
+          <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Status / Reason</th>
+        </tr>
+        ${rows}
+      </table>
+    </div>
   `;
 }
 
@@ -2403,62 +2585,6 @@ function reportDigestEmailTemplate({ title, subtitle, dayGroups, generatedAt }) 
     const rfq = entry.rfq;
     const quoteRows = entry.quoteRows || [];
     const allocationSummary = entry.allocationSummary || [];
-    const quoteTableRows = quoteRows.length
-      ? quoteRows
-          .map(
-            (quote) => `
-          <tr>
-            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">
-              <div style="font-weight:700;color:#0f172a;">${quote.vendorName || "—"}</div>
-              <div style="font-size:12px;color:#64748b;">Submitted ${formatDateTimeIst(
-                quote.createdAt
-              )}</div>
-            </td>
-            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
-              quote.homeTotal
-            )}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${formatMoneyInr(
-              quote.mooWRTotal
-            )}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">${buildQuoteBreakdownHtml(
-              quote
-            )}</td>
-          </tr>
-        `
-          )
-          .join("")
-      : `
-        <tr>
-          <td colspan="4" style="padding:10px;color:#64748b;">No quotes received for this RFQ.</td>
-        </tr>
-      `;
-
-    const allocationRows = allocationSummary.length
-      ? allocationSummary
-          .map(
-            (allocation) => `
-          <tr>
-            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${allocation.vendorName}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${allocation.home}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${allocation.moowr}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">
-              ${
-                allocation.reasons.length
-                  ? `<span style="display:inline-block;padding:3px 8px;border-radius:999px;background:#fee2e2;color:#b91c1c;font-size:12px;font-weight:700;">Deviation</span><div style="margin-top:6px;color:#991b1b;font-size:12px;">${allocation.reasons.join(
-                      " | "
-                    )}</div>`
-                  : `<span style="color:#64748b;">—</span>`
-              }
-            </td>
-          </tr>
-        `
-          )
-          .join("")
-      : `
-        <tr>
-          <td colspan="4" style="padding:10px;color:#64748b;">No allocation recorded for this RFQ.</td>
-        </tr>
-      `;
 
     return `
       <div style="margin-top:18px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#ffffff;">
@@ -2470,30 +2596,16 @@ function reportDigestEmailTemplate({ title, subtitle, dayGroups, generatedAt }) 
       rfq.portOfLoading || "—"
     } to ${rfq.portOfDestination || "—"} | Status: ${rfq.status || "—"}
           </div>
+          <div style="margin-top:8px;font-size:12px;color:#475569;line-height:1.7;">
+            Quotes Received: ${quoteRows.length} | Allocated Vendors: ${allocationSummary.length} | Containers: ${
+      rfq.numberOfContainers ?? "—"
+    }
+          </div>
         </div>
 
         <div style="padding:16px 18px;">
-          <div style="font-size:13px;font-weight:800;color:#0f172a;margin-bottom:10px;">Quotes Received</div>
-          <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
-            <tr style="background:#f8fafc;">
-              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Vendor</th>
-              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">HOME Total</th>
-              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">MOOWR Total</th>
-              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Breakdown</th>
-            </tr>
-            ${quoteTableRows}
-          </table>
-
-          <div style="font-size:13px;font-weight:800;color:#0f172a;margin:16px 0 10px;">Allocated Quote Details</div>
-          <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
-            <tr style="background:#f8fafc;">
-              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Vendor</th>
-              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">HOME</th>
-              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">MOOWR</th>
-              <th align="left" style="padding:8px 10px;border-bottom:1px solid #e5e7eb;color:#334155;font-size:12px;">Deviation / Reason</th>
-            </tr>
-            ${allocationRows}
-          </table>
+          ${buildReportDigestQuoteTable(quoteRows, "home")}
+          ${buildReportDigestQuoteTable(quoteRows, "moowr")}
         </div>
       </div>
     `;
@@ -2615,6 +2727,37 @@ async function getReportDigestDayGroups(pool, dateKeyFrom, dateKeyTo) {
     const rfqQuotes = quotes.filter((q) => q.rfqId === rfq.id);
     const rfqAllocations = allocations.filter((a) => a.rfqId === rfq.id);
 
+    const allocationByQuoteId = rfqAllocations.reduce((map, allocation) => {
+      const existing = map.get(allocation.quoteId) || {
+        home: 0,
+        moowr: 0,
+        reasons: [],
+        vendorName: allocation.vendorName,
+      };
+      existing.home += Number(allocation.containersAllottedHome || 0);
+      existing.moowr += Number(allocation.containersAllottedMOOWR || 0);
+      if (allocation.reason && String(allocation.reason).trim()) {
+        existing.reasons.push(String(allocation.reason).trim());
+      }
+      map.set(allocation.quoteId, existing);
+      return map;
+    }, new Map());
+
+    const quoteRows = rfqQuotes.map((quote) => {
+      const allocation = allocationByQuoteId.get(quote.id) || {
+        home: 0,
+        moowr: 0,
+        reasons: [],
+        vendorName: quote.vendorName,
+      };
+
+      return {
+        ...quote,
+        allocation,
+        deviationReasons: Array.from(new Set(allocation.reasons || [])),
+      };
+    });
+
     const allocationSummary = Array.from(
       rfqAllocations.reduce((map, allocation) => {
         const existing = map.get(allocation.vendorName) || {
@@ -2640,7 +2783,7 @@ async function getReportDigestDayGroups(pool, dateKeyFrom, dateKeyTo) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push({
       rfq,
-      quoteRows: rfqQuotes,
+      quoteRows,
       allocationSummary,
     });
   }
@@ -4337,14 +4480,7 @@ app.post("/api/quotes", authenticate, async (req, res) => {
   try {
     const pool = await getPool();
 
-    // fetch live USD→INR
-    let USD_TO_INR = 75;
-    try {
-      const rateRes = await axios.get(EXCHANGE_URL);
-      USD_TO_INR = Number(rateRes.data?.conversion_rate || 75);
-    } catch (e) {
-      console.error("[FX] Exchange API failed, using fallback 75:", e.message);
-    }
+    const { rate: USD_TO_INR } = await getUsdToInrRate();
 
     const seaInINR = Number(d.seaFreightPerContainer || 0) * USD_TO_INR;
     const homeTotal =
@@ -4659,13 +4795,8 @@ app.put("/api/quotes/:quoteId/logistics-pricing", authenticate, async (req, res)
 
     let usdToInr = Number(body.usdToInr);
     if (!Number.isFinite(usdToInr) || usdToInr <= 0) {
-      usdToInr = 75;
-      try {
-        const rateRes = await axios.get(EXCHANGE_URL);
-        usdToInr = Number(rateRes.data?.conversion_rate || 75);
-      } catch (e) {
-        console.error("[FX] Exchange API failed, using fallback 75:", e.message);
-      }
+      const fx = await getUsdToInrRate();
+      usdToInr = fx.rate;
     }
 
     const num = (incoming, fallback) => {
@@ -5860,11 +5991,15 @@ app.post(
 // Exchange rate endpoint
 app.get("/api/rate/usdinr", async (req, res) => {
   try {
-    const resp = await axios.get(EXCHANGE_URL);
-    res.json({ rate: Number(resp.data?.conversion_rate || 75) });
+    const fx = await getUsdToInrRate();
+    res.json({
+      rate: fx.rate,
+      asOf: fx.asOf,
+      source: fx.source,
+    });
   } catch (err) {
     console.error("[API] Exchange API error, fallback to 75:", err.message);
-    res.json({ rate: 75 });
+    res.json({ rate: USD_INR_FALLBACK_RATE, source: "fallback" });
   }
 });
 

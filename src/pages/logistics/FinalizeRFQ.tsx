@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
@@ -85,6 +85,7 @@ const fmt = {
 const FinalizeRFQ: React.FC = () => {
   const { rfqId } = useParams<{ rfqId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const {
     getRFQById,
     getQuotesByRFQId,
@@ -96,6 +97,9 @@ const FinalizeRFQ: React.FC = () => {
 
   const rfq = getRFQById(rfqId || "");
   const quotes = getQuotesByRFQId(rfqId || "");
+  const backPath = location.pathname.startsWith("/admin")
+    ? "/admin/rfqs"
+    : "/logistics/rfqs";
 
   // display-only FX (used for showing Sea Freight INR; logistics price edits also use this FX)
   const [usdToInr, setUsdToInr] = useState<number>(75);
@@ -669,7 +673,7 @@ const FinalizeRFQ: React.FC = () => {
       return;
     }
 
-    navigate("/app");
+    navigate(backPath);
   };
 
   const isAllocEqualToAuto = useMemo(() => {
@@ -728,19 +732,19 @@ const FinalizeRFQ: React.FC = () => {
 
   if (!rfq) {
     return (
-      <div className="text-center py-20">
+        <div className="text-center py-20">
         <h2 className="text-2xl font-bold mb-4">RFQ not found</h2>
-        <Button onClick={() => navigate("/app")}>Return to Dashboard</Button>
+        <Button onClick={() => navigate(backPath)}>Return to RFQs</Button>
       </div>
     );
   }
   if (!quotes.length) {
     return (
-      <div className="text-center py-20">
+        <div className="text-center py-20">
         <h2 className="text-2xl font-bold mb-4">
           No quotes submitted for this RFQ yet
         </h2>
-        <Button onClick={() => navigate("/app")}>Back</Button>
+        <Button onClick={() => navigate(backPath)}>Back to RFQs</Button>
       </div>
     );
   }
@@ -1608,7 +1612,7 @@ const FinalizeRFQ: React.FC = () => {
         <h1 className="text-2xl font-bold">Finalize RFQ #{rfq.rfqNumber}</h1>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => navigate("/app")}>
+          <Button variant="outline" onClick={() => navigate(backPath)}>
             Back
           </Button>
         </div>
