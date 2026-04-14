@@ -290,6 +290,8 @@ const RFQList: React.FC = () => {
     if (!globalQuery.trim()) return true;
     const q = norm(globalQuery);
 
+    const rd = splitReadiness((rfq as any).cargoReadinessDate);
+
     const hay = [
       (rfq as any).rfqNumber,
       (rfq as any).itemDescription,
@@ -302,7 +304,9 @@ const RFQList: React.FC = () => {
       (rfq as any).containerType,
       (rfq as any).numberOfContainers,
       (rfq as any).cargoWeight,
-      formatDateKey((rfq as any).cargoReadinessDate),
+      formatDateKey(rd.from),
+      formatDateKey(rd.to),
+      formatDateKey((rfq as any).createdAt),
       (rfq as any).status,
     ]
       .map(norm)
@@ -1066,9 +1070,9 @@ const RFQList: React.FC = () => {
                     <button
                       type="button"
                       className="font-semibold underline-offset-2 hover:underline"
-                      onClick={() => toggleSort("containerType")}
+                      onClick={() => toggleSort("incoterms")}
                     >
-                      Container Type {sortIndicator("containerType")}
+                      Incoterms {sortIndicator("incoterms")}
                     </button>
                   </th>
 

@@ -3792,23 +3792,27 @@ app.get(
     try {
       const pool = await getPool();
 
-      // Top 3 LOWEST seaFreightPerContainer (USD) per (Port of Loading, Container Type)
+      // Top 3 LOWEST seaFreightPerContainer (USD) per (Port of Loading, Container Type).
+      // We first reduce to each vendor's LATEST quote per (vendor, port, container),
+      // so stale cheap quotes from old RFQs don't dominate once a vendor has requoted.
+      // The "quoteDate" returned is the createdAt of that latest quote — this is why
+      // a port may still show an older date if no vendor has quoted it more recently.
       const q = await pool.request().query(`
-        ;WITH X AS (
+        ;WITH LatestPerVendor AS (
           SELECT
             r.portOfLoading AS portOfLoading,
             COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
             CAST(r.numberOfContainers AS INT) AS containersQty,
             CAST(q.seaFreightPerContainer AS FLOAT) AS oceanFreightUsd,
             q.createdAt AS quoteDate,
+            q.vendorName AS vendorName,
             ROW_NUMBER() OVER (
               PARTITION BY
+                q.vendorName,
                 r.portOfLoading,
                 COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType)
-              ORDER BY
-                q.seaFreightPerContainer ASC,
-                q.createdAt DESC
-            ) AS rn
+              ORDER BY q.createdAt DESC
+            ) AS rnLatest
           FROM dbo.Quotes q
           INNER JOIN dbo.RFQs r ON r.id = q.rfqId
           WHERE
@@ -3816,6 +3820,21 @@ app.get(
             AND COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) IS NOT NULL
             AND q.seaFreightPerContainer IS NOT NULL
             AND q.seaFreightPerContainer > 0
+        ),
+        Ranked AS (
+          SELECT
+            portOfLoading,
+            containerType,
+            containersQty,
+            oceanFreightUsd,
+            quoteDate,
+            vendorName,
+            ROW_NUMBER() OVER (
+              PARTITION BY portOfLoading, containerType
+              ORDER BY oceanFreightUsd ASC, quoteDate DESC
+            ) AS rn
+          FROM LatestPerVendor
+          WHERE rnLatest = 1
         )
         SELECT
           portOfLoading,
@@ -3823,7 +3842,7 @@ app.get(
           containersQty,
           oceanFreightUsd,
           quoteDate
-        FROM X
+        FROM Ranked
         WHERE rn <= 3
         ORDER BY portOfLoading ASC, containerType ASC, oceanFreightUsd ASC, quoteDate DESC;
       `);

@@ -92,6 +92,7 @@ export default function ReportsPage() {
   const [containerFilter, setContainerFilter] = useState<string>("");
   const [legacyReportOpen, setLegacyReportOpen] = useState(false);
   const [activityReportOpen, setActivityReportOpen] = useState(false);
+  const [vendorWinningsOpen, setVendorWinningsOpen] = useState(false);
 
   const now = useMemo(() => new Date(), []);
   const defaultFrom = useMemo(() => {
@@ -346,6 +347,89 @@ export default function ReportsPage() {
     }));
   }, [allocations, isWithinRange, quotes, rfqs]);
 
+  const vendorWinnings = useMemo(() => {
+    const quoteById = new Map<string, any>();
+    for (const q of quotes) quoteById.set(q.id, q);
+
+    const rfqById = new Map<string, any>();
+    for (const r of rfqs) rfqById.set(r.id, r);
+
+    // vendor -> monthKey ("YYYY-MM") -> { containers, amount, label }
+    const byVendor = new Map<
+      string,
+      Map<string, { containers: number; amount: number; label: string }>
+    >();
+
+    const monthKeyFromDate = (d: string | Date | null | undefined) => {
+      if (!d) return { key: "", label: "" };
+      const dt = new Date(d);
+      if (Number.isNaN(dt.getTime())) return { key: "", label: "" };
+      const yyyy = dt.getFullYear();
+      const mm = String(dt.getMonth() + 1).padStart(2, "0");
+      const key = `${yyyy}-${mm}`;
+      const label = dt.toLocaleDateString("en-IN", {
+        month: "short",
+        year: "numeric",
+      });
+      return { key, label };
+    };
+
+    for (const allocation of allocations) {
+      const quote = quoteById.get(allocation.quoteId);
+      const rfq = rfqById.get(allocation.rfqId);
+
+      const whenSource =
+        (allocation as any).createdAt || quote?.createdAt || rfq?.createdAt;
+
+      if (!isWithinRange(whenSource)) continue;
+
+      const home = Number((allocation as any).containersAllottedHome || 0);
+      const moowr = Number((allocation as any).containersAllottedMOOWR || 0);
+      const containers = home + moowr;
+      if (containers <= 0) continue;
+
+      const homeTotal = Number(quote?.homeTotal || 0);
+      const moowrTotal = Number(quote?.mooWRTotal || 0);
+      const amount = home * homeTotal + moowr * moowrTotal;
+
+      const { key, label } = monthKeyFromDate(whenSource);
+      if (!key) continue;
+
+      const vendorName = String(allocation.vendorName || "").trim() || "—";
+
+      if (!byVendor.has(vendorName)) byVendor.set(vendorName, new Map());
+      const monthMap = byVendor.get(vendorName)!;
+      const existing = monthMap.get(key) || { containers: 0, amount: 0, label };
+      existing.containers += containers;
+      existing.amount += amount;
+      existing.label = label;
+      monthMap.set(key, existing);
+    }
+
+    const vendors = Array.from(byVendor.entries())
+      .map(([vendorName, monthMap]) => {
+        const months = Array.from(monthMap.entries())
+          .map(([key, value]) => ({ key, ...value }))
+          .sort((a, b) => a.key.localeCompare(b.key));
+        const totalContainers = months.reduce((s, m) => s + m.containers, 0);
+        const totalAmount = months.reduce((s, m) => s + m.amount, 0);
+        return { vendorName, months, totalContainers, totalAmount };
+      })
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+
+    const monthsSet = new Set<string>();
+    for (const v of vendors) for (const m of v.months) monthsSet.add(m.key);
+    const monthKeys = Array.from(monthsSet).sort();
+
+    const grandContainers = vendors.reduce(
+      (s, v) => s + v.totalContainers,
+      0
+    );
+    const grandAmount = vendors.reduce((s, v) => s + v.totalAmount, 0);
+
+    return { vendors, monthKeys, grandContainers, grandAmount };
+  }, [allocations, quotes, rfqs, isWithinRange]);
+
   const titleRight = useMemo(() => {
     if (loading) return "Loading…";
     if (err) return "Error";
@@ -429,7 +513,9 @@ export default function ReportsPage() {
               Ocean Freight Top 3 Report
             </div>
             <p className="text-sm text-muted-foreground">
-              Existing report, now collapsed by default.
+              Top 3 lowest ocean-freight rates per (Port of Loading, Container
+              Type). Only each vendor's latest quote per combination is
+              considered — Date of Quote is the createdAt of that latest quote.
             </p>
           </div>
 
@@ -834,6 +920,111 @@ export default function ReportsPage() {
                           </div>
                         )
                       )}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              ))
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+
+      <Collapsible
+        open={vendorWinningsOpen}
+        onOpenChange={setVendorWinningsOpen}
+        className="rounded-xl border bg-background"
+      >
+        <div className="flex flex-col gap-4 border-b px-4 py-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="text-lg font-semibold">Vendor Winnings Report</div>
+            <p className="text-sm text-muted-foreground">
+              Containers allocated and amount won by each vendor, broken down
+              month over month.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-muted-foreground">
+              {vendorWinnings.vendors.length} vendor(s) •{" "}
+              {vendorWinnings.grandContainers} container(s) •{" "}
+              {fmtMoney(vendorWinnings.grandAmount)}
+            </div>
+            <CollapsibleTrigger asChild>
+              <Button variant="outline" size="sm">
+                {vendorWinningsOpen ? "Hide report" : "Show report"}
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </CollapsibleTrigger>
+          </div>
+        </div>
+
+        <CollapsibleContent>
+          <div className="space-y-4 p-4">
+            {vendorWinnings.vendors.length === 0 ? (
+              <div className="rounded-xl border bg-background p-6 text-sm text-muted-foreground">
+                No vendor winnings found for the selected time range.
+              </div>
+            ) : (
+              vendorWinnings.vendors.map((vendor) => (
+                <Collapsible
+                  key={vendor.vendorName}
+                  defaultOpen={false}
+                  className="rounded-xl border bg-background"
+                >
+                  <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+                    <div>
+                      <div className="text-lg font-semibold">
+                        {vendor.vendorName}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {vendor.totalContainers} container(s) •{" "}
+                        {fmtMoney(vendor.totalAmount)} •{" "}
+                        {vendor.months.length} month(s)
+                      </div>
+                    </div>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="outline" size="sm">
+                        View monthly breakdown
+                        <ChevronDown className="h-4 w-4" />
+                      </Button>
+                    </CollapsibleTrigger>
+                  </div>
+
+                  <CollapsibleContent>
+                    <div className="overflow-auto">
+                      <table className="w-full text-xs sm:text-sm">
+                        <thead className="bg-muted/40">
+                          <tr className="text-left">
+                            <th className="p-2 sm:p-3 font-semibold">Month</th>
+                            <th className="p-2 sm:p-3 font-semibold">
+                              Containers Allocated
+                            </th>
+                            <th className="p-2 sm:p-3 font-semibold">
+                              Amount Won
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vendor.months.map((m) => (
+                            <tr key={m.key} className="border-t">
+                              <td className="p-2 sm:p-3">{m.label}</td>
+                              <td className="p-2 sm:p-3">{m.containers}</td>
+                              <td className="p-2 sm:p-3">
+                                {fmtMoney(m.amount)}
+                              </td>
+                            </tr>
+                          ))}
+                          <tr className="border-t bg-muted/20 font-semibold">
+                            <td className="p-2 sm:p-3">Total</td>
+                            <td className="p-2 sm:p-3">
+                              {vendor.totalContainers}
+                            </td>
+                            <td className="p-2 sm:p-3">
+                              {fmtMoney(vendor.totalAmount)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
                   </CollapsibleContent>
                 </Collapsible>

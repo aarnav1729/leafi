@@ -52,6 +52,44 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type AnyRecord = Record<string, any>;
 
+/**
+ * Compute a YAxis width and tickFormatter for a vertical bar chart so
+ * long category labels (vendor names, port names, etc.) are not clipped.
+ * Labels longer than `maxChars` are truncated with an ellipsis; the full
+ * label remains in the data so tooltips still show it.
+ */
+function getCategoryAxisProps(
+  data: Array<Record<string, any>>,
+  key: string,
+  options: { minWidth?: number; maxWidth?: number; maxChars?: number } = {}
+) {
+  const minWidth = options.minWidth ?? 140;
+  const maxWidth = options.maxWidth ?? 260;
+  const maxChars = options.maxChars ?? 34;
+  // Approximate pixel-per-character at 12px sans-serif.
+  const pxPerChar = 6.8;
+
+  let longest = 0;
+  for (const row of data || []) {
+    const v = String(row?.[key] ?? "");
+    const visible = Math.min(v.length, maxChars);
+    if (visible > longest) longest = visible;
+  }
+
+  const width = Math.max(
+    minWidth,
+    Math.min(maxWidth, Math.ceil(longest * pxPerChar) + 16)
+  );
+
+  const tickFormatter = (v: any) => {
+    const s = String(v ?? "");
+    if (s.length <= maxChars) return s;
+    return `${s.slice(0, maxChars - 1)}…`;
+  };
+
+  return { width, tickFormatter };
+}
+
 const AdminDashboard = () => {
   const { rfqs, quotes, allocations, refreshKey } = useData();
 
@@ -1628,8 +1666,8 @@ const AdminDashboard = () => {
                       <YAxis
                         type="category"
                         dataKey="name"
-                        width={160}
                         tick={{ fontSize: 12 }}
+                        {...getCategoryAxisProps(vendorParticipation, "name")}
                       />
                       <ChartTooltip content={<ChartTooltipContent />} />
                       <Legend />
@@ -1663,8 +1701,8 @@ const AdminDashboard = () => {
                       <YAxis
                         type="category"
                         dataKey="vendor"
-                        width={160}
                         tick={{ fontSize: 12 }}
+                        {...getCategoryAxisProps(vendorWinShare, "vendor")}
                       />
                       <ChartTooltip
                         content={
@@ -1758,8 +1796,8 @@ const AdminDashboard = () => {
                       <YAxis
                         type="category"
                         dataKey="name"
-                        width={160}
                         tick={{ fontSize: 12 }}
+                        {...getCategoryAxisProps(topPortsLoading, "name")}
                       />
                       <ChartTooltip content={<ChartTooltipContent />} />
                       <Legend />
@@ -1797,8 +1835,8 @@ const AdminDashboard = () => {
                       <YAxis
                         type="category"
                         dataKey="name"
-                        width={160}
                         tick={{ fontSize: 12 }}
+                        {...getCategoryAxisProps(topPortsDestination, "name")}
                       />
                       <ChartTooltip content={<ChartTooltipContent />} />
                       <Legend />
