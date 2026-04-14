@@ -251,7 +251,7 @@ const dbConfig = {
   password: process.env.DB_PASSWORD || "V@aN3#@VaN",
   server: process.env.DB_SERVER || "10.0.50.17",
   port: Number(process.env.DB_PORT || 1433),
-  database: process.env.DB_NAME || "leafidev",
+  database: process.env.DB_NAME || "leafinbound",
   // --- timeouts (ms) ---
   requestTimeout: Number(process.env.DB_REQUEST_TIMEOUT || 100000),
   connectionTimeout: Number(process.env.DB_CONNECTION_TIMEOUT || 10000000),
