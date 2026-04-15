@@ -27,6 +27,7 @@ import VendorAllottedRFQs from "./pages/vendor/AllottedRFQs";
 import AdminDashboard from "./pages/admin/Dashboard";
 import Users from "./pages/admin/Users";
 import ReportsPage from "./pages/admin/ReportsPage";
+import ChatPage from "./pages/admin/ChatPage";
 // App landing (optional): you had Index earlier, but /app is better as redirect.
 // If you still want Index tiles, keep it and show for all roles; otherwise remove.
 // import Index from "./pages/Index";
@@ -83,6 +84,7 @@ const App = () => (
                 />
                 <Route path="/admin/users" element={<Users />} />
                 <Route path="/admin/reports" element={<ReportsPage />} />
+                <Route path="/admin/chat" element={<ChatPage />} />
               </Route>
 
               {/* Catch-all */}

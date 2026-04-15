@@ -166,7 +166,7 @@ const AdminDashboard = () => {
   }, [refreshKey]);
 
   const [rangePreset, setRangePreset] = React.useState<
-    "7d" | "30d" | "90d" | "ytd" | "all" | "custom"
+    "7d" | "30d" | "45d" | "60d" | "90d" | "ytd" | "all" | "custom"
   >("30d");
   const [from, setFrom] = React.useState<string>(fmt.dayKey(defaultFrom));
   const [to, setTo] = React.useState<string>(fmt.dayKey(now));
@@ -309,6 +309,8 @@ const AdminDashboard = () => {
 
       if (preset === "7d") start.setDate(end.getDate() - 7);
       else if (preset === "30d") start.setDate(end.getDate() - 30);
+      else if (preset === "45d") start.setDate(end.getDate() - 45);
+      else if (preset === "60d") start.setDate(end.getDate() - 60);
       else if (preset === "90d") start.setDate(end.getDate() - 90);
       else if (preset === "ytd") {
         start.setMonth(0, 1);
@@ -1101,11 +1103,38 @@ const AdminDashboard = () => {
     if (rangePreset !== "custom") {
       if (rangePreset === "7d") return "Last 7 days";
       if (rangePreset === "30d") return "Last 30 days";
+      if (rangePreset === "45d") return "Last 45 days";
+      if (rangePreset === "60d") return "Last 60 days";
       if (rangePreset === "90d") return "Last 90 days";
       if (rangePreset === "ytd") return "Year to date";
     }
     return `${from} → ${to}`;
   }, [rangePreset, from, to]);
+
+  const cxoSignals = React.useMemo(
+    () => [
+      {
+        label: "Allocation Coverage",
+        value:
+          aggregation.requestedContainers > 0
+            ? `${((aggregation.allocatedContainers / aggregation.requestedContainers) * 100).toFixed(1)}%`
+            : "0%",
+      },
+      {
+        label: "Avg Quote Response",
+        value: fmt.humanDays(aggregation.avgQuoteLatencyMs),
+      },
+      {
+        label: "Cost vs Best-Case Gap",
+        value: fmt.money(aggregation.savingsVsLowerBound),
+      },
+      {
+        label: "Active Vendors",
+        value: String(vendorParticipation.length),
+      },
+    ],
+    [aggregation, fmt, vendorParticipation.length]
+  );
 
   const chartConfigCommon = React.useMemo(() => {
     return {
@@ -1146,6 +1175,14 @@ const AdminDashboard = () => {
         </div>
       </div>
 
+      <Tabs defaultValue="overview" className="space-y-4">
+        <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 rounded-xl bg-gradient-to-r from-indigo-500/10 via-violet-500/10 to-fuchsia-500/10 p-1">
+          <TabsTrigger value="overview" className="transition-all data-[state=active]:bg-gradient-to-r data-[state=active]:from-indigo-500 data-[state=active]:to-fuchsia-500 data-[state=active]:text-white">Overview</TabsTrigger>
+          <TabsTrigger value="vendors" className="transition-all data-[state=active]:bg-gradient-to-r data-[state=active]:from-indigo-500 data-[state=active]:to-fuchsia-500 data-[state=active]:text-white">Vendors</TabsTrigger>
+          <TabsTrigger value="ports" className="transition-all data-[state=active]:bg-gradient-to-r data-[state=active]:from-indigo-500 data-[state=active]:to-fuchsia-500 data-[state=active]:text-white">Ports</TabsTrigger>
+          <TabsTrigger value="performance" className="transition-all data-[state=active]:bg-gradient-to-r data-[state=active]:from-indigo-500 data-[state=active]:to-fuchsia-500 data-[state=active]:text-white">Performance</TabsTrigger>
+        </TabsList>
+
       {/* Filters */}
       <Card>
         <CardHeader className="pb-2">
@@ -1167,6 +1204,8 @@ const AdminDashboard = () => {
               <SelectContent>
                 <SelectItem value="7d">Last 7 days</SelectItem>
                 <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="45d">Last 45 days</SelectItem>
+                <SelectItem value="60d">Last 60 days</SelectItem>
                 <SelectItem value="90d">Last 90 days</SelectItem>
                 <SelectItem value="ytd">Year to date</SelectItem>
                 <SelectItem value="all">All time</SelectItem>
@@ -1391,17 +1430,23 @@ const AdminDashboard = () => {
         </Card>
       </div>
 
-      {/* Tabs */}
-      <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="vendors">Vendors</TabsTrigger>
-          <TabsTrigger value="ports">Ports</TabsTrigger>
-          <TabsTrigger value="performance">Performance</TabsTrigger>
-        </TabsList>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {cxoSignals.map((metric) => (
+          <Card key={metric.label} className="border-indigo-500/20 bg-gradient-to-br from-indigo-500/5 via-violet-500/5 to-fuchsia-500/5">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                {metric.label}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-semibold">{metric.value}</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
-        {/* OVERVIEW */}
-        <TabsContent value="overview" className="space-y-6">
+      {/* OVERVIEW */}
+      <TabsContent value="overview" className="space-y-6">
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             {/* Status Pie */}
             <Card>

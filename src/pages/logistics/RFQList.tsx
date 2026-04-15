@@ -166,6 +166,8 @@ const RFQList: React.FC = () => {
     numberOfContainers: "",
     cargoWeight: "",
     cargoReadinessDate: "",
+    createdAt: "",
+    finalizedAt: "",
     status: "",
   });
 
@@ -176,6 +178,7 @@ const RFQList: React.FC = () => {
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [selectedRFQIds, setSelectedRFQIds] = useState<Set<string>>(new Set());
 
   const setFilter = (key: string, value: string) => {
     setColFilters((prev) => ({ ...prev, [key]: value }));
@@ -196,6 +199,8 @@ const RFQList: React.FC = () => {
       numberOfContainers: "",
       cargoWeight: "",
       cargoReadinessDate: "",
+      createdAt: "",
+      finalizedAt: "",
       status: "",
     });
     setSort({ key: "createdAt", dir: "desc" });
@@ -282,7 +287,11 @@ const RFQList: React.FC = () => {
       (!f.cargoWeight ||
         norm((rfq as any).cargoWeight).includes(norm(f.cargoWeight))) &&
       (!f.cargoReadinessDate ||
-        readinessKey.includes(norm(f.cargoReadinessDate)))
+        readinessKey.includes(norm(f.cargoReadinessDate))) &&
+      (!f.createdAt ||
+        formatDateKey((rfq as any).createdAt).includes(norm(f.createdAt))) &&
+      (!f.finalizedAt ||
+        formatDateKey((rfq as any).finalizedAt).includes(norm(f.finalizedAt)))
     );
   };
 
@@ -307,6 +316,7 @@ const RFQList: React.FC = () => {
       formatDateKey(rd.from),
       formatDateKey(rd.to),
       formatDateKey((rfq as any).createdAt),
+      formatDateKey((rfq as any).finalizedAt),
       (rfq as any).status,
     ]
       .map(norm)
@@ -331,7 +341,7 @@ const RFQList: React.FC = () => {
         return Number.isNaN(t) ? 0 : t;
       }
 
-      if (key === "createdAt") {
+      if (key === "createdAt" || key === "finalizedAt") {
         const t = new Date(r[key]).getTime();
         return Number.isNaN(t) ? 0 : t;
       }
@@ -387,6 +397,71 @@ const RFQList: React.FC = () => {
     const start = (safePage - 1) * pageSize;
     return filteredSorted.slice(start, start + pageSize);
   }, [filteredSorted, safePage, pageSize]);
+
+  const toggleSelectAllOnPage = (checked: boolean) => {
+    setSelectedRFQIds((prev) => {
+      const next = new Set(prev);
+      for (const row of paged) {
+        if (checked) next.add(String(row.id));
+        else next.delete(String(row.id));
+      }
+      return next;
+    });
+  };
+
+  const exportRowsToCsv = (rows: RFQ[], fileName: string) => {
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/\"/g, '""')}"`;
+    const csvRows = [
+      [
+        "rfqNumber",
+        "itemDescription",
+        "companyName",
+        "materialPONumber",
+        "supplierName",
+        "portOfLoading",
+        "portOfDestination",
+        "incoterms",
+        "containerType",
+        "numberOfContainers",
+        "cargoWeight",
+        "cargoReadinessFrom",
+        "cargoReadinessTo",
+        "postedDate",
+        "finalizationDate",
+        "status",
+      ].join(","),
+      ...rows.map((r: any) => {
+        const { from: rdFrom, to: rdTo } = splitReadiness(r.cargoReadinessDate);
+        return [
+          r.rfqNumber,
+          r.itemDescription,
+          r.companyName,
+          r.materialPONumber,
+          r.supplierName,
+          r.portOfLoading,
+          r.portOfDestination,
+          r.incoterms || "",
+          r.containerType,
+          r.numberOfContainers,
+          r.cargoWeight,
+          formatDateKey(rdFrom),
+          formatDateKey(rdTo),
+          formatDateKey(r.createdAt),
+          formatDateKey(r.finalizedAt),
+          r.status,
+        ]
+          .map(esc)
+          .join(",");
+      }),
+    ];
+    const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     const fetchLookups = async () => {
@@ -965,6 +1040,26 @@ const RFQList: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => exportRowsToCsv(filteredSorted, "rfqs_filtered.csv")}
+          >
+            Export filtered
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() =>
+              exportRowsToCsv(
+                filteredSorted.filter((r) => selectedRFQIds.has(String(r.id))),
+                "rfqs_selected.csv"
+              )
+            }
+            disabled={selectedRFQIds.size === 0}
+          >
+            Export selected
+          </Button>
           <span className="text-sm text-muted-foreground">
             Showing {total === 0 ? 0 : (safePage - 1) * pageSize + 1}–
             {Math.min(safePage * pageSize, total)} of {total}
@@ -994,6 +1089,12 @@ const RFQList: React.FC = () => {
             <table className="w-full data-table !mx-0 !max-w-none text-[15px] [&_th]:px-3 [&_th]:py-3 [&_td]:px-3 [&_td]:py-3 md:[&_th]:px-4 md:[&_td]:px-4">
               <thead>
                 <tr>
+                  <th className="w-[54px]">
+                    <Checkbox
+                      checked={paged.length > 0 && paged.every((r) => selectedRFQIds.has(String(r.id)))}
+                      onCheckedChange={(v) => toggleSelectAllOnPage(Boolean(v))}
+                    />
+                  </th>
                   <th>Actions</th>
 
                   <th>
@@ -1120,6 +1221,26 @@ const RFQList: React.FC = () => {
                     <button
                       type="button"
                       className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("createdAt")}
+                    >
+                      RFQ Posted Date {sortIndicator("createdAt")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("finalizedAt")}
+                    >
+                      Finalization Date {sortIndicator("finalizedAt")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
                       onClick={() => toggleSort("status")}
                     >
                       Status {sortIndicator("status")}
@@ -1129,6 +1250,7 @@ const RFQList: React.FC = () => {
 
                 {/* Filter row */}
                 <tr>
+                  <th />
                   <th />
 
                   <th>
@@ -1256,6 +1378,24 @@ const RFQList: React.FC = () => {
                   </th>
 
                   <th>
+                    <Input
+                      value={colFilters.createdAt}
+                      onChange={(e) => setFilter("createdAt", e.target.value)}
+                      placeholder="YYYY-MM-DD"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.finalizedAt}
+                      onChange={(e) => setFilter("finalizedAt", e.target.value)}
+                      placeholder="YYYY-MM-DD"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
                     <Select
                       value={colFilters.status || "__ALL__"}
                       onValueChange={(v) =>
@@ -1287,13 +1427,26 @@ const RFQList: React.FC = () => {
               <tbody>
                 {paged.length === 0 ? (
                   <tr>
-                    <td colSpan={14} className="text-center py-4">
+                    <td colSpan={17} className="text-center py-4">
                       No RFQs found. Create your first RFQ!
                     </td>
                   </tr>
                 ) : (
                   paged.map((rfq) => (
                     <tr key={rfq.id}>
+                      <td>
+                        <Checkbox
+                          checked={selectedRFQIds.has(String(rfq.id))}
+                          onCheckedChange={(v) =>
+                            setSelectedRFQIds((prev) => {
+                              const next = new Set(prev);
+                              if (v) next.add(String(rfq.id));
+                              else next.delete(String(rfq.id));
+                              return next;
+                            })
+                          }
+                        />
+                      </td>
                       <td>
                         <div className="flex flex-wrap gap-2">
                           {rfq.status !== "closed" && (
@@ -1352,6 +1505,8 @@ const RFQList: React.FC = () => {
                           return toTxt ? `${fromTxt} → ${toTxt}` : fromTxt;
                         })()}
                       </td>
+                      <td>{formatDateKey((rfq as any).createdAt) || "—"}</td>
+                      <td>{formatDateKey((rfq as any).finalizedAt) || "—"}</td>
 
                       <td>
                         <StatusBadge status={rfq.status} />

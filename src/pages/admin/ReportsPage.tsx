@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useData } from "@/contexts/DataContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,7 @@ type ReportRow = {
   quoteDate: string;
 };
 
-type RangePreset = "7d" | "30d" | "90d" | "ytd" | "all" | "custom";
+type RangePreset = "7d" | "30d" | "45d" | "60d" | "90d" | "ytd" | "all" | "custom";
 
 function fmtUsd(v: number) {
   const n = Number(v);
@@ -104,6 +105,9 @@ export default function ReportsPage() {
   const [rangePreset, setRangePreset] = useState<RangePreset>("30d");
   const [from, setFrom] = useState<string>(dayKey(defaultFrom));
   const [to, setTo] = useState<string>(dayKey(now));
+  const [oceanDateBasis, setOceanDateBasis] = useState<
+    "quote_created_at" | "rfq_created_at" | "rfq_finalized_at"
+  >("quote_created_at");
 
   useEffect(() => {
     let alive = true;
@@ -149,6 +153,8 @@ export default function ReportsPage() {
 
     if (preset === "7d") start.setDate(end.getDate() - 7);
     else if (preset === "30d") start.setDate(end.getDate() - 30);
+    else if (preset === "45d") start.setDate(end.getDate() - 45);
+    else if (preset === "60d") start.setDate(end.getDate() - 60);
     else if (preset === "90d") start.setDate(end.getDate() - 90);
     else if (preset === "ytd") {
       start.setMonth(0, 1);
@@ -226,6 +232,81 @@ export default function ReportsPage() {
       return portOk && contOk;
     });
   }, [rows, portFilter, containerFilter]);
+
+  const oceanFreightTop3WithTrace = useMemo(() => {
+    const pickDate = (quote: any, rfq: any) => {
+      if (oceanDateBasis === "rfq_created_at") return rfq?.createdAt;
+      if (oceanDateBasis === "rfq_finalized_at") return rfq?.finalizedAt;
+      return quote?.createdAt;
+    };
+
+    const latestPerVendorCombo = new Map<string, any>();
+    for (const q of quotes) {
+      const rfq = rfqs.find((r) => r.id === q.rfqId);
+      if (!rfq) continue;
+      const basisDate = pickDate(q, rfq);
+      if (!isWithinRange(basisDate)) continue;
+      const key = `${rfq.portOfLoading}||${q.containerType}||${q.vendorName}`;
+      const prev = latestPerVendorCombo.get(key);
+      if (!prev || new Date(q.createdAt).getTime() > new Date(prev.quote.createdAt).getTime()) {
+        latestPerVendorCombo.set(key, { quote: q, rfq, basisDate });
+      }
+    }
+
+    const grouped = new Map<string, any[]>();
+    for (const row of latestPerVendorCombo.values()) {
+      const group = `${row.rfq.portOfLoading}||${row.quote.containerType}`;
+      if (!grouped.has(group)) grouped.set(group, []);
+      grouped.get(group)!.push(row);
+    }
+
+    const out: Array<{
+      portOfLoading: string;
+      containerType: string;
+      vendorName: string;
+      oceanFreightUsd: number;
+      quoteDate: string;
+      basisDate: string;
+      rfqId: string;
+      rfqNumber: number;
+    }> = [];
+
+    for (const [group, candidates] of grouped.entries()) {
+      const [portOfLoading, containerType] = group.split("||");
+      const sorted = [...candidates]
+        .sort(
+          (a, b) =>
+            Number(a.quote.seaFreightPerContainer || 0) -
+            Number(b.quote.seaFreightPerContainer || 0)
+        )
+        .slice(0, 3);
+      for (const c of sorted) {
+        out.push({
+          portOfLoading,
+          containerType,
+          vendorName: c.quote.vendorName,
+          oceanFreightUsd: Number(c.quote.seaFreightPerContainer || 0),
+          quoteDate: c.quote.createdAt,
+          basisDate: c.basisDate,
+          rfqId: c.rfq.id,
+          rfqNumber: c.rfq.rfqNumber,
+        });
+      }
+    }
+
+    return out
+      .filter((r) =>
+        portFilter
+          ? String(r.portOfLoading).toLowerCase() === String(portFilter).toLowerCase()
+          : true
+      )
+      .filter((r) =>
+        containerFilter
+          ? String(r.containerType).toLowerCase() === String(containerFilter).toLowerCase()
+          : true
+      )
+      .sort((a, b) => a.oceanFreightUsd - b.oceanFreightUsd);
+  }, [quotes, rfqs, isWithinRange, oceanDateBasis, portFilter, containerFilter]);
 
   const dailyReportDays = useMemo(() => {
     const grouped = new Map<string, any[]>();
@@ -462,6 +543,8 @@ export default function ReportsPage() {
               <SelectContent>
                 <SelectItem value="7d">Last 7 days</SelectItem>
                 <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="45d">Last 45 days</SelectItem>
+                <SelectItem value="60d">Last 60 days</SelectItem>
                 <SelectItem value="90d">Last 90 days</SelectItem>
                 <SelectItem value="ytd">Year to date</SelectItem>
                 <SelectItem value="all">All time</SelectItem>
@@ -513,13 +596,36 @@ export default function ReportsPage() {
               Ocean Freight Top 3 Report
             </div>
             <p className="text-sm text-muted-foreground">
-              Top 3 lowest ocean-freight rates per (Port of Loading, Container
-              Type). Only each vendor's latest quote per combination is
-              considered — Date of Quote is the createdAt of that latest quote.
+              Logic: for every (POL, container type), we consider each vendor's latest quote, then pick the lowest 3 ocean-freight values.
+              Date basis controls which date is used for range filtering and can be changed for auditability.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <div className="text-xs text-muted-foreground">Date Basis</div>
+              <Select
+                value={oceanDateBasis}
+                onValueChange={(value) =>
+                  setOceanDateBasis(
+                    value as
+                      | "quote_created_at"
+                      | "rfq_created_at"
+                      | "rfq_finalized_at"
+                  )
+                }
+              >
+                <SelectTrigger className="w-[220px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="quote_created_at">Date of Quote</SelectItem>
+                  <SelectItem value="rfq_created_at">Date of RFQ Creation</SelectItem>
+                  <SelectItem value="rfq_finalized_at">Date of RFQ Finalization</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="flex items-center gap-2">
               <div className="text-xs text-muted-foreground">Port of Loading</div>
               <select
@@ -570,43 +676,53 @@ export default function ReportsPage() {
                 <tr className="text-left">
                   <th className="p-2 sm:p-3 font-semibold">Port of Loading</th>
                   <th className="p-2 sm:p-3 font-semibold">Container Type</th>
+                  <th className="p-2 sm:p-3 font-semibold">Vendor</th>
                   <th className="p-2 sm:p-3 font-semibold">Containers Qty</th>
                   <th className="p-2 sm:p-3 font-semibold">
                     Ocean Freight / Container (in $)
                   </th>
                   <th className="p-2 sm:p-3 font-semibold">Date of Quote</th>
+                  <th className="p-2 sm:p-3 font-semibold">Date Basis Used</th>
+                  <th className="p-2 sm:p-3 font-semibold">RFQ Drill-down</th>
                 </tr>
               </thead>
 
               <tbody>
                 {loading ? (
                   <tr>
-                    <td className="p-2 sm:p-3" colSpan={5}>
+                    <td className="p-2 sm:p-3" colSpan={8}>
                       Loading…
                     </td>
                   </tr>
                 ) : err ? (
                   <tr>
-                    <td className="p-2 sm:p-3 text-red-600" colSpan={5}>
+                    <td className="p-2 sm:p-3 text-red-600" colSpan={8}>
                       {err}
                     </td>
                   </tr>
-                ) : filteredRows.length === 0 ? (
+                ) : oceanFreightTop3WithTrace.length === 0 ? (
                   <tr>
-                    <td className="p-2 sm:p-3" colSpan={5}>
+                    <td className="p-2 sm:p-3" colSpan={8}>
                       No data available.
                     </td>
                   </tr>
                 ) : (
-                  filteredRows.map((r, idx) => (
+                  oceanFreightTop3WithTrace.map((r, idx) => (
                     <tr key={idx} className="border-t">
                       <td className="p-2 sm:p-3">{r.portOfLoading || "—"}</td>
                       <td className="p-2 sm:p-3">{r.containerType || "—"}</td>
-                      <td className="p-2 sm:p-3">{Number(r.containersQty || 0)}</td>
+                      <td className="p-2 sm:p-3">{r.vendorName || "—"}</td>
+                      <td className="p-2 sm:p-3">1</td>
                       <td className="p-2 sm:p-3">
                         {fmtUsd(Number(r.oceanFreightUsd))}
                       </td>
                       <td className="p-2 sm:p-3">{fmtDate(r.quoteDate)}</td>
+                      <td className="p-2 sm:p-3">{fmtDate(r.basisDate)}</td>
+                      <td className="p-2 sm:p-3">
+                        <Link className="text-primary underline underline-offset-2" to={`/admin/finalize/${r.rfqId}`}>
+                          RFQ #{r.rfqNumber}
+                        </Link>
+                      </td>
                     </tr>
                   ))
                 )}

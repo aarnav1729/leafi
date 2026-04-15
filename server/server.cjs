@@ -347,6 +347,45 @@ async function getUsdToInrRate({ forceRefresh = false } = {}) {
   }
 }
 
+async function getUsdToInrRateForDate(dateInput) {
+  const d = new Date(dateInput);
+  if (Number.isNaN(d.getTime())) {
+    const latest = await getUsdToInrRate();
+    return { ...latest, asOf: latest.asOf || null, source: `${latest.source}:latest-fallback` };
+  }
+
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const dateKey = `${y}-${m}-${day}`;
+  const url = `https://api.frankfurter.app/${dateKey}?from=USD&to=INR`;
+
+  try {
+    const resp = await axios.get(url, {
+      timeout: 9000,
+      headers: { Accept: "application/json" },
+    });
+    const rate = Number(resp.data?.rates?.INR);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      throw new Error("invalid historical rate");
+    }
+    return {
+      rate,
+      asOf: resp.data?.date || dateKey,
+      source: "frankfurter:historical",
+      cached: false,
+    };
+  } catch (err) {
+    console.error("[FX] Historical lookup failed, using latest:", err?.message || err);
+    const latest = await getUsdToInrRate();
+    return {
+      ...latest,
+      asOf: latest.asOf || dateKey,
+      source: `${latest.source}:today-fallback`,
+    };
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Graph creds (env override allowed)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -6019,6 +6058,138 @@ app.get("/api/rate/usdinr", async (req, res) => {
   } catch (err) {
     console.error("[API] Exchange API error, fallback to 75:", err.message);
     res.json({ rate: USD_INR_FALLBACK_RATE, source: "fallback" });
+  }
+});
+
+app.post("/api/admin/fx/reconcile-fallback-74", authenticate, requireAdmin, async (req, res) => {
+  const targetRate = Number(req.body?.targetRate ?? 74);
+  const tolerance = Number(req.body?.tolerance ?? 0.0005);
+
+  if (!Number.isFinite(targetRate) || targetRate <= 0) {
+    return res.status(400).json({ message: "Invalid targetRate" });
+  }
+
+  try {
+    const pool = await getPool();
+    const qRes = await pool.request().query(`
+      SELECT id, createdAt, seaFreightPerContainer, houseDeliveryOrderPerBOL,
+             cfsPerContainer, transportationPerContainer, ediChargesPerBOE,
+             chaChargesHome, chaChargesMOOWR, mooWRReeWarehousingCharges,
+             homeTotal, mooWRTotal
+      FROM dbo.Quotes
+      WHERE seaFreightPerContainer IS NOT NULL
+        AND seaFreightPerContainer > 0
+    `);
+
+    const allQuotes = qRes.recordset || [];
+    const candidates = allQuotes.filter((q) => {
+      const sea = Number(q.seaFreightPerContainer || 0);
+      if (!Number.isFinite(sea) || sea <= 0) return false;
+      const base = Number(q.homeTotal || 0)
+        - Number(q.houseDeliveryOrderPerBOL || 0)
+        - Number(q.cfsPerContainer || 0)
+        - Number(q.transportationPerContainer || 0)
+        - Number(q.ediChargesPerBOE || 0)
+        - Number(q.chaChargesHome || 0);
+      const inferred = base / sea;
+      return Number.isFinite(inferred) && Math.abs(inferred - targetRate) <= tolerance;
+    });
+
+    let updated = 0;
+    const details = [];
+
+    for (const q of candidates) {
+      const fx = await getUsdToInrRateForDate(q.createdAt);
+      const rate = Number(fx.rate);
+      const sea = Number(q.seaFreightPerContainer || 0);
+      const seaInInr = sea * rate;
+
+      const homeTotal =
+        seaInInr +
+        Number(q.houseDeliveryOrderPerBOL || 0) +
+        Number(q.cfsPerContainer || 0) +
+        Number(q.transportationPerContainer || 0) +
+        Number(q.ediChargesPerBOE || 0) +
+        Number(q.chaChargesHome || 0);
+
+      const mooWRTotal =
+        seaInInr +
+        Number(q.houseDeliveryOrderPerBOL || 0) +
+        Number(q.cfsPerContainer || 0) +
+        Number(q.transportationPerContainer || 0) +
+        Number(q.ediChargesPerBOE || 0) +
+        Number(q.chaChargesMOOWR || 0) +
+        Number(q.mooWRReeWarehousingCharges || 0);
+
+      await pool
+        .request()
+        .input("id", sql.UniqueIdentifier, q.id)
+        .input("homeTotal", sql.Float, homeTotal)
+        .input("mooWRTotal", sql.Float, mooWRTotal)
+        .query(`
+          UPDATE dbo.Quotes
+          SET homeTotal = @homeTotal,
+              mooWRTotal = @mooWRTotal
+          WHERE id = @id
+        `);
+
+      updated += 1;
+      details.push({
+        quoteId: q.id,
+        appliedRate: rate,
+        rateSource: fx.source,
+        rateAsOf: fx.asOf,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      scanned: allQuotes.length,
+      updated,
+      details,
+    });
+  } catch (err) {
+    console.error("[API] FX reconcile fallback-74 failed:", err);
+    return res.status(500).json({ message: "Failed to reconcile fallback records" });
+  }
+});
+
+app.post("/api/admin/analytics-chat", authenticate, requireAdmin, async (req, res) => {
+  const q = String(req.body?.question || "").trim();
+  if (!q) return res.status(400).json({ message: "Question is required" });
+
+  try {
+    const pool = await getPool();
+    const [rfqRes, quoteRes, allocRes] = await Promise.all([
+      pool.request().query("SELECT COUNT(1) AS n FROM dbo.RFQs"),
+      pool.request().query("SELECT COUNT(1) AS n, AVG(homeTotal) AS avgHome, AVG(mooWRTotal) AS avgMoowr FROM dbo.Quotes"),
+      pool.request().query("SELECT COUNT(1) AS n, SUM(containersAllottedHome + containersAllottedMOOWR) AS allotted FROM dbo.Allocations"),
+    ]);
+
+    const rfqCount = Number(rfqRes.recordset?.[0]?.n || 0);
+    const quoteCount = Number(quoteRes.recordset?.[0]?.n || 0);
+    const allocCount = Number(allocRes.recordset?.[0]?.n || 0);
+    const avgHome = Number(quoteRes.recordset?.[0]?.avgHome || 0);
+    const avgMoowr = Number(quoteRes.recordset?.[0]?.avgMoowr || 0);
+    const allotted = Number(allocRes.recordset?.[0]?.allotted || 0);
+
+    const answer = [
+      `I analyzed current transactional data. RFQs: ${rfqCount}, Quotes: ${quoteCount}, Allocations: ${allocCount}, Allotted containers: ${allotted}.`,
+      `Average quote totals are HOME ₹${avgHome.toFixed(2)} and MOOWR ₹${avgMoowr.toFixed(2)}.`,
+      `For your question (“${q}”), I can break this down by vendor, route, and time window next. Would you like last 30, 45, or 60 days?`,
+    ].join(" ");
+
+    return res.json({
+      answer,
+      suggestions: [
+        "Show vendor-wise spend trend for last 60 days",
+        "Which POL-POD routes are cost outliers?",
+        "Compare conversion after RFQ finalization by month",
+      ],
+    });
+  } catch (err) {
+    console.error("[API] analytics chat failed:", err);
+    return res.status(500).json({ message: "Failed to process analytics chat request" });
   }
 });
 
