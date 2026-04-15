@@ -21,6 +21,7 @@ export interface RFQ {
   description?: string;
   vendors: string[];
   createdAt: string;
+  finalizedAt?: string | null;
   status: "initial" | "evaluation" | "closed";
   createdBy: string;
 }

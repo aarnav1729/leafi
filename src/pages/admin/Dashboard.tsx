@@ -49,8 +49,49 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { useNavigate } from "react-router-dom";
+import { ExternalLink } from "lucide-react";
 
 type AnyRecord = Record<string, any>;
+
+type DrillTarget =
+  | {
+      kind: "vendor";
+      label: string;
+      filter: (q: AnyRecord) => boolean;
+    }
+  | {
+      kind: "pol";
+      label: string;
+      filter: (r: AnyRecord) => boolean;
+    }
+  | {
+      kind: "pod";
+      label: string;
+      filter: (r: AnyRecord) => boolean;
+    }
+  | {
+      kind: "status";
+      label: string;
+      filter: (r: AnyRecord) => boolean;
+    }
+  | {
+      kind: "latency";
+      label: string;
+      filter: (q: AnyRecord, r: AnyRecord | undefined) => boolean;
+    }
+  | {
+      kind: "containerType";
+      label: string;
+      filter: (r: AnyRecord) => boolean;
+    };
 
 /**
  * Compute a YAxis width and tickFormatter for a vertical bar chart so
@@ -92,6 +133,10 @@ function getCategoryAxisProps(
 
 const AdminDashboard = () => {
   const { rfqs, quotes, allocations, refreshKey } = useData();
+  const navigate = useNavigate();
+
+  // Drill-down dialog state
+  const [drill, setDrill] = React.useState<DrillTarget | null>(null);
 
   const fmt = React.useMemo(
     () => ({
@@ -166,7 +211,7 @@ const AdminDashboard = () => {
   }, [refreshKey]);
 
   const [rangePreset, setRangePreset] = React.useState<
-    "7d" | "30d" | "90d" | "ytd" | "all" | "custom"
+    "7d" | "30d" | "45d" | "60d" | "90d" | "ytd" | "all" | "custom"
   >("30d");
   const [from, setFrom] = React.useState<string>(fmt.dayKey(defaultFrom));
   const [to, setTo] = React.useState<string>(fmt.dayKey(now));
@@ -309,6 +354,8 @@ const AdminDashboard = () => {
 
       if (preset === "7d") start.setDate(end.getDate() - 7);
       else if (preset === "30d") start.setDate(end.getDate() - 30);
+      else if (preset === "45d") start.setDate(end.getDate() - 45);
+      else if (preset === "60d") start.setDate(end.getDate() - 60);
       else if (preset === "90d") start.setDate(end.getDate() - 90);
       else if (preset === "ytd") {
         start.setMonth(0, 1);
@@ -804,15 +851,25 @@ const AdminDashboard = () => {
   }, [filteredRFQs, fmt, palette]);
 
   const vendorParticipation = React.useMemo(() => {
-    const counts: Record<string, number> = {};
+    const counts: Record<
+      string,
+      { name: string; vendorKey: string; value: number }
+    > = {};
+
     filteredQuotes.forEach((q: AnyRecord) => {
-      const k = String(q.vendorName || "unknown");
-      counts[k] = (counts[k] || 0) + 1;
+      const vendorKey = String(q.vendorName || "unknown");
+      const name =
+        String(q.vendorDisplayName || "").trim() || vendorKey || "unknown";
+
+      if (!counts[vendorKey]) {
+        counts[vendorKey] = { name, vendorKey, value: 0 };
+      }
+      counts[vendorKey].value += 1;
     });
-    return Object.entries(counts)
-      .map(([name, value], idx) => ({
-        name,
-        value,
+
+    return Object.values(counts)
+      .map((row, idx) => ({
+        ...row,
         color: palette[idx % palette.length],
       }))
       .sort((a, b) => b.value - a.value)
@@ -820,15 +877,22 @@ const AdminDashboard = () => {
   }, [filteredQuotes, palette]);
 
   const vendorWinShare = React.useMemo(() => {
-    // containers won + spend by vendor from allocations
     const byVendor: Record<
       string,
-      { vendor: string; containers: number; spend: number; avg: number }
+      {
+        vendor: string;
+        vendorKey: string;
+        containers: number;
+        spend: number;
+        avg: number;
+      }
     > = {};
 
     filteredAllocations.forEach((a: AnyRecord) => {
       const q = quoteById.get(String(a.quoteId));
-      const vendor = String(q?.vendorName || "unknown");
+      const vendorKey = String(q?.vendorName || a?.vendorName || "unknown");
+      const vendor =
+        String(q?.vendorDisplayName || "").trim() || vendorKey || "unknown";
 
       const homeQty = fmt.num(a.containersAllottedHome);
       const moowrQty = fmt.num(a.containersAllottedMOOWR);
@@ -838,22 +902,26 @@ const AdminDashboard = () => {
       const moowrRate = fmt.num(q?.mooWRTotal);
       const spend = homeQty * homeRate + moowrQty * moowrRate;
 
-      if (!byVendor[vendor]) {
-        byVendor[vendor] = { vendor, containers: 0, spend: 0, avg: 0 };
+      if (!byVendor[vendorKey]) {
+        byVendor[vendorKey] = {
+          vendor,
+          vendorKey,
+          containers: 0,
+          spend: 0,
+          avg: 0,
+        };
       }
-      byVendor[vendor].containers += containers;
-      byVendor[vendor].spend += spend;
+      byVendor[vendorKey].containers += containers;
+      byVendor[vendorKey].spend += spend;
     });
 
-    const rows = Object.values(byVendor)
+    return Object.values(byVendor)
       .map((r) => ({
         ...r,
         avg: r.containers > 0 ? r.spend / r.containers : 0,
       }))
       .sort((a, b) => b.containers - a.containers)
       .slice(0, 12);
-
-    return rows;
   }, [filteredAllocations, quoteById, fmt]);
 
   const allocationCoverageByStatus = React.useMemo(() => {
@@ -1101,6 +1169,8 @@ const AdminDashboard = () => {
     if (rangePreset !== "custom") {
       if (rangePreset === "7d") return "Last 7 days";
       if (rangePreset === "30d") return "Last 30 days";
+      if (rangePreset === "45d") return "Last 45 days";
+      if (rangePreset === "60d") return "Last 60 days";
       if (rangePreset === "90d") return "Last 90 days";
       if (rangePreset === "ytd") return "Year to date";
     }
@@ -1146,262 +1216,388 @@ const AdminDashboard = () => {
         </div>
       </div>
 
-      {/* Filters */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2">
-            <Filter className="h-5 w-5" />
-            Filters
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">Range</div>
-            <Select
-              value={rangePreset}
-              onValueChange={(v: any) => applyPreset(v)}
+      {/* Tabs moved above filters — sticky nav for analytics sections */}
+      <Tabs defaultValue="overview" className="space-y-6">
+        <div className="relative overflow-hidden rounded-xl border bg-gradient-to-r from-primary/10 via-primary/5 to-transparent p-1.5">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent"
+          />
+          <TabsList className="relative z-[1] grid w-full grid-cols-2 gap-1 bg-transparent p-0 md:grid-cols-4">
+            <TabsTrigger
+              value="overview"
+              className="group relative rounded-lg px-3 py-2 transition-all duration-300 data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:-translate-y-[1px] data-[state=active]:text-primary hover:-translate-y-[1px]"
             >
-              <SelectTrigger>
-                <SelectValue placeholder="Select range" />
-              </SelectTrigger>
-              <SelectContent>
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <ChartPie className="h-4 w-4" />
+                Overview
+              </div>
+            </TabsTrigger>
+            <TabsTrigger
+              value="vendors"
+              className="group relative rounded-lg px-3 py-2 transition-all duration-300 data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:-translate-y-[1px] data-[state=active]:text-primary hover:-translate-y-[1px]"
+            >
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Users className="h-4 w-4" />
+                Vendors
+              </div>
+            </TabsTrigger>
+            <TabsTrigger
+              value="ports"
+              className="group relative rounded-lg px-3 py-2 transition-all duration-300 data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:-translate-y-[1px] data-[state=active]:text-primary hover:-translate-y-[1px]"
+            >
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <MapPin className="h-4 w-4" />
+                Ports
+              </div>
+            </TabsTrigger>
+            <TabsTrigger
+              value="performance"
+              className="group relative rounded-lg px-3 py-2 transition-all duration-300 data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:-translate-y-[1px] data-[state=active]:text-primary hover:-translate-y-[1px]"
+            >
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <TrendingUp className="h-4 w-4" />
+                Performance
+              </div>
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        {/* Filters */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2">
+              <Filter className="h-5 w-5" />
+              Filters
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">Range</div>
+              <Select
+                value={rangePreset}
+                onValueChange={(v: any) => applyPreset(v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select range" />
+                </SelectTrigger>
+                <SelectContent>
                 <SelectItem value="7d">Last 7 days</SelectItem>
                 <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="45d">Last 45 days</SelectItem>
+                <SelectItem value="60d">Last 60 days</SelectItem>
                 <SelectItem value="90d">Last 90 days</SelectItem>
-                <SelectItem value="ytd">Year to date</SelectItem>
-                <SelectItem value="all">All time</SelectItem>
-                <SelectItem value="custom">Custom</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">From</div>
-            <Input
-              type="date"
-              value={from}
-              onChange={(e) => {
-                setFrom(e.target.value);
-                setRangePreset("custom");
-              }}
-              disabled={rangePreset === "all"}
-            />
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">To</div>
-            <Input
-              type="date"
-              value={to}
-              onChange={(e) => {
-                setTo(e.target.value);
-                setRangePreset("custom");
-              }}
-              disabled={rangePreset === "all"}
-            />
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">Status</div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {allStatuses.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {s}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">Container Type</div>
-            <Select
-              value={containerTypeFilter}
-              onValueChange={setContainerTypeFilter}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="All types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {allContainerTypes.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">Vendor</div>
-            <Select value={vendorFilter} onValueChange={setVendorFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="All vendors" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {allVendors.map((v) => (
-                  <SelectItem key={v} value={v}>
-                    {v}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">Country</div>
-            <Select value={countryFilter} onValueChange={setCountryFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="All countries" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {allCountries.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">Port of Loading</div>
-            <Select value={polFilter} onValueChange={setPolFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="All POL" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {visiblePOL.map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {p}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">
-              Port of Destination
+                  <SelectItem value="ytd">Year to date</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                  <SelectItem value="custom">Custom</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <Select value={podFilter} onValueChange={setPodFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="All POD" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {allPOD.map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {p}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
 
-          <div className="hidden lg:block" />
-          <div className="hidden lg:block" />
-          <div className="hidden lg:block" />
-        </CardContent>
-      </Card>
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">From</div>
+              <Input
+                type="date"
+                value={from}
+                onChange={(e) => {
+                  setFrom(e.target.value);
+                  setRangePreset("custom");
+                }}
+                disabled={rangePreset === "all"}
+              />
+            </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">RFQs</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-bold">{aggregation.rfqs}</div>
-                <div className="text-xs text-muted-foreground">
-                  {aggregation.fullyAllocatedRFQs} fully allocated
-                </div>
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">To</div>
+              <Input
+                type="date"
+                value={to}
+                onChange={(e) => {
+                  setTo(e.target.value);
+                  setRangePreset("custom");
+                }}
+                disabled={rangePreset === "all"}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">Status</div>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {allStatuses.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">
+                Container Type
               </div>
-              <FileHeart className="h-5 w-5 text-muted-foreground" />
+              <Select
+                value={containerTypeFilter}
+                onValueChange={setContainerTypeFilter}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="All types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {allContainerTypes.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">Vendor</div>
+              <Select value={vendorFilter} onValueChange={setVendorFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All vendors" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {allVendors.map((v) => (
+                    <SelectItem key={v} value={v}>
+                      {v}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">Country</div>
+              <Select value={countryFilter} onValueChange={setCountryFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All countries" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {allCountries.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">
+                Port of Loading
+              </div>
+              <Select value={polFilter} onValueChange={setPolFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All POL" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {visiblePOL.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">
+                Port of Destination
+              </div>
+              <Select value={podFilter} onValueChange={setPodFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All POD" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {allPOD.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="hidden lg:block" />
+            <div className="hidden lg:block" />
+            <div className="hidden lg:block" />
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Quotes</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-bold">{aggregation.quotes}</div>
-                <div className="text-xs text-muted-foreground">
-                  Avg {Number(aggregation.avgQuotesPerRFQ).toFixed(2)} / RFQ
+        {/* KPI Cards */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">RFQs</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-2xl font-bold">{aggregation.rfqs}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {aggregation.fullyAllocatedRFQs} fully allocated
+                  </div>
                 </div>
+                <FileHeart className="h-5 w-5 text-muted-foreground" />
               </div>
-              <ChartLine className="h-5 w-5 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Containers</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-bold">
-                  {aggregation.allocatedContainers}/
-                  {aggregation.requestedContainers}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Quotes</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-2xl font-bold">{aggregation.quotes}</div>
+                  <div className="text-xs text-muted-foreground">
+                    Avg {Number(aggregation.avgQuotesPerRFQ).toFixed(2)} / RFQ
+                  </div>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {aggregation.pendingContainers} pending
-                </div>
+                <ChartLine className="h-5 w-5 text-muted-foreground" />
               </div>
-              <ContainerIcon className="h-5 w-5 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Spend</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-2xl font-bold">
-                  {fmt.money(aggregation.allocationCost)}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Containers</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-2xl font-bold">
+                    {aggregation.allocatedContainers}/
+                    {aggregation.requestedContainers}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {aggregation.pendingContainers} pending
+                  </div>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  Avg {fmt.money(aggregation.avgCostPerAllocatedContainer)} /
-                  container
-                </div>
+                <ContainerIcon className="h-5 w-5 text-muted-foreground" />
               </div>
-              <Ship className="h-5 w-5 text-muted-foreground" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+            </CardContent>
+          </Card>
 
-      {/* Tabs */}
-      <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="vendors">Vendors</TabsTrigger>
-          <TabsTrigger value="ports">Ports</TabsTrigger>
-          <TabsTrigger value="performance">Performance</TabsTrigger>
-        </TabsList>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Spend</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-2xl font-bold">
+                    {fmt.money(aggregation.allocationCost)}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Avg {fmt.money(aggregation.avgCostPerAllocatedContainer)} /
+                    container
+                  </div>
+                </div>
+                <Ship className="h-5 w-5 text-muted-foreground" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
         {/* OVERVIEW */}
         <TabsContent value="overview" className="space-y-6">
+          {/* CXO insights strip — high-signal metrics derived from existing aggregation */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+            <Card className="bg-gradient-to-br from-primary/5 via-transparent to-transparent">
+              <CardHeader className="pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                  <Clock className="h-3.5 w-3.5" />
+                  Avg time-to-quote
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold">
+                  {aggregation.avgQuoteLatencyMs > 0
+                    ? `${(
+                        aggregation.avgQuoteLatencyMs /
+                        (1000 * 60 * 60)
+                      ).toFixed(1)}h`
+                    : "—"}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Avg across {aggregation.quotes} quotes
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent">
+              <CardHeader className="pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                  <TrendingDown className="h-3.5 w-3.5" />
+                  Best-possible spend
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold">
+                  {fmt.money(aggregation.bestPossibleCostLowerBound)}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Lower bound if best quote won every lane
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-gradient-to-br from-amber-500/10 via-transparent to-transparent">
+              <CardHeader className="pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                  <TrendingUp className="h-3.5 w-3.5" />
+                  Spend vs. lower bound
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold">
+                  {fmt.money(aggregation.savingsVsLowerBound)}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Premium paid above theoretical best
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-gradient-to-br from-sky-500/10 via-transparent to-transparent">
+              <CardHeader className="pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                  <FileHeart className="h-3.5 w-3.5" />
+                  Fully-allocated rate
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold">
+                  {aggregation.rfqs > 0
+                    ? `${(
+                        (aggregation.fullyAllocatedRFQs / aggregation.rfqs) *
+                        100
+                      ).toFixed(0)}%`
+                    : "—"}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {aggregation.fullyAllocatedRFQs} of {aggregation.rfqs} RFQs
+                  closed
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             {/* Status Pie */}
             <Card>
@@ -1429,6 +1625,16 @@ const AdminDashboard = () => {
                         label={({ name, percent }) =>
                           `${String(name)} ${Number(percent * 100).toFixed(0)}%`
                         }
+                        onClick={(data: any) => {
+                          const s = String(data?.name || "");
+                          if (!s) return;
+                          setDrill({
+                            kind: "status",
+                            label: `Status · ${s}`,
+                            filter: (r) => String(r?.status || "") === s,
+                          });
+                        }}
+                        style={{ cursor: "pointer" }}
                       >
                         {statusData.map((entry, idx) => (
                           <Cell key={`status-${idx}`} fill={entry.color} />
@@ -1466,7 +1672,21 @@ const AdminDashboard = () => {
                       <YAxis />
                       <ChartTooltip content={<ChartTooltipContent />} />
                       <Legend />
-                      <Bar dataKey="value" name="Containers">
+                      <Bar
+                        dataKey="value"
+                        name="Containers"
+                        onClick={(data: any) => {
+                          const ct = String(data?.name || "");
+                          if (!ct) return;
+                          setDrill({
+                            kind: "containerType",
+                            label: `Container Type · ${ct}`,
+                            filter: (r) =>
+                              String(r?.containerType || "") === ct,
+                          });
+                        }}
+                        style={{ cursor: "pointer" }}
+                      >
                         {containerTypeData.map((entry, idx) => (
                           <Cell key={`ctype-${idx}`} fill={entry.color} />
                         ))}
@@ -1671,7 +1891,22 @@ const AdminDashboard = () => {
                       />
                       <ChartTooltip content={<ChartTooltipContent />} />
                       <Legend />
-                      <Bar dataKey="value" name="Quotes" fill={palette[4]} />
+                      <Bar
+                        dataKey="value"
+                        name="Quotes"
+                        fill={palette[4]}
+                        onClick={(data: any) => {
+                          if (!data?.vendorKey) return;
+                          const vendorKey = String(data.vendorKey);
+                          const vendorLabel = String(data.name || vendorKey);
+                          setDrill({
+                            kind: "vendor",
+                            label: `Vendor · ${vendorLabel}`,
+                            filter: (q) => String(q?.vendorName) === vendorKey,
+                          });
+                        }}
+                        style={{ cursor: "pointer" }}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 </ChartContainer>
@@ -1722,6 +1957,17 @@ const AdminDashboard = () => {
                         dataKey="containers"
                         name="Containers"
                         fill={palette[1]}
+                        onClick={(data: any) => {
+                          if (!data?.vendorKey) return;
+                          const vendorKey = String(data.vendorKey);
+                          const vendorLabel = String(data.vendor || vendorKey);
+                          setDrill({
+                            kind: "vendor",
+                            label: `Vendor · ${vendorLabel}`,
+                            filter: (q) => String(q?.vendorName) === vendorKey,
+                          });
+                        }}
+                        style={{ cursor: "pointer" }}
                       />
                     </BarChart>
                   </ResponsiveContainer>
@@ -1735,6 +1981,9 @@ const AdminDashboard = () => {
               <CardTitle className="flex items-center gap-2">
                 <Building2 className="h-5 w-5" />
                 Vendor Leaders Table
+                <span className="text-xs font-normal text-muted-foreground ml-auto">
+                  Click a row to drill in →
+                </span>
               </CardTitle>
             </CardHeader>
             <CardContent className="overflow-x-auto">
@@ -1750,7 +1999,18 @@ const AdminDashboard = () => {
                 <tbody>
                   {vendorWinShare.length ? (
                     vendorWinShare.map((v) => (
-                      <tr key={v.vendor} className="border-b">
+                      <tr
+                        key={v.vendor}
+                        className="border-b cursor-pointer hover:bg-muted/40"
+                        onClick={() =>
+                          setDrill({
+                            kind: "vendor",
+                            label: `Vendor · ${v.vendor}`,
+                            filter: (q) =>
+                              String(q?.vendorName) === String(v.vendorKey),
+                          })
+                        }
+                      >
                         <td className="py-2 pr-3 font-medium">{v.vendor}</td>
                         <td className="py-2 pr-3">{v.containers}</td>
                         <td className="py-2 pr-3">{fmt.money(v.spend)}</td>
@@ -1801,7 +2061,20 @@ const AdminDashboard = () => {
                       />
                       <ChartTooltip content={<ChartTooltipContent />} />
                       <Legend />
-                      <Bar dataKey="value" name="Containers">
+                      <Bar
+                        dataKey="value"
+                        name="Containers"
+                        onClick={(data: any) => {
+                          if (!data?.name) return;
+                          const pol = String(data.name);
+                          setDrill({
+                            kind: "pol",
+                            label: `Port of Loading · ${pol}`,
+                            filter: (r) => String(r?.portOfLoading) === pol,
+                          });
+                        }}
+                        style={{ cursor: "pointer" }}
+                      >
                         {topPortsLoading.map((e, idx) => (
                           <Cell key={`pol-${idx}`} fill={e.color} />
                         ))}
@@ -1840,7 +2113,20 @@ const AdminDashboard = () => {
                       />
                       <ChartTooltip content={<ChartTooltipContent />} />
                       <Legend />
-                      <Bar dataKey="value" name="Containers">
+                      <Bar
+                        dataKey="value"
+                        name="Containers"
+                        onClick={(data: any) => {
+                          if (!data?.name) return;
+                          const pod = String(data.name);
+                          setDrill({
+                            kind: "pod",
+                            label: `Port of Destination · ${pod}`,
+                            filter: (r) => String(r?.portOfDestination) === pod,
+                          });
+                        }}
+                        style={{ cursor: "pointer" }}
+                      >
                         {topPortsDestination.map((e, idx) => (
                           <Cell key={`pod-${idx}`} fill={e.color} />
                         ))}
@@ -1879,7 +2165,37 @@ const AdminDashboard = () => {
                       <YAxis />
                       <ChartTooltip content={<ChartTooltipContent />} />
                       <Legend />
-                      <Bar dataKey="value" name="Quotes" fill={palette[0]} />
+                      <Bar
+                        dataKey="value"
+                        name="Quotes"
+                        fill={palette[0]}
+                        onClick={(data: any) => {
+                          const bucket = String(data?.name || "");
+                          if (!bucket) return;
+                          setDrill({
+                            kind: "latency",
+                            label: `Response Time · ${bucket}`,
+                            filter: (q, rfq) => {
+                              const qd = fmt.date(q?.createdAt);
+                              const rd = fmt.date(rfq?.createdAt);
+                              if (!qd || !rd) return false;
+                              const hrs =
+                                (qd.getTime() - rd.getTime()) / 3600000;
+                              if (hrs < 0) return false;
+                              if (bucket === "< 6h") return hrs < 6;
+                              if (bucket === "6–24h")
+                                return hrs >= 6 && hrs < 24;
+                              if (bucket === "1–3d")
+                                return hrs >= 24 && hrs < 24 * 3;
+                              if (bucket === "3–7d")
+                                return hrs >= 24 * 3 && hrs < 24 * 7;
+                              if (bucket === "> 7d") return hrs >= 24 * 7;
+                              return false;
+                            },
+                          });
+                        }}
+                        style={{ cursor: "pointer" }}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 </ChartContainer>
@@ -1974,6 +2290,205 @@ const AdminDashboard = () => {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Drill-down dialog — surfaces underlying rows for any clickable chart */}
+      <Dialog open={!!drill} onOpenChange={(o) => !o && setDrill(null)}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Drill-down · {drill?.label || ""}</DialogTitle>
+            <DialogDescription>
+              The rows below are the records that produced this figure. Click
+              “Open RFQ” to inspect the full RFQ and its quote history.
+            </DialogDescription>
+          </DialogHeader>
+
+          {(() => {
+            if (!drill) return null;
+
+            // Resolve the row set for the current drill kind.
+            type Row = {
+              rfqId: string;
+              rfqNumber: string;
+              vendor?: string;
+              pol?: string;
+              pod?: string;
+              ctype?: string;
+              status?: string;
+              created?: string;
+              extra?: string;
+            };
+
+            let rows: Row[] = [];
+            let columns: Array<{ key: keyof Row; label: string }> = [];
+
+            const rfqRow = (r: AnyRecord): Row => ({
+              rfqId: String(r?.id ?? ""),
+              rfqNumber: String(r?.rfqNumber ?? r?.id ?? ""),
+              pol: String(r?.portOfLoading ?? ""),
+              pod: String(r?.portOfDestination ?? ""),
+              ctype: String(r?.containerType ?? ""),
+              status: String(r?.status ?? ""),
+              created: fmt.date(r?.createdAt)?.toISOString().slice(0, 10) || "",
+            });
+
+            if (drill.kind === "vendor") {
+              const f = drill.filter as (q: AnyRecord) => boolean;
+              rows = filteredQuotes.filter(f).map((q: AnyRecord) => {
+                const r = rfqById.get(String(q?.rfqId)) || {};
+                return {
+                  rfqId: String(r?.id ?? q?.rfqId ?? ""),
+                  rfqNumber: String(r?.rfqNumber ?? q?.rfqId ?? ""),
+                  vendor: String(q?.vendorName ?? ""),
+                  pol: String(r?.portOfLoading ?? ""),
+                  pod: String(r?.portOfDestination ?? ""),
+                  ctype: String(r?.containerType ?? ""),
+                  status: String(r?.status ?? ""),
+                  created:
+                    fmt.date(q?.createdAt)?.toISOString().slice(0, 10) || "",
+                };
+              });
+              columns = [
+                { key: "rfqNumber", label: "RFQ #" },
+                { key: "vendor", label: "Vendor" },
+                { key: "pol", label: "POL" },
+                { key: "pod", label: "POD" },
+                { key: "ctype", label: "Container" },
+                { key: "status", label: "Status" },
+                { key: "created", label: "Quote date" },
+              ];
+            } else if (
+              drill.kind === "pol" ||
+              drill.kind === "pod" ||
+              drill.kind === "status" ||
+              drill.kind === "containerType"
+            ) {
+              const f = drill.filter as (r: AnyRecord) => boolean;
+              rows = filteredRFQs.filter(f).map(rfqRow);
+              columns = [
+                { key: "rfqNumber", label: "RFQ #" },
+                { key: "pol", label: "POL" },
+                { key: "pod", label: "POD" },
+                { key: "ctype", label: "Container" },
+                { key: "status", label: "Status" },
+                { key: "created", label: "Posted" },
+              ];
+            } else if (drill.kind === "latency") {
+              const f = drill.filter as (
+                q: AnyRecord,
+                r: AnyRecord | undefined
+              ) => boolean;
+              rows = filteredQuotes
+                .filter((q: AnyRecord) => f(q, rfqById.get(String(q?.rfqId))))
+                .map((q: AnyRecord) => {
+                  const r = rfqById.get(String(q?.rfqId)) || {};
+                  const qd = fmt.date(q?.createdAt);
+                  const rd = fmt.date(r?.createdAt);
+                  const hrs =
+                    qd && rd ? (qd.getTime() - rd.getTime()) / 3600000 : null;
+                  return {
+                    rfqId: String(r?.id ?? q?.rfqId ?? ""),
+                    rfqNumber: String(r?.rfqNumber ?? q?.rfqId ?? ""),
+                    vendor: String(q?.vendorName ?? ""),
+                    pol: String(r?.portOfLoading ?? ""),
+                    pod: String(r?.portOfDestination ?? ""),
+                    ctype: String(r?.containerType ?? ""),
+                    created:
+                      fmt.date(q?.createdAt)?.toISOString().slice(0, 10) || "",
+                    extra:
+                      hrs == null
+                        ? "–"
+                        : hrs < 24
+                        ? `${hrs.toFixed(1)} h`
+                        : `${(hrs / 24).toFixed(1)} d`,
+                  };
+                });
+              columns = [
+                { key: "rfqNumber", label: "RFQ #" },
+                { key: "vendor", label: "Vendor" },
+                { key: "pol", label: "POL" },
+                { key: "pod", label: "POD" },
+                { key: "extra", label: "Response time" },
+                { key: "created", label: "Quote date" },
+              ];
+            }
+
+            return (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>
+                    {rows.length} record{rows.length === 1 ? "" : "s"} match the
+                    current dashboard filters.
+                  </span>
+                </div>
+                <div className="max-h-[60vh] overflow-auto rounded-md border">
+                  <table className="w-full text-xs sm:text-sm">
+                    <thead className="sticky top-0 bg-background">
+                      <tr className="border-b text-left">
+                        {columns.map((c) => (
+                          <th key={String(c.key)} className="px-3 py-2">
+                            {c.label}
+                          </th>
+                        ))}
+                        <th className="px-3 py-2 text-right">Open</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={columns.length + 1}
+                            className="px-3 py-6 text-center text-muted-foreground"
+                          >
+                            No matching records.
+                          </td>
+                        </tr>
+                      ) : (
+                        rows.map((row, i) => (
+                          <tr
+                            key={`${row.rfqId}-${i}`}
+                            className="border-b hover:bg-muted/30"
+                          >
+                            {columns.map((c) => (
+                              <td
+                                key={String(c.key)}
+                                className="px-3 py-2 align-top"
+                              >
+                                {row[c.key] || (
+                                  <span className="text-muted-foreground">
+                                    —
+                                  </span>
+                                )}
+                              </td>
+                            ))}
+                            <td className="px-3 py-2 text-right">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={!row.rfqId}
+                                onClick={() => {
+                                  setDrill(null);
+                                  navigate(
+                                    `/admin/rfqs?focus=${encodeURIComponent(
+                                      row.rfqId
+                                    )}`
+                                  );
+                                }}
+                              >
+                                <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                                Open RFQ
+                              </Button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

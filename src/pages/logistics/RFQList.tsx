@@ -1,6 +1,7 @@
 // root/src/pages/logistics/RFQList.tsx
 import React, { useState, useEffect, useMemo } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
+import { Download, DownloadCloud } from "lucide-react";
 import { useData } from "@/contexts/DataContext";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/common/StatusBadge";
@@ -166,8 +167,17 @@ const RFQList: React.FC = () => {
     numberOfContainers: "",
     cargoWeight: "",
     cargoReadinessDate: "",
+    createdAt: "",
+    finalizedAt: "",
     status: "",
   });
+
+  // Row selection for "Export selected"
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Deep-link support: highlight + pre-filter when arriving from a Report
+  const [searchParams] = useSearchParams();
+  const focusRfqId = searchParams.get("focus") || "";
 
   const [sort, setSort] = useState<SortConfig>({
     key: "createdAt",
@@ -196,10 +206,13 @@ const RFQList: React.FC = () => {
       numberOfContainers: "",
       cargoWeight: "",
       cargoReadinessDate: "",
+      createdAt: "",
+      finalizedAt: "",
       status: "",
     });
     setSort({ key: "createdAt", dir: "desc" });
     setPage(1);
+    setSelectedIds(new Set());
   };
 
   // Reset to page 1 whenever user changes filters/search/pageSize
@@ -282,7 +295,11 @@ const RFQList: React.FC = () => {
       (!f.cargoWeight ||
         norm((rfq as any).cargoWeight).includes(norm(f.cargoWeight))) &&
       (!f.cargoReadinessDate ||
-        readinessKey.includes(norm(f.cargoReadinessDate)))
+        readinessKey.includes(norm(f.cargoReadinessDate))) &&
+      (!f.createdAt ||
+        formatDateKey((rfq as any).createdAt).includes(norm(f.createdAt))) &&
+      (!f.finalizedAt ||
+        formatDateKey((rfq as any).finalizedAt).includes(norm(f.finalizedAt)))
     );
   };
 
@@ -331,8 +348,10 @@ const RFQList: React.FC = () => {
         return Number.isNaN(t) ? 0 : t;
       }
 
-      if (key === "createdAt") {
-        const t = new Date(r[key]).getTime();
+      if (key === "createdAt" || key === "finalizedAt") {
+        const v = r[key];
+        if (!v) return 0;
+        const t = new Date(v).getTime();
         return Number.isNaN(t) ? 0 : t;
       }
 
@@ -387,6 +406,128 @@ const RFQList: React.FC = () => {
     const start = (safePage - 1) * pageSize;
     return filteredSorted.slice(start, start + pageSize);
   }, [filteredSorted, safePage, pageSize]);
+
+  // Focus from URL ?focus=<rfqId>: pre-filter by that RFQ's number so the row
+  // shows at the top for the user coming from a Report / Dashboard drill-down
+  useEffect(() => {
+    if (!focusRfqId) return;
+    const target = rfqs.find((r: any) => String(r.id) === String(focusRfqId));
+    if (!target) return;
+    setFilter("rfqNumber", String(target.rfqNumber || ""));
+    setPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRfqId, rfqs.length]);
+
+  // -----
+  // Row selection
+  // -----
+  const allPageIds = useMemo(() => paged.map((r: any) => r.id), [paged]);
+  const allPageSelected =
+    allPageIds.length > 0 && allPageIds.every((id) => selectedIds.has(id));
+  const somePageSelected =
+    allPageIds.some((id) => selectedIds.has(id)) && !allPageSelected;
+
+  const togglePageSelection = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) {
+        allPageIds.forEach((id) => next.delete(id));
+      } else {
+        allPageIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const toggleRowSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // -----
+  // Export helpers (CSV, Excel-compatible)
+  // -----
+  const EXPORT_COLUMNS: Array<{ key: string; label: string; get: (r: any) => any }> = [
+    { key: "rfqNumber", label: "RFQ Number", get: (r) => r.rfqNumber },
+    { key: "itemDescription", label: "Item Description", get: (r) => r.itemDescription },
+    { key: "companyName", label: "Company", get: (r) => r.companyName },
+    { key: "materialPONumber", label: "Material PO Number", get: (r) => r.materialPONumber },
+    { key: "supplierName", label: "Supplier", get: (r) => r.supplierName },
+    { key: "portOfLoading", label: "Port of Loading", get: (r) => r.portOfLoading },
+    { key: "portOfDestination", label: "Port of Destination", get: (r) => r.portOfDestination },
+    { key: "incoterms", label: "Incoterms", get: (r) => r.incoterms },
+    { key: "containerType", label: "Container Type", get: (r) => r.containerType },
+    { key: "numberOfContainers", label: "Containers", get: (r) => r.numberOfContainers },
+    { key: "cargoWeight", label: "Weight (tons)", get: (r) => r.cargoWeight },
+    {
+      key: "cargoReadinessDate",
+      label: "Cargo Readiness",
+      get: (r) => {
+        const rd = splitReadiness(r.cargoReadinessDate);
+        const from = rd.from ? formatDateKey(rd.from) : "";
+        const to = rd.to ? formatDateKey(rd.to) : "";
+        return to ? `${from} → ${to}` : from;
+      },
+    },
+    {
+      key: "createdAt",
+      label: "Posted Date",
+      get: (r) => (r.createdAt ? formatDateKey(r.createdAt) : ""),
+    },
+    {
+      key: "finalizedAt",
+      label: "Finalized Date",
+      get: (r) => (r.finalizedAt ? formatDateKey(r.finalizedAt) : ""),
+    },
+    { key: "status", label: "Status", get: (r) => r.status },
+  ];
+
+  const toCsvCell = (v: any) => {
+    const s = String(v ?? "");
+    const esc = s.replace(/"/g, '""');
+    return `"${esc}"`;
+  };
+
+  const downloadCsv = (filename: string, rows: any[]) => {
+    const header = EXPORT_COLUMNS.map((c) => toCsvCell(c.label)).join(",");
+    const body = rows
+      .map((r) =>
+        EXPORT_COLUMNS.map((c) => toCsvCell(c.get(r))).join(",")
+      )
+      .join("\n");
+    const csv = `${header}\n${body}`;
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportAll = () => {
+    if (!filteredSorted.length) {
+      toast.error("No rows to export");
+      return;
+    }
+    downloadCsv(`rfqs_all_${Date.now()}.csv`, filteredSorted);
+  };
+
+  const exportSelected = () => {
+    const rows = filteredSorted.filter((r: any) => selectedIds.has(r.id));
+    if (!rows.length) {
+      toast.error("No rows selected");
+      return;
+    }
+    downloadCsv(`rfqs_selected_${Date.now()}.csv`, rows);
+  };
 
   useEffect(() => {
     const fetchLookups = async () => {
@@ -952,7 +1093,7 @@ const RFQList: React.FC = () => {
 
       {/* Table controls */}
       <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Input
             value={globalQuery}
             onChange={(e) => setGlobalQuery(e.target.value)}
@@ -962,6 +1103,29 @@ const RFQList: React.FC = () => {
           <Button type="button" variant="outline" onClick={clearAllFilters}>
             Clear
           </Button>
+          <Button type="button" variant="outline" onClick={exportAll}>
+            <DownloadCloud className="h-4 w-4 mr-1" />
+            Export all ({filteredSorted.length})
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={exportSelected}
+            disabled={selectedIds.size === 0}
+          >
+            <Download className="h-4 w-4 mr-1" />
+            Export selected ({selectedIds.size})
+          </Button>
+          {selectedIds.size > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Clear selection
+            </Button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -994,6 +1158,19 @@ const RFQList: React.FC = () => {
             <table className="w-full data-table !mx-0 !max-w-none text-[15px] [&_th]:px-3 [&_th]:py-3 [&_td]:px-3 [&_td]:py-3 md:[&_th]:px-4 md:[&_td]:px-4">
               <thead>
                 <tr>
+                  <th className="w-[40px]">
+                    <Checkbox
+                      checked={
+                        allPageSelected
+                          ? true
+                          : somePageSelected
+                          ? ("indeterminate" as any)
+                          : false
+                      }
+                      onCheckedChange={togglePageSelection}
+                      aria-label="Select all on this page"
+                    />
+                  </th>
                   <th>Actions</th>
 
                   <th>
@@ -1120,6 +1297,26 @@ const RFQList: React.FC = () => {
                     <button
                       type="button"
                       className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("createdAt")}
+                    >
+                      Posted {sortIndicator("createdAt")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
+                      onClick={() => toggleSort("finalizedAt")}
+                    >
+                      Finalized {sortIndicator("finalizedAt")}
+                    </button>
+                  </th>
+
+                  <th>
+                    <button
+                      type="button"
+                      className="font-semibold underline-offset-2 hover:underline"
                       onClick={() => toggleSort("status")}
                     >
                       Status {sortIndicator("status")}
@@ -1129,6 +1326,7 @@ const RFQList: React.FC = () => {
 
                 {/* Filter row */}
                 <tr>
+                  <th />
                   <th />
 
                   <th>
@@ -1256,6 +1454,24 @@ const RFQList: React.FC = () => {
                   </th>
 
                   <th>
+                    <Input
+                      value={colFilters.createdAt}
+                      onChange={(e) => setFilter("createdAt", e.target.value)}
+                      placeholder="YYYY-MM-DD"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
+                    <Input
+                      value={colFilters.finalizedAt}
+                      onChange={(e) => setFilter("finalizedAt", e.target.value)}
+                      placeholder="YYYY-MM-DD"
+                      className="h-8"
+                    />
+                  </th>
+
+                  <th>
                     <Select
                       value={colFilters.status || "__ALL__"}
                       onValueChange={(v) =>
@@ -1287,77 +1503,106 @@ const RFQList: React.FC = () => {
               <tbody>
                 {paged.length === 0 ? (
                   <tr>
-                    <td colSpan={14} className="text-center py-4">
+                    <td colSpan={17} className="text-center py-4">
                       No RFQs found. Create your first RFQ!
                     </td>
                   </tr>
                 ) : (
-                  paged.map((rfq) => (
-                    <tr key={rfq.id}>
-                      <td>
-                        <div className="flex flex-wrap gap-2">
-                          {rfq.status !== "closed" && (
+                  paged.map((rfq) => {
+                    const isFocused =
+                      focusRfqId && String(rfq.id) === String(focusRfqId);
+                    return (
+                      <tr
+                        key={rfq.id}
+                        className={isFocused ? "bg-primary/5" : ""}
+                      >
+                        <td>
+                          <Checkbox
+                            checked={selectedIds.has(rfq.id)}
+                            onCheckedChange={() => toggleRowSelection(rfq.id)}
+                            aria-label={`Select RFQ ${rfq.rfqNumber}`}
+                          />
+                        </td>
+                        <td>
+                          <div className="flex flex-wrap gap-2">
+                            {rfq.status !== "closed" && (
+                              <Button
+                                size="sm"
+                                onClick={() => handleFinalize(rfq.id)}
+                              >
+                                Finalize
+                              </Button>
+                            )}
+                            {rfq.status === "closed" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleFinalize(rfq.id)}
+                              >
+                                View
+                              </Button>
+                            )}
                             <Button
                               size="sm"
-                              onClick={() => handleFinalize(rfq.id)}
+                              variant="destructive"
+                              disabled={rfq.status === "closed"}
+                              onClick={() => openDeleteDialog(rfq)}
                             >
-                              Finalize
+                              Delete
                             </Button>
-                          )}
-                          {rfq.status === "closed" && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleFinalize(rfq.id)}
-                            >
-                              View
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            disabled={rfq.status === "closed"}
-                            onClick={() => openDeleteDialog(rfq)}
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      </td>
-                      <td>{rfq.rfqNumber}</td>
-                      <td>{rfq.itemDescription}</td>
-                      <td className="whitespace-pre-wrap break-words max-w-[320px]">
-                        {companyShortNameMap.get(rfq.companyName) ||
-                          rfq.companyName}
-                      </td>
+                          </div>
+                        </td>
+                        <td>{rfq.rfqNumber}</td>
+                        <td>{rfq.itemDescription}</td>
+                        <td className="whitespace-pre-wrap break-words max-w-[320px]">
+                          {companyShortNameMap.get(rfq.companyName) ||
+                            rfq.companyName}
+                        </td>
 
-                      <td>{rfq.materialPONumber}</td>
-                      <td>{rfq.supplierName}</td>
-                      <td>{rfq.portOfLoading}</td>
-                      <td>{rfq.portOfDestination}</td>
-                      <td>{(rfq as any).incoterms || "-"}</td>
-                      <td>{rfq.containerType}</td>
-                      <td>{rfq.numberOfContainers}</td>
-                      <td>{rfq.cargoWeight}</td>
-                      <td>
-                        {(() => {
-                          const rd = splitReadiness(
-                            (rfq as any).cargoReadinessDate
-                          );
-                          const fromTxt = rd.from
-                            ? new Date(rd.from).toLocaleDateString()
-                            : "";
-                          const toTxt = rd.to
-                            ? new Date(rd.to).toLocaleDateString()
-                            : "";
-                          return toTxt ? `${fromTxt} → ${toTxt}` : fromTxt;
-                        })()}
-                      </td>
+                        <td>{rfq.materialPONumber}</td>
+                        <td>{rfq.supplierName}</td>
+                        <td>{rfq.portOfLoading}</td>
+                        <td>{rfq.portOfDestination}</td>
+                        <td>{(rfq as any).incoterms || "-"}</td>
+                        <td>{rfq.containerType}</td>
+                        <td>{rfq.numberOfContainers}</td>
+                        <td>{rfq.cargoWeight}</td>
+                        <td>
+                          {(() => {
+                            const rd = splitReadiness(
+                              (rfq as any).cargoReadinessDate
+                            );
+                            const fromTxt = rd.from
+                              ? new Date(rd.from).toLocaleDateString()
+                              : "";
+                            const toTxt = rd.to
+                              ? new Date(rd.to).toLocaleDateString()
+                              : "";
+                            return toTxt ? `${fromTxt} → ${toTxt}` : fromTxt;
+                          })()}
+                        </td>
 
-                      <td>
-                        <StatusBadge status={rfq.status} />
-                      </td>
-                    </tr>
-                  ))
+                        <td>
+                          {(rfq as any).createdAt
+                            ? new Date(
+                                (rfq as any).createdAt
+                              ).toLocaleDateString()
+                            : "—"}
+                        </td>
+                        <td>
+                          {(rfq as any).finalizedAt
+                            ? new Date(
+                                (rfq as any).finalizedAt
+                              ).toLocaleDateString()
+                            : "—"}
+                        </td>
+
+                        <td>
+                          <StatusBadge status={rfq.status} />
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

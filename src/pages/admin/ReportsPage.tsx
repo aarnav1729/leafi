@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ExternalLink, Info } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useData } from "@/contexts/DataContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/common/StatusBadge";
 
 type ReportRow = {
@@ -25,8 +33,15 @@ type ReportRow = {
   oceanFreightUsd: number;
   quoteDate: string;
 };
-
-type RangePreset = "7d" | "30d" | "90d" | "ytd" | "all" | "custom";
+type RangePreset =
+  | "7d"
+  | "30d"
+  | "45d"
+  | "60d"
+  | "90d"
+  | "ytd"
+  | "all"
+  | "custom";
 
 function fmtUsd(v: number) {
   const n = Number(v);
@@ -85,6 +100,7 @@ function toDate(value: string | null | undefined) {
 
 export default function ReportsPage() {
   const { refreshKey, rfqs, quotes, allocations } = useData();
+  const navigate = useNavigate();
   const [rows, setRows] = useState<ReportRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string>("");
@@ -93,6 +109,25 @@ export default function ReportsPage() {
   const [legacyReportOpen, setLegacyReportOpen] = useState(false);
   const [activityReportOpen, setActivityReportOpen] = useState(false);
   const [vendorWinningsOpen, setVendorWinningsOpen] = useState(false);
+
+  // Drill-down state
+  const [top3Drill, setTop3Drill] = useState<{
+    portOfLoading: string;
+    containerType: string;
+  } | null>(null);
+  const [vwDrill, setVwDrill] = useState<{
+    vendorKey: string;
+    vendorLabel: string;
+    monthKey: string;
+    monthLabel: string;
+  } | null>(null);
+
+  const goToRFQ = React.useCallback(
+    (rfqId: string) => {
+      navigate(`/admin/rfqs?focus=${encodeURIComponent(rfqId)}`);
+    },
+    [navigate]
+  );
 
   const now = useMemo(() => new Date(), []);
   const defaultFrom = useMemo(() => {
@@ -149,6 +184,8 @@ export default function ReportsPage() {
 
     if (preset === "7d") start.setDate(end.getDate() - 7);
     else if (preset === "30d") start.setDate(end.getDate() - 30);
+    else if (preset === "45d") start.setDate(end.getDate() - 45);
+    else if (preset === "60d") start.setDate(end.getDate() - 60);
     else if (preset === "90d") start.setDate(end.getDate() - 90);
     else if (preset === "ytd") {
       start.setMonth(0, 1);
@@ -213,16 +250,24 @@ export default function ReportsPage() {
   }, [rows]);
 
   const filteredRows = useMemo(() => {
-    const pf = String(portFilter || "").trim().toLowerCase();
-    const cf = String(containerFilter || "").trim().toLowerCase();
+    const pf = String(portFilter || "")
+      .trim()
+      .toLowerCase();
+    const cf = String(containerFilter || "")
+      .trim()
+      .toLowerCase();
 
     return rows.filter((r) => {
       const portOk = !pf
         ? true
-        : String(r.portOfLoading || "").trim().toLowerCase() === pf;
+        : String(r.portOfLoading || "")
+            .trim()
+            .toLowerCase() === pf;
       const contOk = !cf
         ? true
-        : String(r.containerType || "").trim().toLowerCase() === cf;
+        : String(r.containerType || "")
+            .trim()
+            .toLowerCase() === cf;
       return portOk && contOk;
     });
   }, [rows, portFilter, containerFilter]);
@@ -304,7 +349,9 @@ export default function ReportsPage() {
           lineTotalLabel,
           lineTotalValue,
           allocation,
-          isAllocated: Boolean(allocation && (allocation.home > 0 || allocation.moowr > 0)),
+          isAllocated: Boolean(
+            allocation && (allocation.home > 0 || allocation.moowr > 0)
+          ),
           deviationReasons: Array.from(new Set(allocation?.reasons || [])),
         };
       });
@@ -336,7 +383,9 @@ export default function ReportsPage() {
         rfq,
         quoteRows,
         allocationSummary,
-        allocatedVendorNames: new Set(allocationSummary.map((item) => item.vendorName)),
+        allocatedVendorNames: new Set(
+          allocationSummary.map((item) => item.vendorName)
+        ),
       });
     }
 
@@ -411,9 +460,23 @@ export default function ReportsPage() {
         const months = Array.from(monthMap.entries())
           .map(([key, value]) => ({ key, ...value }))
           .sort((a, b) => a.key.localeCompare(b.key));
+
+        const vendorLabel =
+          String(
+            quotes.find(
+              (q: any) => String(q.vendorName || "").trim() === vendorName
+            )?.vendorDisplayName || vendorName
+          ).trim() || vendorName;
+
         const totalContainers = months.reduce((s, m) => s + m.containers, 0);
         const totalAmount = months.reduce((s, m) => s + m.amount, 0);
-        return { vendorName, months, totalContainers, totalAmount };
+        return {
+          vendorName,
+          vendorLabel,
+          months,
+          totalContainers,
+          totalAmount,
+        };
       })
       .sort((a, b) => b.totalAmount - a.totalAmount);
 
@@ -421,10 +484,7 @@ export default function ReportsPage() {
     for (const v of vendors) for (const m of v.months) monthsSet.add(m.key);
     const monthKeys = Array.from(monthsSet).sort();
 
-    const grandContainers = vendors.reduce(
-      (s, v) => s + v.totalContainers,
-      0
-    );
+    const grandContainers = vendors.reduce((s, v) => s + v.totalContainers, 0);
     const grandAmount = vendors.reduce((s, v) => s + v.totalAmount, 0);
 
     return { vendors, monthKeys, grandContainers, grandAmount };
@@ -437,7 +497,14 @@ export default function ReportsPage() {
     return active
       ? `${filteredRows.length} row(s) (of ${rows.length})`
       : `${rows.length} row(s)`;
-  }, [loading, err, rows.length, filteredRows.length, portFilter, containerFilter]);
+  }, [
+    loading,
+    err,
+    rows.length,
+    filteredRows.length,
+    portFilter,
+    containerFilter,
+  ]);
 
   return (
     <div className="p-6 space-y-6">
@@ -445,7 +512,8 @@ export default function ReportsPage() {
         <div>
           <h1 className="text-2xl font-bold">Reports</h1>
           <p className="text-sm text-muted-foreground">
-            Daily RFQ activity with quotes, allocations, and deviation visibility.
+            Daily RFQ activity with quotes, allocations, and deviation
+            visibility.
           </p>
         </div>
 
@@ -462,6 +530,8 @@ export default function ReportsPage() {
               <SelectContent>
                 <SelectItem value="7d">Last 7 days</SelectItem>
                 <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="45d">Last 45 days</SelectItem>
+                <SelectItem value="60d">Last 60 days</SelectItem>
                 <SelectItem value="90d">Last 90 days</SelectItem>
                 <SelectItem value="ytd">Year to date</SelectItem>
                 <SelectItem value="all">All time</SelectItem>
@@ -521,7 +591,9 @@ export default function ReportsPage() {
 
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <div className="text-xs text-muted-foreground">Port of Loading</div>
+              <div className="text-xs text-muted-foreground">
+                Port of Loading
+              </div>
               <select
                 value={portFilter}
                 onChange={(e) => setPortFilter(e.target.value)}
@@ -537,7 +609,9 @@ export default function ReportsPage() {
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="text-xs text-muted-foreground">Container Type</div>
+              <div className="text-xs text-muted-foreground">
+                Container Type
+              </div>
               <select
                 value={containerFilter}
                 onChange={(e) => setContainerFilter(e.target.value)}
@@ -564,6 +638,33 @@ export default function ReportsPage() {
         </div>
 
         <CollapsibleContent>
+          {/* Explainer — CXO can read exactly how this was computed */}
+          <div className="border-b bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+            <div className="flex items-start gap-2">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div className="space-y-1">
+                <div className="font-semibold text-foreground">
+                  How this is calculated
+                </div>
+                <div>
+                  1. For each (Port of Loading, Container Type) we look at every
+                  quote received.
+                </div>
+                <div>
+                  2. For each vendor we keep only their <b>latest</b> quote on
+                  that lane (by <code>createdAt</code>), to avoid counting a
+                  vendor twice if they revised.
+                </div>
+                <div>
+                  3. Among those vendor-latest quotes we pick the{" "}
+                  <b>3 lowest sea-freight / container (USD)</b>. Click any row
+                  to see every quote that fed the ranking and jump to the source
+                  RFQs.
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="overflow-auto">
             <table className="w-full text-xs sm:text-sm">
               <thead className="bg-muted/40">
@@ -575,38 +676,66 @@ export default function ReportsPage() {
                     Ocean Freight / Container (in $)
                   </th>
                   <th className="p-2 sm:p-3 font-semibold">Date of Quote</th>
+                  <th className="p-2 sm:p-3 font-semibold">Drill-down</th>
                 </tr>
               </thead>
 
               <tbody>
                 {loading ? (
                   <tr>
-                    <td className="p-2 sm:p-3" colSpan={5}>
+                    <td className="p-2 sm:p-3" colSpan={6}>
                       Loading…
                     </td>
                   </tr>
                 ) : err ? (
                   <tr>
-                    <td className="p-2 sm:p-3 text-red-600" colSpan={5}>
+                    <td className="p-2 sm:p-3 text-red-600" colSpan={6}>
                       {err}
                     </td>
                   </tr>
                 ) : filteredRows.length === 0 ? (
                   <tr>
-                    <td className="p-2 sm:p-3" colSpan={5}>
+                    <td className="p-2 sm:p-3" colSpan={6}>
                       No data available.
                     </td>
                   </tr>
                 ) : (
                   filteredRows.map((r, idx) => (
-                    <tr key={idx} className="border-t">
+                    <tr
+                      key={idx}
+                      className="border-t cursor-pointer hover:bg-muted/30"
+                      onClick={() =>
+                        setTop3Drill({
+                          portOfLoading: r.portOfLoading,
+                          containerType: r.containerType,
+                        })
+                      }
+                    >
                       <td className="p-2 sm:p-3">{r.portOfLoading || "—"}</td>
                       <td className="p-2 sm:p-3">{r.containerType || "—"}</td>
-                      <td className="p-2 sm:p-3">{Number(r.containersQty || 0)}</td>
+                      <td className="p-2 sm:p-3">
+                        {Number(r.containersQty || 0)}
+                      </td>
                       <td className="p-2 sm:p-3">
                         {fmtUsd(Number(r.oceanFreightUsd))}
                       </td>
                       <td className="p-2 sm:p-3">{fmtDate(r.quoteDate)}</td>
+                      <td className="p-2 sm:p-3">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTop3Drill({
+                              portOfLoading: r.portOfLoading,
+                              containerType: r.containerType,
+                            });
+                          }}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                          See all quotes
+                        </Button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -627,7 +756,8 @@ export default function ReportsPage() {
               Daily RFQ Activity Report
             </div>
             <p className="text-sm text-muted-foreground">
-              RFQs floated by day, quotes received, allocations, and deviation visibility.
+              RFQs floated by day, quotes received, allocations, and deviation
+              visibility.
             </p>
           </div>
 
@@ -693,13 +823,24 @@ export default function ReportsPage() {
                                       RFQ #{rfq.rfqNumber}
                                     </div>
                                     <StatusBadge status={rfq.status} />
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => goToRFQ(rfq.id)}
+                                      className="h-6 px-2 text-xs"
+                                    >
+                                      <ExternalLink className="h-3 w-3 mr-1" />
+                                      Open RFQ
+                                    </Button>
                                   </div>
                                   <div className="text-sm font-medium text-foreground">
                                     {rfq.itemDescription}
                                   </div>
                                   <div className="grid gap-1 text-sm text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
                                     <div>Company: {rfq.companyName}</div>
-                                    <div>Material PO: {rfq.materialPONumber}</div>
+                                    <div>
+                                      Material PO: {rfq.materialPONumber}
+                                    </div>
                                     <div>
                                       Route: {rfq.portOfLoading} to{" "}
                                       {rfq.portOfDestination}
@@ -779,7 +920,8 @@ export default function ReportsPage() {
                                         </div>
 
                                         <div className="flex items-center gap-2">
-                                          {quote.deviationReasons.length > 0 && (
+                                          {quote.deviationReasons.length >
+                                            0 && (
                                             <Badge variant="destructive">
                                               Deviation
                                             </Badge>
@@ -800,7 +942,8 @@ export default function ReportsPage() {
                                             {quote.numberOfContainers}
                                           </div>
                                           <div>
-                                            Shipping line: {quote.shippingLineName}
+                                            Shipping line:{" "}
+                                            {quote.shippingLineName}
                                           </div>
                                           <div>
                                             Transship/Direct:{" "}
@@ -809,7 +952,9 @@ export default function ReportsPage() {
                                           <div>
                                             Sea Freight: $
                                             {fmtUsd(
-                                              Number(quote.seaFreightPerContainer)
+                                              Number(
+                                                quote.seaFreightPerContainer
+                                              )
                                             )}
                                           </div>
                                           <div>
@@ -819,7 +964,8 @@ export default function ReportsPage() {
                                             )}
                                           </div>
                                           <div>
-                                            CFS: {fmtMoney(quote.cfsPerContainer)}
+                                            CFS:{" "}
+                                            {fmtMoney(quote.cfsPerContainer)}
                                           </div>
                                           <div>
                                             Transportation:{" "}
@@ -974,12 +1120,12 @@ export default function ReportsPage() {
                   <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
                     <div>
                       <div className="text-lg font-semibold">
-                        {vendor.vendorName}
+                        {vendor.vendorLabel}
                       </div>
                       <div className="text-sm text-muted-foreground">
                         {vendor.totalContainers} container(s) •{" "}
-                        {fmtMoney(vendor.totalAmount)} •{" "}
-                        {vendor.months.length} month(s)
+                        {fmtMoney(vendor.totalAmount)} • {vendor.months.length}{" "}
+                        month(s)
                       </div>
                     </div>
                     <CollapsibleTrigger asChild>
@@ -1002,15 +1148,47 @@ export default function ReportsPage() {
                             <th className="p-2 sm:p-3 font-semibold">
                               Amount Won
                             </th>
+                            <th className="p-2 sm:p-3 font-semibold">
+                              Drill-down
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
                           {vendor.months.map((m) => (
-                            <tr key={m.key} className="border-t">
+                            <tr
+                              key={m.key}
+                              className="border-t cursor-pointer hover:bg-muted/30"
+                              onClick={() =>
+                                setVwDrill({
+                                  vendorKey: vendor.vendorName,
+                                  vendorLabel: vendor.vendorLabel,
+                                  monthKey: m.key,
+                                  monthLabel: m.label,
+                                })
+                              }
+                            >
                               <td className="p-2 sm:p-3">{m.label}</td>
                               <td className="p-2 sm:p-3">{m.containers}</td>
                               <td className="p-2 sm:p-3">
                                 {fmtMoney(m.amount)}
+                              </td>
+                              <td className="p-2 sm:p-3">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setVwDrill({
+                                      vendorKey: vendor.vendorName,
+                                      vendorLabel: vendor.vendorLabel,
+                                      monthKey: m.key,
+                                      monthLabel: m.label,
+                                    });
+                                  }}
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                                  See allocations
+                                </Button>
                               </td>
                             </tr>
                           ))}
@@ -1022,6 +1200,7 @@ export default function ReportsPage() {
                             <td className="p-2 sm:p-3">
                               {fmtMoney(vendor.totalAmount)}
                             </td>
+                            <td className="p-2 sm:p-3" />
                           </tr>
                         </tbody>
                       </table>
@@ -1033,6 +1212,405 @@ export default function ReportsPage() {
           </div>
         </CollapsibleContent>
       </Collapsible>
+
+      {/* Top 3 drill-down: show every quote for this (port, container) with
+          vendor-latest flag + link to source RFQs */}
+      <Dialog
+        open={!!top3Drill}
+        onOpenChange={(open) => {
+          if (!open) setTop3Drill(null);
+        }}
+      >
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>
+              All quotes · {top3Drill?.portOfLoading} ·{" "}
+              {top3Drill?.containerType}
+            </DialogTitle>
+            <DialogDescription>
+              Every quote received on this lane is listed below. The "Vendor's
+              latest" badge marks the row that the Top 3 ranking used for that
+              vendor. Click the link to open the source RFQ.
+            </DialogDescription>
+          </DialogHeader>
+
+          {top3Drill &&
+            (() => {
+              const pol = top3Drill.portOfLoading;
+              const ct = top3Drill.containerType;
+
+              const laneQuotes = quotes
+                .filter((q: any) => {
+                  const rfq = rfqs.find((r: any) => r.id === q.rfqId);
+                  if (!rfq) return false;
+
+                  const resolvedContainerType = String(
+                    q.containerType || rfq.containerType || ""
+                  );
+
+                  return (
+                    String(rfq.portOfLoading || "") === pol &&
+                    resolvedContainerType === ct
+                  );
+                })
+                .slice()
+                .sort(
+                  (a: any, b: any) =>
+                    new Date(b.createdAt).getTime() -
+                    new Date(a.createdAt).getTime()
+                );
+
+              const seenVendor = new Set<string>();
+              const marked = laneQuotes.map((q: any) => {
+                const isLatest = !seenVendor.has(String(q.vendorName || ""));
+                if (isLatest) seenVendor.add(String(q.vendorName || ""));
+                return { quote: q, isLatest };
+              });
+
+              const vendorLatest = marked
+                .filter((x) => x.isLatest)
+                .slice()
+                .sort(
+                  (a: any, b: any) =>
+                    Number(a.quote.seaFreightPerContainer) -
+                    Number(b.quote.seaFreightPerContainer)
+                );
+
+              const top3Ids = new Set(
+                vendorLatest.slice(0, 3).map((x) => x.quote.id)
+              );
+
+              const vendorLatestFreights = vendorLatest
+                .map((x) => Number(x.quote.seaFreightPerContainer || 0))
+                .filter((n) => Number.isFinite(n) && n > 0);
+
+              const minFreight = vendorLatestFreights.length
+                ? Math.min(...vendorLatestFreights)
+                : 0;
+              const maxFreight = vendorLatestFreights.length
+                ? Math.max(...vendorLatestFreights)
+                : 0;
+              const avgFreight = vendorLatestFreights.length
+                ? vendorLatestFreights.reduce((s, n) => s + n, 0) /
+                  vendorLatestFreights.length
+                : 0;
+
+              if (!marked.length) {
+                return (
+                  <div className="text-sm text-muted-foreground">
+                    No quotes recorded for this lane yet.
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-3">
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <div className="rounded-md border p-3 text-xs">
+                      <div className="text-muted-foreground">
+                        All quote records
+                      </div>
+                      <div className="font-semibold">{marked.length}</div>
+                    </div>
+                    <div className="rounded-md border p-3 text-xs">
+                      <div className="text-muted-foreground">
+                        Vendor-latest records
+                      </div>
+                      <div className="font-semibold">{vendorLatest.length}</div>
+                    </div>
+                    <div className="rounded-md border p-3 text-xs">
+                      <div className="text-muted-foreground">
+                        Min / Avg / Max ($)
+                      </div>
+                      <div className="font-semibold">
+                        {fmtUsd(minFreight)} / {fmtUsd(avgFreight)} /{" "}
+                        {fmtUsd(maxFreight)}
+                      </div>
+                    </div>
+                    <div className="rounded-md border p-3 text-xs">
+                      <div className="text-muted-foreground">
+                        Rows in ranking
+                      </div>
+                      <div className="font-semibold">
+                        {Math.min(3, vendorLatest.length)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-auto">
+                    <table className="w-full text-xs sm:text-sm">
+                      <thead className="bg-muted/40">
+                        <tr className="text-left">
+                          <th className="p-2">Vendor</th>
+                          <th className="p-2">Sea Freight</th>
+                          <th className="p-2">Shipping Line</th>
+                          <th className="p-2">Quote Date</th>
+                          <th className="p-2">RFQ #</th>
+                          <th className="p-2">Flags</th>
+                          <th className="p-2">Open</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {marked.map(({ quote, isLatest }, i) => {
+                          const rfq = rfqs.find(
+                            (r: any) => r.id === quote.rfqId
+                          );
+                          const inTop3 = top3Ids.has(quote.id);
+                          return (
+                            <tr
+                              key={quote.id || i}
+                              className={`border-t ${
+                                inTop3 ? "bg-emerald-50/50" : ""
+                              }`}
+                            >
+                              <td className="p-2 font-medium">
+                                {(quote as any).vendorDisplayName ||
+                                  quote.vendorName}
+                              </td>
+                              <td className="p-2 font-semibold">
+                                ${fmtUsd(Number(quote.seaFreightPerContainer))}
+                              </td>
+                              <td className="p-2">
+                                {quote.shippingLineName || "—"}
+                              </td>
+                              <td className="p-2">
+                                {fmtDateTime(quote.createdAt)}
+                              </td>
+                              <td className="p-2">
+                                {rfq ? `#${rfq.rfqNumber}` : "—"}
+                              </td>
+                              <td className="p-2">
+                                <div className="flex flex-wrap gap-1">
+                                  {isLatest && (
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px]"
+                                    >
+                                      Vendor's latest
+                                    </Badge>
+                                  )}
+                                  {inTop3 && (
+                                    <Badge className="bg-emerald-600 text-white text-[10px]">
+                                      In Top 3
+                                    </Badge>
+                                  )}
+                                  {!isLatest && (
+                                    <Badge
+                                      variant="secondary"
+                                      className="text-[10px]"
+                                    >
+                                      Superseded
+                                    </Badge>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="p-2">
+                                {rfq && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => goToRFQ(rfq.id)}
+                                  >
+                                    <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                                    Open RFQ
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Vendor Winnings drill-down: individual allocations behind a month */}
+      <Dialog
+        open={!!vwDrill}
+        onOpenChange={(open) => {
+          if (!open) setVwDrill(null);
+        }}
+      >
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {vwDrill?.vendorLabel} · {vwDrill?.monthLabel}
+            </DialogTitle>
+            <DialogDescription>
+              Every allocation that rolled up into this month for this vendor.
+              Amount = containers × (home or MOOWR total from the associated
+              quote). Click Open RFQ to inspect the source RFQ.
+            </DialogDescription>
+          </DialogHeader>
+
+          {vwDrill &&
+            (() => {
+              const monthKey = vwDrill.monthKey;
+              const vendorKey = vwDrill.vendorKey;
+
+              const items = allocations
+                .filter((a: any) => a.vendorName === vendorKey)
+                .map((a: any) => {
+                  const quote = quotes.find((q: any) => q.id === a.quoteId);
+                  const rfq = rfqs.find((r: any) => r.id === a.rfqId);
+                  const when =
+                    (a as any).createdAt || quote?.createdAt || rfq?.createdAt;
+                  if (!when) return null;
+                  const dt = new Date(when);
+                  if (Number.isNaN(dt.getTime())) return null;
+                  const yyyy = dt.getFullYear();
+                  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+                  const key = `${yyyy}-${mm}`;
+                  if (key !== monthKey) return null;
+                  const home = Number(a.containersAllottedHome || 0);
+                  const moowr = Number(a.containersAllottedMOOWR || 0);
+                  const homeRate = Number(quote?.homeTotal || 0);
+                  const moowrRate = Number(quote?.mooWRTotal || 0);
+                  const homeAmount = home * homeRate;
+                  const moowrAmount = moowr * moowrRate;
+                  const amt = homeAmount + moowrAmount;
+
+                  return {
+                    allocation: a,
+                    quote,
+                    rfq,
+                    home,
+                    moowr,
+                    homeRate,
+                    moowrRate,
+                    homeAmount,
+                    moowrAmount,
+                    amount: amt,
+                    when,
+                  };
+                })
+                .filter(Boolean) as Array<any>;
+
+              if (!items.length) {
+                return (
+                  <div className="text-sm text-muted-foreground">
+                    No allocations found for this vendor in this month.
+                  </div>
+                );
+              }
+
+              return (
+                <div className="overflow-auto">
+                  <table className="w-full text-xs sm:text-sm">
+                    <thead className="bg-muted/40">
+                      <tr className="text-left">
+                        <th className="p-2">Date</th>
+                        <th className="p-2">RFQ #</th>
+                        <th className="p-2">Route</th>
+                        <th className="p-2">HOME</th>
+                        <th className="p-2">MOOWR</th>
+                        <th className="p-2">Amount</th>
+                        <th className="p-2">Math</th>
+                        <th className="p-2">Reason</th>
+                        <th className="p-2">Open</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((it, i) => (
+                        <tr key={i} className="border-t">
+                          <td className="p-2">{fmtDate(it.when)}</td>
+                          <td className="p-2">
+                            {it.rfq ? `#${it.rfq.rfqNumber}` : "—"}
+                          </td>
+                          <td className="p-2">
+                            {it.rfq
+                              ? `${it.rfq.portOfLoading} → ${it.rfq.portOfDestination}`
+                              : "—"}
+                          </td>
+                          <td className="p-2">{it.home}</td>
+                          <td className="p-2">{it.moowr}</td>
+                          <td className="p-2 font-medium">
+                            {fmtMoney(it.amount)}
+                          </td>
+                          <td className="p-2 text-[11px] text-muted-foreground">
+                            {it.home > 0
+                              ? `${it.home} × ${fmtMoney(
+                                  it.homeRate
+                                )} = ${fmtMoney(it.homeAmount)}`
+                              : "0 × HOME"}
+                            <br />
+                            {it.moowr > 0
+                              ? `${it.moowr} × ${fmtMoney(
+                                  it.moowrRate
+                                )} = ${fmtMoney(it.moowrAmount)}`
+                              : "0 × MOOWR"}
+                          </td>
+                          <td className="p-2 max-w-[200px] truncate">
+                            {it.allocation.reason || "—"}
+                          </td>
+                          <td className="p-2">
+                            {it.rfq && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => goToRFQ(it.rfq.id)}
+                              >
+                                <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                                Open RFQ
+                              </Button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="border-t bg-muted/20 font-semibold">
+                        <td className="p-2" colSpan={3}>
+                          Totals
+                        </td>
+                        <td className="p-2">
+                          {items.reduce((s, it) => s + Number(it.home || 0), 0)}
+                        </td>
+                        <td className="p-2">
+                          {items.reduce(
+                            (s, it) => s + Number(it.moowr || 0),
+                            0
+                          )}
+                        </td>
+                        <td className="p-2">
+                          {fmtMoney(
+                            items.reduce(
+                              (s, it) => s + Number(it.amount || 0),
+                              0
+                            )
+                          )}
+                        </td>
+                        <td className="p-2 text-[11px] text-muted-foreground">
+                          Avg / allocated container:{" "}
+                          {(() => {
+                            const totalContainers = items.reduce(
+                              (s, it) =>
+                                s +
+                                Number(it.home || 0) +
+                                Number(it.moowr || 0),
+                              0
+                            );
+                            const totalAmount = items.reduce(
+                              (s, it) => s + Number(it.amount || 0),
+                              0
+                            );
+                            return totalContainers > 0
+                              ? fmtMoney(totalAmount / totalContainers)
+                              : "—";
+                          })()}
+                        </td>
+                        <td className="p-2" />
+                        <td className="p-2" />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

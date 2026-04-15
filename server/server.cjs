@@ -347,6 +347,40 @@ async function getUsdToInrRate({ forceRefresh = false } = {}) {
   }
 }
 
+// Historical USD/INR rate by date (YYYY-MM-DD). Cached per date.
+// Returns null if the API cannot be reached.
+const historicalRateCache = new Map();
+async function getHistoricalUsdToInrRate(isoDate) {
+  if (!isoDate) return null;
+  const key = String(isoDate).slice(0, 10);
+  if (historicalRateCache.has(key)) return historicalRateCache.get(key);
+  try {
+    const resp = await axios.get(
+      `https://api.frankfurter.app/${key}?from=USD&to=INR`,
+      { timeout: 8000, headers: { Accept: "application/json" } }
+    );
+    const rate = Number(resp.data?.rates?.INR);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      historicalRateCache.set(key, null);
+      return null;
+    }
+    const entry = {
+      rate,
+      source: "frankfurter-historical",
+      asOf: resp.data?.date || key,
+    };
+    historicalRateCache.set(key, entry);
+    return entry;
+  } catch (err) {
+    console.error(
+      `[FX] historical rate lookup failed for ${key}:`,
+      err?.message || err
+    );
+    historicalRateCache.set(key, null);
+    return null;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Graph creds (env override allowed)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -862,6 +896,38 @@ BEGIN
   IF COL_LENGTH('dbo.RFQs', 'cargoReadinessTo') IS NULL
   BEGIN
     ALTER TABLE dbo.RFQs ADD cargoReadinessTo DATETIME2 NULL;
+  END;
+
+  -- Finalization timestamp on RFQs (when status flips to 'closed')
+  IF COL_LENGTH('dbo.RFQs', 'finalizedAt') IS NULL
+  BEGIN
+    ALTER TABLE dbo.RFQs ADD finalizedAt DATETIME2 NULL;
+  END;
+
+  -- USD/INR rate applied at the moment a quote's INR totals were computed.
+  -- Nullable — historical rows will not have it until backfilled.
+  IF COL_LENGTH('dbo.Quotes', 'appliedUsdInrRate') IS NULL
+  BEGIN
+    ALTER TABLE dbo.Quotes ADD appliedUsdInrRate FLOAT NULL;
+  END;
+
+  -- Audit log for USD/INR backfills (what was changed, when, by whom).
+  IF OBJECT_ID('dbo.UsdInrBackfillAudit', 'U') IS NULL
+  BEGIN
+    CREATE TABLE dbo.UsdInrBackfillAudit (
+      id               INT IDENTITY(1,1) PRIMARY KEY,
+      quoteId          UNIQUEIDENTIFIER NULL,
+      oldRate          FLOAT NULL,
+      newRate          FLOAT NULL,
+      oldHomeTotal     FLOAT NULL,
+      newHomeTotal     FLOAT NULL,
+      oldMoowrTotal    FLOAT NULL,
+      newMoowrTotal    FLOAT NULL,
+      historicalDate   NVARCHAR(10) NULL,
+      source           NVARCHAR(64) NULL,
+      runBy            NVARCHAR(255) NULL,
+      runAt            DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
   END;
 
   -- companyName -> MAX (handles long multi-line addresses)
@@ -2179,10 +2245,14 @@ function rfqDeletionInternalEmailTemplate({
                   quote.numberOfContainers ?? "—"
                 }</td>
                 <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#111827;">${
-                  quote.homeTotal == null ? "—" : `₹${Number(quote.homeTotal).toFixed(2)}`
+                  quote.homeTotal == null
+                    ? "—"
+                    : `₹${Number(quote.homeTotal).toFixed(2)}`
                 }</td>
                 <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#111827;">${
-                  quote.mooWRTotal == null ? "—" : `₹${Number(quote.mooWRTotal).toFixed(2)}`
+                  quote.mooWRTotal == null
+                    ? "—"
+                    : `₹${Number(quote.mooWRTotal).toFixed(2)}`
                 }</td>
               </tr>
             `
@@ -2333,7 +2403,9 @@ function rfqDeletionVendorEmailTemplate({ rfq, vendorName }) {
 
           <tr>
             <td style="padding:0 24px 16px;color:#334155;font-size:14px;line-height:1.7;">
-              RFQ <strong>${rfq?.rfqNumber || "—"}</strong> has been deleted in LEAFI. For more information, please contact <strong>ramanjulu@premierenergies.com</strong>.
+              RFQ <strong>${
+                rfq?.rfqNumber || "—"
+              }</strong> has been deleted in LEAFI. For more information, please contact <strong>ramanjulu@premierenergies.com</strong>.
             </td>
           </tr>
 
@@ -2390,7 +2462,9 @@ function istDayKey(date = new Date()) {
 }
 
 function istDateLabel(dateKey) {
-  const [yyyy, mm, dd] = String(dateKey || "").split("-").map(Number);
+  const [yyyy, mm, dd] = String(dateKey || "")
+    .split("-")
+    .map(Number);
   if (!yyyy || !mm || !dd) return "—";
   const utc = new Date(Date.UTC(yyyy, mm - 1, dd));
   return utc.toLocaleDateString("en-IN", {
@@ -2404,13 +2478,19 @@ function istDateLabel(dateKey) {
 function istRangeUtc(dateKeyFrom, dateKeyTo) {
   const [fy, fm, fd] = dateKeyFrom.split("-").map(Number);
   const [ty, tm, td] = dateKeyTo.split("-").map(Number);
-  const fromUtc = new Date(Date.UTC(fy, fm - 1, fd, 0, -IST_OFFSET_MINUTES, 0, 0));
-  const toUtc = new Date(Date.UTC(ty, tm - 1, td, 23, 59 - IST_OFFSET_MINUTES, 59, 999));
+  const fromUtc = new Date(
+    Date.UTC(fy, fm - 1, fd, 0, -IST_OFFSET_MINUTES, 0, 0)
+  );
+  const toUtc = new Date(
+    Date.UTC(ty, tm - 1, td, 23, 59 - IST_OFFSET_MINUTES, 59, 999)
+  );
   return { fromUtc, toUtc };
 }
 
 function previousIstDayKey(dateKey, daysBack = 1) {
-  const [yyyy, mm, dd] = String(dateKey || "").split("-").map(Number);
+  const [yyyy, mm, dd] = String(dateKey || "")
+    .split("-")
+    .map(Number);
   const d = new Date(Date.UTC(yyyy, mm - 1, dd));
   d.setUTCDate(d.getUTCDate() - daysBack);
   const y = d.getUTCFullYear();
@@ -2475,7 +2555,9 @@ function buildReportDigestQuoteTable(quoteRows, scheme) {
           return `
             <tr style="${isAllocated ? "background:#ecfdf5;" : ""}">
               <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">
-                <div style="font-weight:700;color:#0f172a;">${quote.vendorName || "—"}</div>
+                <div style="font-weight:700;color:#0f172a;">${
+                  quote.vendorName || "—"
+                }</div>
                 <div style="margin-top:4px;font-size:11px;color:#64748b;">Submitted ${formatDateTimeIst(
                   quote.createdAt
                 )}</div>
@@ -2580,7 +2662,12 @@ function buildReportDigestQuoteTable(quoteRows, scheme) {
   `;
 }
 
-function reportDigestEmailTemplate({ title, subtitle, dayGroups, generatedAt }) {
+function reportDigestEmailTemplate({
+  title,
+  subtitle,
+  dayGroups,
+  generatedAt,
+}) {
   const renderRfq = (entry) => {
     const rfq = entry.rfq;
     const quoteRows = entry.quoteRows || [];
@@ -2589,17 +2676,23 @@ function reportDigestEmailTemplate({ title, subtitle, dayGroups, generatedAt }) 
     return `
       <div style="margin-top:18px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#ffffff;">
         <div style="padding:16px 18px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
-          <div style="font-size:18px;font-weight:800;color:#0f172a;">RFQ #${rfq.rfqNumber}</div>
-          <div style="margin-top:6px;font-size:13px;color:#334155;">${rfq.itemDescription || "—"}</div>
+          <div style="font-size:18px;font-weight:800;color:#0f172a;">RFQ #${
+            rfq.rfqNumber
+          }</div>
+          <div style="margin-top:6px;font-size:13px;color:#334155;">${
+            rfq.itemDescription || "—"
+          }</div>
           <div style="margin-top:8px;font-size:12px;color:#64748b;line-height:1.7;">
-            Company: ${rfq.companyName || "—"} | Material PO: ${rfq.materialPONumber || "—"} | Route: ${
-      rfq.portOfLoading || "—"
-    } to ${rfq.portOfDestination || "—"} | Status: ${rfq.status || "—"}
+            Company: ${rfq.companyName || "—"} | Material PO: ${
+      rfq.materialPONumber || "—"
+    } | Route: ${rfq.portOfLoading || "—"} to ${
+      rfq.portOfDestination || "—"
+    } | Status: ${rfq.status || "—"}
           </div>
           <div style="margin-top:8px;font-size:12px;color:#475569;line-height:1.7;">
-            Quotes Received: ${quoteRows.length} | Allocated Vendors: ${allocationSummary.length} | Containers: ${
-      rfq.numberOfContainers ?? "—"
-    }
+            Quotes Received: ${quoteRows.length} | Allocated Vendors: ${
+      allocationSummary.length
+    } | Containers: ${rfq.numberOfContainers ?? "—"}
           </div>
         </div>
 
@@ -2618,8 +2711,12 @@ function reportDigestEmailTemplate({ title, subtitle, dayGroups, generatedAt }) 
             (group) => `
         <div style="margin-top:24px;">
           <div style="padding:12px 16px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;">
-            <div style="font-size:18px;font-weight:800;color:#1d4ed8;">${group.label}</div>
-            <div style="margin-top:4px;font-size:13px;color:#475569;">${group.items.length} RFQ(s) floated</div>
+            <div style="font-size:18px;font-weight:800;color:#1d4ed8;">${
+              group.label
+            }</div>
+            <div style="margin-top:4px;font-size:13px;color:#475569;">${
+              group.items.length
+            } RFQ(s) floated</div>
           </div>
           ${group.items.map(renderRfq).join("")}
         </div>
@@ -2696,7 +2793,9 @@ async function getReportDigestDayGroups(pool, dateKeyFrom, dateKeyTo) {
     .join(" UNION ALL ");
 
   let quotesReq = pool.request();
-  rfqs.forEach((rfq, i) => quotesReq.input(`rfqId${i}`, sql.UniqueIdentifier, rfq.id));
+  rfqs.forEach((rfq, i) =>
+    quotesReq.input(`rfqId${i}`, sql.UniqueIdentifier, rfq.id)
+  );
   const quotesRes = await quotesReq.query(`
     ;WITH R AS (${rfqIdsCte})
     SELECT q.*
@@ -2801,8 +2900,7 @@ async function hasReportRun(pool, runType, runKey) {
   const res = await pool
     .request()
     .input("runType", sql.NVarChar(30), runType)
-    .input("runKey", sql.NVarChar(30), runKey)
-    .query(`
+    .input("runKey", sql.NVarChar(30), runKey).query(`
       SELECT TOP 1 1 AS ok
       FROM dbo.ReportEmailRuns
       WHERE runType = @runType AND runKey = @runKey
@@ -2814,8 +2912,7 @@ async function markReportRun(pool, runType, runKey) {
   await pool
     .request()
     .input("runType", sql.NVarChar(30), runType)
-    .input("runKey", sql.NVarChar(30), runKey)
-    .query(`
+    .input("runKey", sql.NVarChar(30), runKey).query(`
       INSERT INTO dbo.ReportEmailRuns (runType, runKey, sentAt)
       VALUES (@runType, @runKey, SYSUTCDATETIME())
     `);
@@ -2855,7 +2952,11 @@ async function maybeSendDailyAndWeeklyDigests() {
     const todayKey = istDayKey(now);
 
     if (!(await hasReportRun(pool, "daily", todayKey))) {
-      const dailyGroups = await getReportDigestDayGroups(pool, todayKey, todayKey);
+      const dailyGroups = await getReportDigestDayGroups(
+        pool,
+        todayKey,
+        todayKey
+      );
       await sendReportDigestEmail({
         subject: `LEAFI Daily RFQ Report | ${istDateLabel(todayKey)}`,
         title: "Daily RFQ Activity Report",
@@ -2881,7 +2982,9 @@ async function maybeSendDailyAndWeeklyDigests() {
           weekStartKey
         )} to ${istDateLabel(todayKey)}`,
         title: "Weekly RFQ Activity Summary",
-        subtitle: `Week ending ${istDateLabel(todayKey)} (Sunday, 11:59 PM IST)`,
+        subtitle: `Week ending ${istDateLabel(
+          todayKey
+        )} (Sunday, 11:59 PM IST)`,
         dayGroups: weeklyGroups,
       });
       await markReportRun(pool, "weekly", todayKey);
@@ -3791,12 +3894,16 @@ app.get(
   async (req, res) => {
     try {
       const pool = await getPool();
+      const basis = String(req.query.dateBasis || "quote").toLowerCase();
 
-      // Top 3 LOWEST seaFreightPerContainer (USD) per (Port of Loading, Container Type).
-      // We first reduce to each vendor's LATEST quote per (vendor, port, container),
-      // so stale cheap quotes from old RFQs don't dominate once a vendor has requoted.
-      // The "quoteDate" returned is the createdAt of that latest quote — this is why
-      // a port may still show an older date if no vendor has quoted it more recently.
+      // "displayDate" is what the UI labels (and sorts ties by). It switches based on ?dateBasis.
+      const displayExpr =
+        basis === "rfq"
+          ? "r.createdAt"
+          : basis === "finalized"
+          ? "r.finalizedAt"
+          : "q.createdAt";
+
       const q = await pool.request().query(`
         ;WITH LatestPerVendor AS (
           SELECT
@@ -3805,7 +3912,13 @@ app.get(
             CAST(r.numberOfContainers AS INT) AS containersQty,
             CAST(q.seaFreightPerContainer AS FLOAT) AS oceanFreightUsd,
             q.createdAt AS quoteDate,
+            r.createdAt AS rfqCreatedAt,
+            r.finalizedAt AS rfqFinalizedAt,
+            ${displayExpr} AS displayDate,
             q.vendorName AS vendorName,
+            CAST(r.rfqNumber AS INT) AS rfqNumber,
+            CAST(r.id AS NVARCHAR(50)) AS rfqId,
+            CAST(q.id AS NVARCHAR(50)) AS quoteId,
             ROW_NUMBER() OVER (
               PARTITION BY
                 q.vendorName,
@@ -3823,12 +3936,9 @@ app.get(
         ),
         Ranked AS (
           SELECT
-            portOfLoading,
-            containerType,
-            containersQty,
-            oceanFreightUsd,
-            quoteDate,
-            vendorName,
+            portOfLoading, containerType, containersQty, oceanFreightUsd,
+            quoteDate, rfqCreatedAt, rfqFinalizedAt, displayDate,
+            vendorName, rfqNumber, rfqId, quoteId,
             ROW_NUMBER() OVER (
               PARTITION BY portOfLoading, containerType
               ORDER BY oceanFreightUsd ASC, quoteDate DESC
@@ -3837,11 +3947,9 @@ app.get(
           WHERE rnLatest = 1
         )
         SELECT
-          portOfLoading,
-          containerType,
-          containersQty,
-          oceanFreightUsd,
-          quoteDate
+          portOfLoading, containerType, containersQty, oceanFreightUsd,
+          quoteDate, rfqCreatedAt, rfqFinalizedAt, displayDate,
+          vendorName, rfqNumber, rfqId, quoteId
         FROM Ranked
         WHERE rn <= 3
         ORDER BY portOfLoading ASC, containerType ASC, oceanFreightUsd ASC, quoteDate DESC;
@@ -3851,6 +3959,281 @@ app.get(
     } catch (e) {
       console.error("[ADMIN] ocean-freight-top3 failed:", e?.message || e);
       return res.status(500).json({ message: "Failed to load report" });
+    }
+  }
+);
+
+// Drill-down: every quote considered for a given (port, containerType),
+// with each vendor's latest-first rank (rank 1 = the row used in Top 3).
+app.get(
+  "/api/admin/reports/ocean-freight-top3/drill",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    try {
+      const pool = await getPool();
+      const portOfLoading = String(
+        req.query.portOfLoading || req.query.port || ""
+      ).trim();
+      const containerType = String(req.query.containerType || "").trim();
+      if (!portOfLoading || !containerType) {
+        return res
+          .status(400)
+          .json({ message: "portOfLoading and containerType are required" });
+      }
+
+      const q = await pool
+        .request()
+        .input("pol", sql.NVarChar, portOfLoading)
+        .input("ct", sql.NVarChar, containerType).query(`
+          ;WITH Ranked AS (
+            SELECT
+              CAST(q.id AS NVARCHAR(50)) AS quoteId,
+              CAST(r.id AS NVARCHAR(50)) AS rfqId,
+              CAST(r.rfqNumber AS INT) AS rfqNumber,
+              q.vendorName AS vendorName,
+              r.portOfLoading AS portOfLoading,
+              COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+              CAST(q.seaFreightPerContainer AS FLOAT) AS oceanFreightUsd,
+              q.createdAt AS quoteDate,
+              r.createdAt AS rfqCreatedAt,
+              r.finalizedAt AS rfqFinalizedAt,
+              r.status AS rfqStatus,
+              r.numberOfContainers AS rfqContainers,
+              q.appliedUsdInrRate AS appliedUsdInrRate,
+              ROW_NUMBER() OVER (
+                PARTITION BY q.vendorName
+                ORDER BY q.createdAt DESC
+              ) AS vendorLatestRank
+            FROM dbo.Quotes q
+            INNER JOIN dbo.RFQs r ON r.id = q.rfqId
+            WHERE r.portOfLoading = @pol
+              AND COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) = @ct
+              AND q.seaFreightPerContainer IS NOT NULL
+              AND q.seaFreightPerContainer > 0
+          )
+          SELECT *,
+                 CASE WHEN vendorLatestRank = 1 THEN 1 ELSE 0 END AS isLatestForVendor
+            FROM Ranked
+           ORDER BY vendorName ASC, vendorLatestRank ASC;
+        `);
+
+      return res.json(q.recordset || []);
+    } catch (e) {
+      console.error(
+        "[ADMIN] ocean-freight-top3 drill failed:",
+        e?.message || e
+      );
+      return res.status(500).json({ message: "Failed to load drill-down" });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN: USD/INR fallback backfill (preview + apply)
+// Identify quotes whose INR totals were computed using the emergency fallback
+// rate (≈75) and recompute them with the historical rate for the quote's date.
+// ─────────────────────────────────────────────────────────────────────────────
+const USD_INR_FALLBACK_CANDIDATES = [75, 74]; // user-mentioned values
+const FALLBACK_MATCH_TOLERANCE = 0.05;
+
+function computeImpliedRate(q) {
+  // Implied USD/INR rate = (homeTotal - sum of INR charges) / seaFreightPerContainer
+  // We divide by seaFreightPerContainer because that is the only USD input.
+  const sea = Number(q.seaFreightPerContainer || 0);
+  if (!(sea > 0)) return null;
+  const inrCharges =
+    Number(q.houseDeliveryOrderPerBOL || 0) +
+    Number(q.cfsPerContainer || 0) +
+    Number(q.transportationPerContainer || 0) +
+    Number(q.chaChargesHome || 0) +
+    Number(q.ediChargesPerBOE || 0);
+  const homeTotal = Number(q.homeTotal || 0);
+  if (!(homeTotal > 0)) return null;
+  return (homeTotal - inrCharges) / sea;
+}
+
+function isFallbackCandidate(rate) {
+  if (!Number.isFinite(rate)) return false;
+  return USD_INR_FALLBACK_CANDIDATES.some(
+    (v) => Math.abs(rate - v) <= FALLBACK_MATCH_TOLERANCE
+  );
+}
+
+async function findFallbackCandidates(pool) {
+  const r = await pool.request().query(`
+    SELECT id, rfqId, vendorName, createdAt,
+           seaFreightPerContainer, houseDeliveryOrderPerBOL, cfsPerContainer,
+           transportationPerContainer, chaChargesHome, chaChargesMOOWR,
+           ediChargesPerBOE, mooWRReeWarehousingCharges,
+           homeTotal, mooWRTotal, appliedUsdInrRate
+      FROM dbo.Quotes
+     WHERE seaFreightPerContainer IS NOT NULL
+       AND seaFreightPerContainer > 0
+  `);
+  const candidates = [];
+  for (const q of r.recordset || []) {
+    // Prefer explicit appliedUsdInrRate if present
+    let rate = Number(q.appliedUsdInrRate);
+    if (!Number.isFinite(rate) || rate <= 0) rate = computeImpliedRate(q);
+    if (isFallbackCandidate(rate)) {
+      candidates.push({ ...q, impliedRate: rate });
+    }
+  }
+  return candidates;
+}
+
+function recomputeTotals(q, rate) {
+  const sea = Number(q.seaFreightPerContainer || 0);
+  const inrCommon =
+    Number(q.houseDeliveryOrderPerBOL || 0) +
+    Number(q.cfsPerContainer || 0) +
+    Number(q.transportationPerContainer || 0) +
+    Number(q.ediChargesPerBOE || 0);
+  const newHome = sea * rate + inrCommon + Number(q.chaChargesHome || 0);
+  const newMoowr =
+    sea * rate +
+    inrCommon +
+    Number(q.chaChargesMOOWR || 0) +
+    Number(q.mooWRReeWarehousingCharges || 0);
+  return { newHome, newMoowr };
+}
+
+app.get(
+  "/api/admin/maintenance/usd-inr-backfill/preview",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const pool = await getPool();
+      const candidates = await findFallbackCandidates(pool);
+
+      const sample = candidates.slice(0, 25);
+      const enriched = [];
+      for (const c of sample) {
+        const iso = c.createdAt
+          ? new Date(c.createdAt).toISOString().slice(0, 10)
+          : null;
+        const hist = iso ? await getHistoricalUsdToInrRate(iso) : null;
+        let useRate = hist?.rate;
+        let source = hist?.source;
+        if (!useRate) {
+          const live = await getUsdToInrRate();
+          useRate = live.rate;
+          source = `live-today (${live.source})`;
+        }
+        enriched.push({
+          quoteId: c.id,
+          vendorName: c.vendorName,
+          quoteDate: iso,
+          impliedRate: c.impliedRate,
+          historicalRate: useRate,
+          historicalDate: hist?.asOf || null,
+          source,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        candidateCount: candidates.length,
+        sampleRows: enriched,
+      });
+    } catch (e) {
+      console.error("[ADMIN] backfill preview failed:", e?.message || e);
+      return res.status(500).json({ ok: false, error: e?.message || "failed" });
+    }
+  }
+);
+
+app.post(
+  "/api/admin/maintenance/usd-inr-backfill/apply",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const dryRun = !!req.body?.dryRun;
+      const pool = await getPool();
+      const candidates = await findFallbackCandidates(pool);
+
+      let updated = 0;
+      let skipped = 0;
+      let failed = 0;
+
+      for (const c of candidates) {
+        const iso = c.createdAt
+          ? new Date(c.createdAt).toISOString().slice(0, 10)
+          : null;
+        const hist = iso ? await getHistoricalUsdToInrRate(iso) : null;
+        let newRate = hist?.rate;
+        let source = hist?.source || "historical-unavailable";
+        if (!Number.isFinite(newRate) || newRate <= 0) {
+          const live = await getUsdToInrRate();
+          newRate = live.rate;
+          source = `live-today (${live.source})`;
+        }
+        if (!Number.isFinite(newRate) || newRate <= 0) {
+          failed += 1;
+          continue;
+        }
+
+        const { newHome, newMoowr } = recomputeTotals(c, newRate);
+        try {
+          if (!dryRun) {
+            await pool
+              .request()
+              .input("id", sql.UniqueIdentifier, c.id)
+              .input("rate", sql.Float, newRate)
+              .input("home", sql.Float, newHome)
+              .input("moowr", sql.Float, newMoowr).query(`
+                UPDATE dbo.Quotes
+                   SET appliedUsdInrRate = @rate,
+                       homeTotal = @home,
+                       mooWRTotal = @moowr
+                 WHERE id = @id
+              `);
+            await pool
+              .request()
+              .input("quoteId", sql.UniqueIdentifier, c.id)
+              .input("oldRate", sql.Float, Number(c.impliedRate) || null)
+              .input("newRate", sql.Float, newRate)
+              .input("oldHome", sql.Float, Number(c.homeTotal) || null)
+              .input("newHome", sql.Float, newHome)
+              .input("oldMoowr", sql.Float, Number(c.mooWRTotal) || null)
+              .input("newMoowr", sql.Float, newMoowr)
+              .input("histDate", sql.NVarChar, hist?.asOf || iso || null)
+              .input("source", sql.NVarChar, source)
+              .input(
+                "runBy",
+                sql.NVarChar,
+                req.user?.email || req.user?.username || null
+              ).query(`
+                INSERT INTO dbo.UsdInrBackfillAudit
+                  (quoteId, oldRate, newRate, oldHomeTotal, newHomeTotal,
+                   oldMoowrTotal, newMoowrTotal, historicalDate, source, runBy)
+                VALUES
+                  (@quoteId, @oldRate, @newRate, @oldHome, @newHome,
+                   @oldMoowr, @newMoowr, @histDate, @source, @runBy)
+              `);
+          }
+          updated += 1;
+        } catch (err) {
+          console.error("[ADMIN] backfill apply row failed:", err?.message);
+          failed += 1;
+        }
+      }
+
+      skipped = 0; // no current "skip" path; all candidates are attempted
+      return res.json({
+        ok: true,
+        dryRun,
+        totalCandidates: candidates.length,
+        updated,
+        skipped,
+        failed,
+      });
+    } catch (e) {
+      console.error("[ADMIN] backfill apply failed:", e?.message || e);
+      return res.status(500).json({ ok: false, error: e?.message || "failed" });
     }
   }
 );
@@ -4281,119 +4664,136 @@ VALUES
   }
 });
 
-app.delete("/api/rfqs/:id", authenticate, requireAdminOrLogistics, async (req, res) => {
-  const { id } = req.params;
-  const reason = String(req.body?.reason || "").trim();
+app.delete(
+  "/api/rfqs/:id",
+  authenticate,
+  requireAdminOrLogistics,
+  async (req, res) => {
+    const { id } = req.params;
+    const reason = String(req.body?.reason || "").trim();
 
-  if (!reason) {
-    return res.status(400).json({ message: "Deletion reason is required" });
-  }
-
-  try {
-    const pool = await getPool();
-    const tx = new sql.Transaction(pool);
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-
-    let rolledBack = false;
-    let rfq = null;
-    let quotes = [];
-    let uniqueVendors = [];
-    let deletedAtIso = new Date().toISOString();
-
-    try {
-      const rfqRes = await tx
-        .request()
-        .input("id", sql.UniqueIdentifier, id)
-        .query("SELECT TOP 1 * FROM dbo.RFQs WHERE id = @id");
-
-      rfq = rfqRes.recordset[0] || null;
-      if (!rfq) {
-        await tx.rollback();
-        rolledBack = true;
-        return res.status(404).json({ message: "RFQ not found" });
-      }
-
-      if (rfq.status === "closed") {
-        await tx.rollback();
-        rolledBack = true;
-        return res.status(409).json({
-          message: "Finalized RFQs cannot be deleted",
-        });
-      }
-
-      const quoteRes = await tx
-        .request()
-        .input("rfqId", sql.UniqueIdentifier, id)
-        .query("SELECT * FROM dbo.Quotes WHERE rfqId = @rfqId ORDER BY createdAt DESC");
-      quotes = quoteRes.recordset || [];
-      uniqueVendors = [...new Set(quotes.map((q) => String(q.vendorName || "").trim()).filter(Boolean))];
-
-      await tx
-        .request()
-        .input("rfqId", sql.UniqueIdentifier, id)
-        .query("DELETE FROM dbo.Allocations WHERE rfqId = @rfqId");
-
-      await tx
-        .request()
-        .input("rfqId", sql.UniqueIdentifier, id)
-        .query("DELETE FROM dbo.Quotes WHERE rfqId = @rfqId");
-
-      await tx
-        .request()
-        .input("id", sql.UniqueIdentifier, id)
-        .query("DELETE FROM dbo.RFQs WHERE id = @id");
-
-      deletedAtIso = new Date().toISOString();
-      await tx.commit();
-    } catch (innerErr) {
-      if (!rolledBack) {
-        await tx.rollback().catch(() => undefined);
-      }
-      throw innerErr;
+    if (!reason) {
+      return res.status(400).json({ message: "Deletion reason is required" });
     }
 
-    const deletedBy = [req.user?.name, req.user?.username].filter(Boolean).join(" • ");
-
     try {
-      const internalHtml = rfqDeletionInternalEmailTemplate({
-        rfq,
-        quotes,
-        deletedBy: deletedBy || req.user?.username || "Unknown user",
-        deletedAt: deletedAtIso,
-        reason,
-      });
+      const pool = await getPool();
+      const tx = new sql.Transaction(pool);
+      await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-      await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
-        message: {
-          subject: `RFQ Deleted | RFQ ${rfq?.rfqNumber || "—"} | ${rfq?.materialPONumber || "—"}`,
-          body: {
-            contentType: "HTML",
-            content: internalHtml,
-          },
-          toRecipients: graphRecipientsFromEmails([
-            "vishnu.hazari@premierenergies.com",
-            "ramanjulu@premierenergies.com",
-            "aarnav.singh@premierenergies.com",
-          ]),
-        },
-        saveToSentItems: true,
-      });
-    } catch (e) {
-      console.error("[GRAPH] RFQ deletion internal email failed (ignored):", e?.message || e);
-    }
-
-    if (uniqueVendors.length) {
-      const codesCte = uniqueVendors
-        .map((_, i) => `SELECT @c${i} AS code`)
-        .join(" UNION ALL ");
-
-      let req2 = pool.request();
-      uniqueVendors.forEach((code, i) =>
-        req2.input(`c${i}`, sql.NVarChar(150), code)
-      );
+      let rolledBack = false;
+      let rfq = null;
+      let quotes = [];
+      let uniqueVendors = [];
+      let deletedAtIso = new Date().toISOString();
 
       try {
-        const vendorEmailRes = await req2.query(`
+        const rfqRes = await tx
+          .request()
+          .input("id", sql.UniqueIdentifier, id)
+          .query("SELECT TOP 1 * FROM dbo.RFQs WHERE id = @id");
+
+        rfq = rfqRes.recordset[0] || null;
+        if (!rfq) {
+          await tx.rollback();
+          rolledBack = true;
+          return res.status(404).json({ message: "RFQ not found" });
+        }
+
+        if (rfq.status === "closed") {
+          await tx.rollback();
+          rolledBack = true;
+          return res.status(409).json({
+            message: "Finalized RFQs cannot be deleted",
+          });
+        }
+
+        const quoteRes = await tx
+          .request()
+          .input("rfqId", sql.UniqueIdentifier, id)
+          .query(
+            "SELECT * FROM dbo.Quotes WHERE rfqId = @rfqId ORDER BY createdAt DESC"
+          );
+        quotes = quoteRes.recordset || [];
+        uniqueVendors = [
+          ...new Set(
+            quotes.map((q) => String(q.vendorName || "").trim()).filter(Boolean)
+          ),
+        ];
+
+        await tx
+          .request()
+          .input("rfqId", sql.UniqueIdentifier, id)
+          .query("DELETE FROM dbo.Allocations WHERE rfqId = @rfqId");
+
+        await tx
+          .request()
+          .input("rfqId", sql.UniqueIdentifier, id)
+          .query("DELETE FROM dbo.Quotes WHERE rfqId = @rfqId");
+
+        await tx
+          .request()
+          .input("id", sql.UniqueIdentifier, id)
+          .query("DELETE FROM dbo.RFQs WHERE id = @id");
+
+        deletedAtIso = new Date().toISOString();
+        await tx.commit();
+      } catch (innerErr) {
+        if (!rolledBack) {
+          await tx.rollback().catch(() => undefined);
+        }
+        throw innerErr;
+      }
+
+      const deletedBy = [req.user?.name, req.user?.username]
+        .filter(Boolean)
+        .join(" • ");
+
+      try {
+        const internalHtml = rfqDeletionInternalEmailTemplate({
+          rfq,
+          quotes,
+          deletedBy: deletedBy || req.user?.username || "Unknown user",
+          deletedAt: deletedAtIso,
+          reason,
+        });
+
+        await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+          message: {
+            subject: `RFQ Deleted | RFQ ${rfq?.rfqNumber || "—"} | ${
+              rfq?.materialPONumber || "—"
+            }`,
+            body: {
+              contentType: "HTML",
+              content: internalHtml,
+            },
+            toRecipients: graphRecipientsFromEmails([
+              "vishnu.hazari@premierenergies.com",
+              "ramanjulu@premierenergies.com",
+              "aarnav.singh@premierenergies.com",
+            ]),
+          },
+          saveToSentItems: true,
+        });
+      } catch (e) {
+        console.error(
+          "[GRAPH] RFQ deletion internal email failed (ignored):",
+          e?.message || e
+        );
+      }
+
+      if (uniqueVendors.length) {
+        const codesCte = uniqueVendors
+          .map((_, i) => `SELECT @c${i} AS code`)
+          .join(" UNION ALL ");
+
+        let req2 = pool.request();
+        uniqueVendors.forEach((code, i) =>
+          req2.input(`c${i}`, sql.NVarChar(150), code)
+        );
+
+        try {
+          const vendorEmailRes = await req2.query(`
           ;WITH V AS (${codesCte})
           SELECT
             V.code AS vendorCode,
@@ -4407,42 +4807,46 @@ app.delete("/api/rfqs/:id", authenticate, requireAdminOrLogistics, async (req, r
             ON u.company = V.code AND u.role = 'vendor'
         `);
 
-        for (const row of vendorEmailRes.recordset || []) {
-          const vendorEmailList = parseEmailList(
-            [row.vendorEmail, row.vendorEmails, row.userEmail]
-              .filter(Boolean)
-              .join("\n")
-          );
-          if (!vendorEmailList.length) continue;
+          for (const row of vendorEmailRes.recordset || []) {
+            const vendorEmailList = parseEmailList(
+              [row.vendorEmail, row.vendorEmails, row.userEmail]
+                .filter(Boolean)
+                .join("\n")
+            );
+            if (!vendorEmailList.length) continue;
 
-          const vendorHtml = rfqDeletionVendorEmailTemplate({
-            rfq,
-            vendorName: row.vendorCode,
-          });
+            const vendorHtml = rfqDeletionVendorEmailTemplate({
+              rfq,
+              vendorName: row.vendorCode,
+            });
 
-          await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
-            message: {
-              subject: `RFQ Deleted | RFQ ${rfq?.rfqNumber || "—"}`,
-              body: {
-                contentType: "HTML",
-                content: vendorHtml,
+            await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+              message: {
+                subject: `RFQ Deleted | RFQ ${rfq?.rfqNumber || "—"}`,
+                body: {
+                  contentType: "HTML",
+                  content: vendorHtml,
+                },
+                toRecipients: graphRecipientsFromEmails(vendorEmailList),
               },
-              toRecipients: graphRecipientsFromEmails(vendorEmailList),
-            },
-            saveToSentItems: true,
-          });
+              saveToSentItems: true,
+            });
+          }
+        } catch (e) {
+          console.error(
+            "[GRAPH] RFQ deletion vendor email failed (ignored):",
+            e?.message || e
+          );
         }
-      } catch (e) {
-        console.error("[GRAPH] RFQ deletion vendor email failed (ignored):", e?.message || e);
       }
-    }
 
-    return res.json({ message: "RFQ deleted successfully" });
-  } catch (err) {
-    console.error("[API] Delete RFQ error:", err);
-    return res.status(500).json({ message: "Server error" });
+      return res.json({ message: "RFQ deleted successfully" });
+    } catch (err) {
+      console.error("[API] Delete RFQ error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
   }
-});
+);
 
 // List quotes for RFQ
 app.get("/api/quotes/:rfqId", authenticate, async (req, res) => {
@@ -4451,8 +4855,15 @@ app.get("/api/quotes/:rfqId", authenticate, async (req, res) => {
     const quotes = (
       await pool
         .request()
-        .input("rfqId", sql.UniqueIdentifier, req.params.rfqId)
-        .query("SELECT * FROM dbo.Quotes WHERE rfqId = @rfqId")
+        .input("rfqId", sql.UniqueIdentifier, req.params.rfqId).query(`
+          SELECT
+            q.*,
+            COALESCE(NULLIF(LTRIM(RTRIM(t.shortName)), ''), q.vendorName) AS vendorDisplayName
+          FROM dbo.Quotes q
+          LEFT JOIN dbo.Master_Transporters t
+            ON t.vendorCode = q.vendorName
+          WHERE q.rfqId = @rfqId
+        `)
     ).recordset;
 
     res.json(quotes);
@@ -4474,10 +4885,14 @@ app.get("/api/quotes/:rfqId/my-latest", authenticate, async (req, res) => {
         .request()
         .input("rfqId", sql.UniqueIdentifier, req.params.rfqId)
         .input("vendorName", sql.NVarChar, req.user.company).query(`
-          SELECT TOP 1 *
-          FROM dbo.Quotes
-          WHERE rfqId = @rfqId AND vendorName = @vendorName
-          ORDER BY createdAt DESC
+          SELECT TOP 1
+            q.*,
+            COALESCE(NULLIF(LTRIM(RTRIM(t.shortName)), ''), q.vendorName) AS vendorDisplayName
+          FROM dbo.Quotes q
+          LEFT JOIN dbo.Master_Transporters t
+            ON t.vendorCode = q.vendorName
+          WHERE q.rfqId = @rfqId AND q.vendorName = @vendorName
+          ORDER BY q.createdAt DESC
         `)
     ).recordset[0];
 
@@ -4524,8 +4939,7 @@ app.post("/api/quotes", authenticate, async (req, res) => {
     try {
       const rfqRes = await tx
         .request()
-        .input("id", sql.UniqueIdentifier, d.rfqId)
-        .query(`
+        .input("id", sql.UniqueIdentifier, d.rfqId).query(`
           SELECT id, status, rfqNumber, itemDescription, companyName, materialPONumber,
                  supplierName, portOfLoading, portOfDestination, containerType, incoterms,
                  numberOfContainers, cargoWeight, cargoReadinessDate, cargoReadinessFrom, cargoReadinessTo,
@@ -4545,7 +4959,8 @@ app.post("/api/quotes", authenticate, async (req, res) => {
         await tx.rollback();
         rolledBack = true;
         return res.status(409).json({
-          message: "This RFQ has already been finalized. Quotes can no longer be updated.",
+          message:
+            "This RFQ has already been finalized. Quotes can no longer be updated.",
         });
       }
 
@@ -4587,7 +5002,8 @@ app.post("/api/quotes", authenticate, async (req, res) => {
         .input("quoteValidityDate", sql.DateTime2, d.quoteValidityDate)
         .input("message", sql.NVarChar, d.message || null)
         .input("homeTotal", sql.Float, homeTotal)
-        .input("mooWRTotal", sql.Float, mooWRTotal);
+        .input("mooWRTotal", sql.Float, mooWRTotal)
+        .input("appliedUsdInrRate", sql.Float, USD_TO_INR);
 
       const existingQuote = (
         await tx
@@ -4603,8 +5019,8 @@ app.post("/api/quotes", authenticate, async (req, res) => {
 
       if (existingQuote?.id) {
         action = "updated";
-        await request
-          .input("quoteId", sql.UniqueIdentifier, existingQuote.id).query(`
+        await request.input("quoteId", sql.UniqueIdentifier, existingQuote.id)
+          .query(`
             UPDATE dbo.Quotes
             SET numberOfContainers = @numberOfContainers,
                 shippingLineName = @shippingLineName,
@@ -4625,7 +5041,8 @@ app.post("/api/quotes", authenticate, async (req, res) => {
                 message = @message,
                 createdAt = SYSUTCDATETIME(),
                 homeTotal = @homeTotal,
-                mooWRTotal = @mooWRTotal
+                mooWRTotal = @mooWRTotal,
+                appliedUsdInrRate = @appliedUsdInrRate
             WHERE id = @quoteId
           `);
       } else {
@@ -4636,14 +5053,14 @@ app.post("/api/quotes", authenticate, async (req, res) => {
              houseDeliveryOrderPerBOL, cfsPerContainer, transportationPerContainer,
              chaChargesHome, chaChargesMOOWR, ediChargesPerBOE,
              mooWRReeWarehousingCharges, transshipOrDirect, quoteValidityDate,
-             message, createdAt, homeTotal, mooWRTotal)
+             message, createdAt, homeTotal, mooWRTotal, appliedUsdInrRate)
           VALUES
             (@rfqId, @vendorName, @numberOfContainers, @shippingLineName, @containerType,
              @vesselName, @vesselETD, @vesselETA, @seaFreightPerContainer,
              @houseDeliveryOrderPerBOL, @cfsPerContainer, @transportationPerContainer,
              @chaChargesHome, @chaChargesMOOWR, @ediChargesPerBOE,
              @mooWRReeWarehousingCharges, @transshipOrDirect, @quoteValidityDate,
-             @message, SYSUTCDATETIME(), @homeTotal, @mooWRTotal)
+             @message, SYSUTCDATETIME(), @homeTotal, @mooWRTotal, @appliedUsdInrRate)
         `);
       }
 
@@ -4775,111 +5192,135 @@ app.post("/api/quotes", authenticate, async (req, res) => {
   }
 });
 
-app.put("/api/quotes/:quoteId/logistics-pricing", authenticate, async (req, res) => {
-  if (req.user.role !== "logistics" && req.user.role !== "admin") {
-    return res.sendStatus(403);
-  }
-
-  const { quoteId } = req.params;
-  const body = req.body || {};
-
-  try {
-    const pool = await getPool();
-
-    const existingQuoteRes = await pool
-      .request()
-      .input("quoteId", sql.UniqueIdentifier, quoteId)
-      .query("SELECT TOP 1 * FROM dbo.Quotes WHERE id = @quoteId");
-
-    const existingQuote = existingQuoteRes.recordset[0];
-    if (!existingQuote) {
-      return res.status(404).json({ message: "Quote not found" });
+app.put(
+  "/api/quotes/:quoteId/logistics-pricing",
+  authenticate,
+  async (req, res) => {
+    if (req.user.role !== "logistics" && req.user.role !== "admin") {
+      return res.sendStatus(403);
     }
 
-    const rfqRes = await pool
-      .request()
-      .input("rfqId", sql.UniqueIdentifier, existingQuote.rfqId)
-      .query("SELECT TOP 1 status FROM dbo.RFQs WHERE id = @rfqId");
+    const { quoteId } = req.params;
+    const body = req.body || {};
 
-    const rfq = rfqRes.recordset[0];
-    if (!rfq) {
-      return res.status(404).json({ message: "RFQ not found" });
-    }
+    try {
+      const pool = await getPool();
 
-    if (rfq.status === "closed") {
-      return res.status(409).json({
-        message: "This RFQ has already been finalized. Logistics pricing can no longer be edited.",
-      });
-    }
-
-    let usdToInr = Number(body.usdToInr);
-    if (!Number.isFinite(usdToInr) || usdToInr <= 0) {
-      const fx = await getUsdToInrRate();
-      usdToInr = fx.rate;
-    }
-
-    const num = (incoming, fallback) => {
-      const parsed = Number(incoming);
-      return Number.isFinite(parsed) ? parsed : Number(fallback || 0);
-    };
-
-    const seaFreightPerContainer = num(
-      body.seaFreightPerContainer,
-      existingQuote.seaFreightPerContainer
-    );
-    const houseDeliveryOrderPerBOL = num(
-      body.houseDeliveryOrderPerBOL,
-      existingQuote.houseDeliveryOrderPerBOL
-    );
-    const cfsPerContainer = num(body.cfsPerContainer, existingQuote.cfsPerContainer);
-    const transportationPerContainer = num(
-      body.transportationPerContainer,
-      existingQuote.transportationPerContainer
-    );
-    const ediChargesPerBOE = num(body.ediChargesPerBOE, existingQuote.ediChargesPerBOE);
-    const chaChargesHome = num(body.chaChargesHome, existingQuote.chaChargesHome);
-    const chaChargesMOOWR = num(body.chaChargesMOOWR, existingQuote.chaChargesMOOWR);
-    const mooWRReeWarehousingCharges = num(
-      body.mooWRReeWarehousingCharges,
-      existingQuote.mooWRReeWarehousingCharges
-    );
-
-    const seaInINR = seaFreightPerContainer * usdToInr;
-    const homeTotal =
-      seaInINR +
-      houseDeliveryOrderPerBOL +
-      cfsPerContainer +
-      transportationPerContainer +
-      ediChargesPerBOE +
-      chaChargesHome;
-    const mooWRTotal =
-      seaInINR +
-      houseDeliveryOrderPerBOL +
-      cfsPerContainer +
-      transportationPerContainer +
-      ediChargesPerBOE +
-      chaChargesMOOWR +
-      mooWRReeWarehousingCharges;
-
-    const updatedQuote = (
-      await pool
+      const existingQuoteRes = await pool
         .request()
         .input("quoteId", sql.UniqueIdentifier, quoteId)
-        .input("seaFreightPerContainer", sql.Float, seaFreightPerContainer)
-        .input("houseDeliveryOrderPerBOL", sql.Float, houseDeliveryOrderPerBOL)
-        .input("cfsPerContainer", sql.Float, cfsPerContainer)
-        .input("transportationPerContainer", sql.Float, transportationPerContainer)
-        .input("ediChargesPerBOE", sql.Float, ediChargesPerBOE)
-        .input("chaChargesHome", sql.Float, chaChargesHome)
-        .input("chaChargesMOOWR", sql.Float, chaChargesMOOWR)
-        .input(
-          "mooWRReeWarehousingCharges",
-          sql.Float,
-          mooWRReeWarehousingCharges
-        )
-        .input("homeTotal", sql.Float, homeTotal)
-        .input("mooWRTotal", sql.Float, mooWRTotal)
-        .query(`
+        .query("SELECT TOP 1 * FROM dbo.Quotes WHERE id = @quoteId");
+
+      const existingQuote = existingQuoteRes.recordset[0];
+      if (!existingQuote) {
+        return res.status(404).json({ message: "Quote not found" });
+      }
+
+      const rfqRes = await pool
+        .request()
+        .input("rfqId", sql.UniqueIdentifier, existingQuote.rfqId)
+        .query("SELECT TOP 1 status FROM dbo.RFQs WHERE id = @rfqId");
+
+      const rfq = rfqRes.recordset[0];
+      if (!rfq) {
+        return res.status(404).json({ message: "RFQ not found" });
+      }
+
+      if (rfq.status === "closed") {
+        return res.status(409).json({
+          message:
+            "This RFQ has already been finalized. Logistics pricing can no longer be edited.",
+        });
+      }
+
+      let usdToInr = Number(body.usdToInr);
+      if (!Number.isFinite(usdToInr) || usdToInr <= 0) {
+        const fx = await getUsdToInrRate();
+        usdToInr = fx.rate;
+      }
+
+      const num = (incoming, fallback) => {
+        const parsed = Number(incoming);
+        return Number.isFinite(parsed) ? parsed : Number(fallback || 0);
+      };
+
+      const seaFreightPerContainer = num(
+        body.seaFreightPerContainer,
+        existingQuote.seaFreightPerContainer
+      );
+      const houseDeliveryOrderPerBOL = num(
+        body.houseDeliveryOrderPerBOL,
+        existingQuote.houseDeliveryOrderPerBOL
+      );
+      const cfsPerContainer = num(
+        body.cfsPerContainer,
+        existingQuote.cfsPerContainer
+      );
+      const transportationPerContainer = num(
+        body.transportationPerContainer,
+        existingQuote.transportationPerContainer
+      );
+      const ediChargesPerBOE = num(
+        body.ediChargesPerBOE,
+        existingQuote.ediChargesPerBOE
+      );
+      const chaChargesHome = num(
+        body.chaChargesHome,
+        existingQuote.chaChargesHome
+      );
+      const chaChargesMOOWR = num(
+        body.chaChargesMOOWR,
+        existingQuote.chaChargesMOOWR
+      );
+      const mooWRReeWarehousingCharges = num(
+        body.mooWRReeWarehousingCharges,
+        existingQuote.mooWRReeWarehousingCharges
+      );
+
+      const seaInINR = seaFreightPerContainer * usdToInr;
+      const homeTotal =
+        seaInINR +
+        houseDeliveryOrderPerBOL +
+        cfsPerContainer +
+        transportationPerContainer +
+        ediChargesPerBOE +
+        chaChargesHome;
+      const mooWRTotal =
+        seaInINR +
+        houseDeliveryOrderPerBOL +
+        cfsPerContainer +
+        transportationPerContainer +
+        ediChargesPerBOE +
+        chaChargesMOOWR +
+        mooWRReeWarehousingCharges;
+
+      const updatedQuote = (
+        await pool
+          .request()
+          .input("quoteId", sql.UniqueIdentifier, quoteId)
+          .input("seaFreightPerContainer", sql.Float, seaFreightPerContainer)
+          .input(
+            "houseDeliveryOrderPerBOL",
+            sql.Float,
+            houseDeliveryOrderPerBOL
+          )
+          .input("cfsPerContainer", sql.Float, cfsPerContainer)
+          .input(
+            "transportationPerContainer",
+            sql.Float,
+            transportationPerContainer
+          )
+          .input("ediChargesPerBOE", sql.Float, ediChargesPerBOE)
+          .input("chaChargesHome", sql.Float, chaChargesHome)
+          .input("chaChargesMOOWR", sql.Float, chaChargesMOOWR)
+          .input(
+            "mooWRReeWarehousingCharges",
+            sql.Float,
+            mooWRReeWarehousingCharges
+          )
+          .input("homeTotal", sql.Float, homeTotal)
+          .input("mooWRTotal", sql.Float, mooWRTotal)
+          .input("appliedUsdInrRate", sql.Float, usdToInr).query(`
           UPDATE dbo.Quotes
           SET seaFreightPerContainer = @seaFreightPerContainer,
               houseDeliveryOrderPerBOL = @houseDeliveryOrderPerBOL,
@@ -4890,21 +5331,23 @@ app.put("/api/quotes/:quoteId/logistics-pricing", authenticate, async (req, res)
               chaChargesMOOWR = @chaChargesMOOWR,
               mooWRReeWarehousingCharges = @mooWRReeWarehousingCharges,
               homeTotal = @homeTotal,
-              mooWRTotal = @mooWRTotal
+              mooWRTotal = @mooWRTotal,
+              appliedUsdInrRate = @appliedUsdInrRate
           OUTPUT INSERTED.*
           WHERE id = @quoteId
         `)
-    ).recordset[0];
+      ).recordset[0];
 
-    return res.json({
-      message: "Logistics pricing saved",
-      quote: updatedQuote,
-    });
-  } catch (err) {
-    console.error("[API] Logistics quote pricing update error:", err);
-    return res.status(500).json({ message: "Server error" });
+      return res.json({
+        message: "Logistics pricing saved",
+        quote: updatedQuote,
+      });
+    } catch (err) {
+      console.error("[API] Logistics quote pricing update error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
   }
-});
+);
 
 // Allocate containers (logistics and admin)
 app.post("/api/allocations", authenticate, async (req, res) => {
@@ -5061,7 +5504,8 @@ app.post("/api/allocations", authenticate, async (req, res) => {
     if (rfq && totalAllocated >= Number(rfq.numberOfContainers || 0)) {
       await pool.request().input("rfqId", sql.UniqueIdentifier, rfqId).query(`
           UPDATE dbo.RFQs
-          SET status = 'closed'
+          SET status = 'closed',
+              finalizedAt = COALESCE(finalizedAt, SYSUTCDATETIME())
           WHERE id = @rfqId
         `);
     }
@@ -5143,27 +5587,28 @@ app.post("/api/allocations", authenticate, async (req, res) => {
 
         // Choose TO: vendorEmail (fallback to SENDER_EMAIL to avoid crashing if not found)
         const toList = vendorEmailList.length
-        ? graphRecipientsFromEmails(vendorEmailList)
-        : [{ emailAddress: { address: SENDER_EMAIL } }];
-      
-      await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
-        message: {
-          subject: `Allocation | RFQ ${rfq.rfqNumber} | ${vendorName} | ${materialPONumberSafe || "—"}`,
+          ? graphRecipientsFromEmails(vendorEmailList)
+          : [{ emailAddress: { address: SENDER_EMAIL } }];
 
-          body: {
-            contentType: "HTML",
-            content: html,
+        await graphClient.api(`/users/${SENDER_EMAIL}/sendMail`).post({
+          message: {
+            subject: `Allocation | RFQ ${rfq.rfqNumber} | ${vendorName} | ${
+              materialPONumberSafe || "—"
+            }`,
+
+            body: {
+              contentType: "HTML",
+              content: html,
+            },
+            toRecipients: toList,
+            ccRecipients: graphRecipientsFromEmails([
+              "ramanjulu@premierenergies.com",
+              ...ALLOCATION_CC_ALWAYS,
+              ...(String(reason || "").trim() ? ALLOCATION_CC_WITH_REASON : []),
+            ]),
           },
-          toRecipients: toList,
-          ccRecipients: graphRecipientsFromEmails([
-            "ramanjulu@premierenergies.com",
-            ...ALLOCATION_CC_ALWAYS,
-            ...(String(reason || "").trim() ? ALLOCATION_CC_WITH_REASON : []),
-          ]),
-        },
-        saveToSentItems: true,
-      });
-      
+          saveToSentItems: true,
+        });
       } catch (e) {
         console.error(
           "[GRAPH] Finalization email failed (ignored):",
@@ -6003,6 +6448,1949 @@ app.post(
         ok: false,
         message: "Failed to purge data",
       });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN CHAT / NL ANALYTICS (hybrid deterministic engine + optional Ollama)
+// ─────────────────────────────────────────────────────────────────────────────
+// Environment:
+//   OLLAMA_URL   — base URL (default http://127.0.0.1:11434)
+//   OLLAMA_MODEL — model name (default llama3.2, recommended alt: qwen2.5)
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2";
+
+const CHAT_RECENT_RFQ_LIMIT = 40;
+const CHAT_RECENT_QUOTE_LIMIT = 150;
+const CHAT_RECENT_ALLOCATION_LIMIT = 150;
+
+const CHAT_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "but",
+  "by",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "our",
+  "show",
+  "tell",
+  "the",
+  "to",
+  "was",
+  "what",
+  "which",
+  "who",
+  "with",
+  "you",
+  "your",
+  "me",
+  "do",
+  "does",
+  "did",
+  "have",
+  "has",
+  "had",
+  "this",
+  "that",
+  "these",
+  "those",
+  "about",
+  "please",
+  "can",
+  "could",
+  "would",
+  "should",
+  "will",
+  "all",
+  "any",
+  "into",
+  "than",
+  "then",
+  "their",
+  "there",
+  "when",
+  "where",
+]);
+
+function fmtInr(value) {
+  const n = Number(value);
+  return Number.isFinite(n)
+    ? `₹${n.toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`
+    : "—";
+}
+
+function fmtUsd(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? `$${n.toFixed(2)}` : "—";
+}
+
+function fmtPct(num, den) {
+  const n = Number(num || 0);
+  const d = Number(den || 0);
+  if (!d) return "0%";
+  return `${((n / d) * 100).toFixed(1)}%`;
+}
+
+function safeNum(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeForSearch(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeForSearch(value) {
+  return normalizeForSearch(value)
+    .split(" ")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .filter((x) => x.length > 2)
+    .filter((x) => !CHAT_STOPWORDS.has(x));
+}
+
+function uniqStrings(values) {
+  const seen = new Set();
+  const out = [];
+  for (const v of values || []) {
+    const raw = String(v || "").trim();
+    if (!raw) continue;
+    const key = raw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(raw);
+  }
+  return out;
+}
+
+function buildAliases(...values) {
+  return uniqStrings(
+    values.flatMap((v) => {
+      const raw = String(v || "").trim();
+      if (!raw) return [];
+      const norm = normalizeForSearch(raw);
+      return uniqStrings([raw, norm]);
+    })
+  );
+}
+
+function aliasMatches(questionNorm, aliases) {
+  const hay = ` ${questionNorm} `;
+  for (const alias of aliases || []) {
+    const a = normalizeForSearch(alias);
+    if (!a || a.length < 3) continue;
+    if (hay.includes(` ${a} `)) return true;
+    if (a.length >= 6 && questionNorm.includes(a)) return true;
+  }
+  return false;
+}
+
+function sortByAliasSpecificity(items) {
+  return [...items].sort((a, b) => {
+    const aMax = Math.max(
+      0,
+      ...(a.aliases || []).map((x) => normalizeForSearch(x).length)
+    );
+    const bMax = Math.max(
+      0,
+      ...(b.aliases || []).map((x) => normalizeForSearch(x).length)
+    );
+    return bMax - aMax;
+  });
+}
+
+function monthLabel(monthKey) {
+  const [yyyy, mm] = String(monthKey || "").split("-");
+  if (!yyyy || !mm) return monthKey || "—";
+  const d = new Date(`${yyyy}-${mm}-01T00:00:00`);
+  if (Number.isNaN(d.getTime())) return monthKey || "—";
+  return d.toLocaleDateString("en-IN", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function compactText(value, max = 180) {
+  const s = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1)}…`;
+}
+
+function extractRfqNumbers(question) {
+  const matches = String(question || "").match(/\b\d{3,}\b/g) || [];
+  return Array.from(new Set(matches.map((x) => Number(x)).filter(Boolean)));
+}
+
+function bestKeywordScore(questionTokens, text) {
+  if (!questionTokens.length) return 0;
+  const hay = tokenizeForSearch(text);
+  if (!hay.length) return 0;
+  const haySet = new Set(hay);
+  let score = 0;
+  for (const tok of questionTokens) {
+    if (haySet.has(tok)) score += 1;
+  }
+  return score;
+}
+
+async function buildAnalyticsContext() {
+  const pool = await getPool();
+
+  const [
+    countsRes,
+    statusCountsRes,
+    vendorsRes,
+    portsRes,
+    companiesRes,
+    containerTypesRes,
+    incotermsRes,
+    recentRfqsRes,
+    recentQuotesRes,
+    recentAllocationsRes,
+    laneStatsRes,
+    monthlyRfqsRes,
+    monthlyQuotesRes,
+    monthlyAllocationsRes,
+  ] = await Promise.all([
+    pool.request().query(`
+      SELECT
+        (SELECT COUNT(*) FROM dbo.RFQs) AS totalRFQs,
+        (SELECT COUNT(*) FROM dbo.Quotes) AS totalQuotes,
+        (SELECT COUNT(*) FROM dbo.Allocations) AS totalAllocations,
+        (SELECT ISNULL(SUM(numberOfContainers),0) FROM dbo.RFQs) AS totalContainersRequested,
+        (SELECT ISNULL(SUM(ISNULL(containersAllottedHome,0) + ISNULL(containersAllottedMOOWR,0)),0) FROM dbo.Allocations) AS totalContainersAllocated,
+        (SELECT COUNT(*) FROM dbo.Master_Transporters WHERE ISNULL(isActive,1)=1) AS activeVendors,
+        (SELECT COUNT(*) FROM dbo.Master_PortsOfLoading WHERE ISNULL(isActive,1)=1) AS activePortsOfLoading,
+        (SELECT COUNT(*) FROM dbo.Master_CompanyNames WHERE ISNULL(isActive,1)=1) AS activeCompanies,
+        (SELECT COUNT(*) FROM dbo.Master_ContainerTypes WHERE ISNULL(isActive,1)=1) AS activeContainerTypes
+    `),
+
+    pool.request().query(`
+      SELECT status, COUNT(*) AS rfqCount
+      FROM dbo.RFQs
+      GROUP BY status
+      ORDER BY rfqCount DESC, status ASC
+    `),
+
+    pool.request().query(`
+      SELECT
+        CAST(t.vendorCode AS NVARCHAR(150)) AS vendorCode,
+        CAST(t.vendorName AS NVARCHAR(255)) AS vendorName,
+        CAST(t.shortName AS NVARCHAR(100)) AS shortName,
+        COALESCE(NULLIF(CAST(t.vendorEmails AS NVARCHAR(MAX)), ''), NULLIF(LTRIM(RTRIM(t.vendorEmail)), '')) AS vendorEmails,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Quotes q WHERE q.vendorName = t.vendorCode
+        ), 0) AS quoteCount,
+        ISNULL((
+          SELECT COUNT(DISTINCT q.rfqId) FROM dbo.Quotes q WHERE q.vendorName = t.vendorCode
+        ), 0) AS quotedRFQCount,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Allocations a WHERE a.vendorName = t.vendorCode
+        ), 0) AS allocationCount,
+        ISNULL((
+          SELECT SUM(ISNULL(a.containersAllottedHome,0) + ISNULL(a.containersAllottedMOOWR,0))
+          FROM dbo.Allocations a WHERE a.vendorName = t.vendorCode
+        ), 0) AS allocatedContainers,
+        ISNULL((
+          SELECT SUM(
+            ISNULL(a.containersAllottedHome,0) * ISNULL(q.homeTotal,0) +
+            ISNULL(a.containersAllottedMOOWR,0) * ISNULL(q.mooWRTotal,0)
+          )
+          FROM dbo.Allocations a
+          INNER JOIN dbo.Quotes q ON q.id = a.quoteId
+          WHERE a.vendorName = t.vendorCode
+        ), 0) AS amountWon,
+        (
+          SELECT AVG(CAST(q.seaFreightPerContainer AS FLOAT))
+          FROM dbo.Quotes q
+          WHERE q.vendorName = t.vendorCode
+            AND q.seaFreightPerContainer IS NOT NULL
+            AND q.seaFreightPerContainer > 0
+        ) AS avgSeaFreightUsd,
+        (
+          SELECT MAX(q.createdAt) FROM dbo.Quotes q WHERE q.vendorName = t.vendorCode
+        ) AS lastQuoteAt,
+        (
+          SELECT MAX(a.createdAt) FROM dbo.Allocations a WHERE a.vendorName = t.vendorCode
+        ) AS lastAllocationAt
+      FROM dbo.Master_Transporters t
+      WHERE ISNULL(t.isActive,1) = 1
+      ORDER BY allocatedContainers DESC, amountWon DESC, vendorName ASC
+    `),
+
+    pool.request().query(`
+      SELECT
+        CAST(p.value AS NVARCHAR(100)) AS value,
+        CAST(p.country AS NVARCHAR(100)) AS country,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.RFQs r WHERE r.portOfLoading = p.value
+        ), 0) AS rfqCount,
+        (
+          SELECT AVG(CAST(q.seaFreightPerContainer AS FLOAT))
+          FROM dbo.Quotes q
+          INNER JOIN dbo.RFQs r ON r.id = q.rfqId
+          WHERE r.portOfLoading = p.value
+            AND q.seaFreightPerContainer IS NOT NULL
+            AND q.seaFreightPerContainer > 0
+        ) AS avgSeaFreightUsd
+      FROM dbo.Master_PortsOfLoading p
+      WHERE ISNULL(p.isActive,1) = 1
+      ORDER BY rfqCount DESC, value ASC
+    `),
+
+    pool.request().query(`
+      SELECT
+        CAST(c.value AS NVARCHAR(MAX)) AS value,
+        CAST(c.shortName AS NVARCHAR(100)) AS shortName,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.RFQs r WHERE r.companyName = c.value
+        ), 0) AS rfqCount,
+        ISNULL((
+          SELECT SUM(r.numberOfContainers) FROM dbo.RFQs r WHERE r.companyName = c.value
+        ), 0) AS requestedContainers
+      FROM dbo.Master_CompanyNames c
+      WHERE ISNULL(c.isActive,1) = 1
+      ORDER BY rfqCount DESC, value ASC
+    `),
+
+    pool.request().query(`
+      SELECT
+        CAST(ct.value AS NVARCHAR(50)) AS value,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.RFQs r WHERE r.containerType = ct.value
+        ), 0) AS rfqCount,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Quotes q WHERE q.containerType = ct.value
+        ), 0) AS quoteCount
+      FROM dbo.Master_ContainerTypes ct
+      WHERE ISNULL(ct.isActive,1) = 1
+      ORDER BY rfqCount DESC, value ASC
+    `),
+
+    pool.request().query(`
+      SELECT CAST(value AS NVARCHAR(50)) AS value
+      FROM dbo.Master_Incoterms
+      WHERE ISNULL(isActive,1) = 1
+      ORDER BY value ASC
+    `),
+
+    pool.request().query(`
+      SELECT TOP ${CHAT_RECENT_RFQ_LIMIT}
+        CAST(r.id AS NVARCHAR(50)) AS id,
+        r.rfqNumber,
+        CAST(r.itemDescription AS NVARCHAR(500)) AS itemDescription,
+        CAST(r.companyName AS NVARCHAR(MAX)) AS companyName,
+        CAST(r.materialPONumber AS NVARCHAR(150)) AS materialPONumber,
+        CAST(r.supplierName AS NVARCHAR(255)) AS supplierName,
+        CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        CAST(r.containerType AS NVARCHAR(50)) AS containerType,
+        CAST(r.incoterms AS NVARCHAR(50)) AS incoterms,
+        r.numberOfContainers,
+        r.cargoWeight,
+        r.status,
+        r.createdAt,
+        r.finalizedAt,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Quotes q WHERE q.rfqId = r.id
+        ), 0) AS quoteCount,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Allocations a WHERE a.rfqId = r.id
+        ), 0) AS allocationCount,
+        ISNULL((
+          SELECT SUM(ISNULL(a.containersAllottedHome,0) + ISNULL(a.containersAllottedMOOWR,0))
+          FROM dbo.Allocations a WHERE a.rfqId = r.id
+        ), 0) AS allocatedContainers,
+        (
+          SELECT MIN(q.createdAt) FROM dbo.Quotes q WHERE q.rfqId = r.id
+        ) AS firstQuoteAt,
+        (
+          SELECT MAX(q.createdAt) FROM dbo.Quotes q WHERE q.rfqId = r.id
+        ) AS lastQuoteAt
+      FROM dbo.RFQs r
+      ORDER BY r.createdAt DESC
+    `),
+
+    pool.request().query(`
+      SELECT TOP ${CHAT_RECENT_QUOTE_LIMIT}
+        CAST(q.id AS NVARCHAR(50)) AS id,
+        CAST(q.rfqId AS NVARCHAR(50)) AS rfqId,
+        q.vendorName,
+        COALESCE(NULLIF(LTRIM(RTRIM(t.shortName)), ''), NULLIF(LTRIM(RTRIM(t.vendorName)), ''), q.vendorName) AS vendorLabel,
+        r.rfqNumber,
+        CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+        q.numberOfContainers,
+        q.shippingLineName,
+        q.transshipOrDirect,
+        CAST(q.seaFreightPerContainer AS FLOAT) AS seaFreightPerContainer,
+        CAST(q.homeTotal AS FLOAT) AS homeTotal,
+        CAST(q.mooWRTotal AS FLOAT) AS mooWRTotal,
+        q.createdAt
+      FROM dbo.Quotes q
+      INNER JOIN dbo.RFQs r ON r.id = q.rfqId
+      LEFT JOIN dbo.Master_Transporters t ON t.vendorCode = q.vendorName
+      ORDER BY q.createdAt DESC
+    `),
+
+    pool.request().query(`
+      SELECT TOP ${CHAT_RECENT_ALLOCATION_LIMIT}
+        CAST(a.id AS NVARCHAR(50)) AS id,
+        CAST(a.rfqId AS NVARCHAR(50)) AS rfqId,
+        CAST(a.quoteId AS NVARCHAR(50)) AS quoteId,
+        a.vendorName,
+        COALESCE(NULLIF(LTRIM(RTRIM(t.shortName)), ''), NULLIF(LTRIM(RTRIM(t.vendorName)), ''), a.vendorName) AS vendorLabel,
+        r.rfqNumber,
+        CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+        a.containersAllottedHome,
+        a.containersAllottedMOOWR,
+        a.reason,
+        a.createdAt,
+        CAST(q.homeTotal AS FLOAT) AS homeTotal,
+        CAST(q.mooWRTotal AS FLOAT) AS mooWRTotal
+      FROM dbo.Allocations a
+      INNER JOIN dbo.RFQs r ON r.id = a.rfqId
+      LEFT JOIN dbo.Quotes q ON q.id = a.quoteId
+      LEFT JOIN dbo.Master_Transporters t ON t.vendorCode = a.vendorName
+      ORDER BY a.createdAt DESC
+    `),
+
+    pool.request().query(`
+      SELECT TOP 100
+        CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+        COUNT(DISTINCT r.id) AS rfqCount,
+        COUNT(DISTINCT q.id) AS quoteCount,
+        MIN(CAST(q.seaFreightPerContainer AS FLOAT)) AS minFreightUsd,
+        AVG(CAST(q.seaFreightPerContainer AS FLOAT)) AS avgFreightUsd,
+        MAX(CAST(q.seaFreightPerContainer AS FLOAT)) AS maxFreightUsd
+      FROM dbo.RFQs r
+      INNER JOIN dbo.Quotes q ON q.rfqId = r.id
+      WHERE q.seaFreightPerContainer IS NOT NULL
+        AND q.seaFreightPerContainer > 0
+      GROUP BY
+        r.portOfLoading,
+        r.portOfDestination,
+        COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType)
+      ORDER BY quoteCount DESC, rfqCount DESC, portOfLoading ASC
+    `),
+
+    pool.request().query(`
+      SELECT
+        FORMAT(createdAt, 'yyyy-MM') AS monthKey,
+        COUNT(*) AS rfqCount,
+        ISNULL(SUM(numberOfContainers),0) AS requestedContainers
+      FROM dbo.RFQs
+      GROUP BY FORMAT(createdAt, 'yyyy-MM')
+      ORDER BY monthKey DESC
+    `),
+
+    pool.request().query(`
+      SELECT
+        FORMAT(createdAt, 'yyyy-MM') AS monthKey,
+        COUNT(*) AS quoteCount
+      FROM dbo.Quotes
+      GROUP BY FORMAT(createdAt, 'yyyy-MM')
+      ORDER BY monthKey DESC
+    `),
+
+    pool.request().query(`
+      SELECT
+        FORMAT(createdAt, 'yyyy-MM') AS monthKey,
+        COUNT(*) AS allocationCount,
+        ISNULL(SUM(ISNULL(containersAllottedHome,0) + ISNULL(containersAllottedMOOWR,0)),0) AS allocatedContainers
+      FROM dbo.Allocations
+      GROUP BY FORMAT(createdAt, 'yyyy-MM')
+      ORDER BY monthKey DESC
+    `),
+  ]);
+
+  const summary = countsRes.recordset?.[0] || {};
+  const statusBreakdown = statusCountsRes.recordset || [];
+
+  const vendors = (vendorsRes.recordset || []).map((r) => ({
+    vendorCode: r.vendorCode,
+    vendorName: r.vendorName,
+    shortName: r.shortName || null,
+    vendorEmails: r.vendorEmails || null,
+    quoteCount: safeNum(r.quoteCount),
+    quotedRFQCount: safeNum(r.quotedRFQCount),
+    allocationCount: safeNum(r.allocationCount),
+    allocatedContainers: safeNum(r.allocatedContainers),
+    amountWon: safeNum(r.amountWon),
+    avgSeaFreightUsd: safeNum(r.avgSeaFreightUsd, null),
+    lastQuoteAt: r.lastQuoteAt || null,
+    lastAllocationAt: r.lastAllocationAt || null,
+    aliases: buildAliases(r.vendorCode, r.vendorName, r.shortName),
+  }));
+
+  const portsOfLoading = (portsRes.recordset || []).map((r) => ({
+    value: r.value,
+    country: r.country || null,
+    rfqCount: safeNum(r.rfqCount),
+    avgSeaFreightUsd: safeNum(r.avgSeaFreightUsd, null),
+    aliases: buildAliases(r.value, r.country),
+  }));
+
+  const companies = (companiesRes.recordset || []).map((r) => ({
+    value: r.value,
+    shortName: r.shortName || null,
+    rfqCount: safeNum(r.rfqCount),
+    requestedContainers: safeNum(r.requestedContainers),
+    aliases: buildAliases(r.value, r.shortName),
+  }));
+
+  const containerTypes = (containerTypesRes.recordset || []).map((r) => ({
+    value: r.value,
+    rfqCount: safeNum(r.rfqCount),
+    quoteCount: safeNum(r.quoteCount),
+    aliases: buildAliases(r.value),
+  }));
+
+  const incoterms = (incotermsRes.recordset || []).map((r) => ({
+    value: r.value,
+    aliases: buildAliases(r.value),
+  }));
+
+  const recentRFQs = (recentRfqsRes.recordset || []).map((r) => ({
+    ...r,
+    aliases: buildAliases(
+      `rfq ${r.rfqNumber}`,
+      String(r.rfqNumber || ""),
+      r.itemDescription,
+      r.materialPONumber,
+      r.companyName,
+      r.portOfLoading,
+      r.portOfDestination,
+      r.containerType,
+      r.status
+    ),
+  }));
+
+  const recentQuotes = (recentQuotesRes.recordset || []).map((r) => ({
+    ...r,
+    aliases: buildAliases(
+      r.vendorName,
+      r.vendorLabel,
+      `rfq ${r.rfqNumber}`,
+      String(r.rfqNumber || ""),
+      r.portOfLoading,
+      r.portOfDestination,
+      r.containerType,
+      r.shippingLineName
+    ),
+  }));
+
+  const recentAllocations = (recentAllocationsRes.recordset || []).map((r) => ({
+    ...r,
+    amountWon:
+      safeNum(r.containersAllottedHome) * safeNum(r.homeTotal) +
+      safeNum(r.containersAllottedMOOWR) * safeNum(r.mooWRTotal),
+    aliases: buildAliases(
+      r.vendorName,
+      r.vendorLabel,
+      `rfq ${r.rfqNumber}`,
+      String(r.rfqNumber || ""),
+      r.portOfLoading,
+      r.portOfDestination,
+      r.containerType,
+      r.reason
+    ),
+  }));
+
+  const laneStats = (laneStatsRes.recordset || []).map((r) => ({
+    portOfLoading: r.portOfLoading,
+    portOfDestination: r.portOfDestination,
+    containerType: r.containerType,
+    rfqCount: safeNum(r.rfqCount),
+    quoteCount: safeNum(r.quoteCount),
+    minFreightUsd: safeNum(r.minFreightUsd, null),
+    avgFreightUsd: safeNum(r.avgFreightUsd, null),
+    maxFreightUsd: safeNum(r.maxFreightUsd, null),
+    aliases: buildAliases(
+      r.portOfLoading,
+      r.portOfDestination,
+      r.containerType,
+      `${r.portOfLoading} ${r.portOfDestination}`,
+      `${r.portOfLoading} ${r.containerType}`,
+      `${r.portOfLoading} to ${r.portOfDestination}`
+    ),
+  }));
+
+  const monthMap = new Map();
+
+  for (const row of monthlyRfqsRes.recordset || []) {
+    const k = String(row.monthKey || "");
+    if (!k) continue;
+    monthMap.set(k, {
+      monthKey: k,
+      label: monthLabel(k),
+      rfqCount: safeNum(row.rfqCount),
+      requestedContainers: safeNum(row.requestedContainers),
+      quoteCount: 0,
+      allocationCount: 0,
+      allocatedContainers: 0,
+      aliases: buildAliases(k, monthLabel(k)),
+    });
+  }
+
+  for (const row of monthlyQuotesRes.recordset || []) {
+    const k = String(row.monthKey || "");
+    if (!k) continue;
+    const existing = monthMap.get(k) || {
+      monthKey: k,
+      label: monthLabel(k),
+      rfqCount: 0,
+      requestedContainers: 0,
+      quoteCount: 0,
+      allocationCount: 0,
+      allocatedContainers: 0,
+      aliases: buildAliases(k, monthLabel(k)),
+    };
+    existing.quoteCount = safeNum(row.quoteCount);
+    monthMap.set(k, existing);
+  }
+
+  for (const row of monthlyAllocationsRes.recordset || []) {
+    const k = String(row.monthKey || "");
+    if (!k) continue;
+    const existing = monthMap.get(k) || {
+      monthKey: k,
+      label: monthLabel(k),
+      rfqCount: 0,
+      requestedContainers: 0,
+      quoteCount: 0,
+      allocationCount: 0,
+      allocatedContainers: 0,
+      aliases: buildAliases(k, monthLabel(k)),
+    };
+    existing.allocationCount = safeNum(row.allocationCount);
+    existing.allocatedContainers = safeNum(row.allocatedContainers);
+    monthMap.set(k, existing);
+  }
+
+  const monthlyStats = Array.from(monthMap.values()).sort((a, b) =>
+    String(b.monthKey).localeCompare(String(a.monthKey))
+  );
+
+  const platform = {
+    name: "LEAFI",
+    purpose:
+      "LEAFI manages ocean-freight procurement from RFQ creation through vendor quotation, evaluation, container allocation, finalization, reporting, and vendor notification.",
+    coreEntities: [
+      "RFQs",
+      "Quotes",
+      "Allocations",
+      "Transporter master",
+      "Ports of loading",
+      "Ports of destination",
+      "Container types",
+      "Companies",
+      "Incoterms",
+    ],
+    whatDataIsCollected: [
+      "RFQ metadata: item description, company, material PO, supplier, route, container type, incoterms, requested containers, cargo readiness, creator, timestamps, status",
+      "Quote economics: sea freight, HDO/BOL, CFS, transportation, EDI, CHA HOME, CHA MOOWR, re-warehousing, home total, MOOWR total, vessel schedule, shipping line",
+      "Allocation decisions: vendor, HOME containers, MOOWR containers, reason for deviation, timestamp",
+      "Master-data semantics: vendor codes, vendor display names, short names, emails, port countries, company short names",
+    ],
+    whatTheDataCanTellYou: [
+      "Who wins the most volume and spend",
+      "Which vendors are cheapest or most expensive on each lane",
+      "Which lanes have the widest freight spread",
+      "How quickly vendors respond after RFQ creation",
+      "How RFQ/quote/allocation activity trends month over month",
+      "Which RFQs are stuck open or under-allocated",
+      "Which routes, ports, companies, and container types dominate demand",
+    ],
+    recommendedImprovements: [
+      "Add a first-class RFQ event history table for every status change and user action",
+      "Store quote revisions explicitly instead of overwriting the latest row in place",
+      "Capture why a vendor declined or did not quote",
+      "Capture landed-cost variance against final awarded cost",
+      "Capture SLA timestamps: RFQ sent, first vendor response, quote completeness, finalization latency",
+      "Add route-normalization and lane IDs so analytics are cleaner across spelling variants",
+      "Add vendor performance dimensions: hit rate, quote responsiveness, award rate, cost competitiveness",
+    ],
+  };
+
+  const capabilities = [
+    "Exact RFQ lookup by RFQ number",
+    "Vendor performance, winnings, quote participation, and lane coverage",
+    "Lane analysis by port-of-loading, destination, and container type",
+    "Monthly trend analysis for RFQs, quotes, and allocations",
+    "Closure and allocation coverage analysis",
+    "Platform/data-dictionary explanations in plain English",
+  ];
+
+  return {
+    platform,
+    capabilities,
+    summary,
+    entityCounts: {
+      vendors: vendors.length,
+      portsOfLoading: portsOfLoading.length,
+      companies: companies.length,
+      containerTypes: containerTypes.length,
+      incoterms: incoterms.length,
+      lanes: laneStats.length,
+      months: monthlyStats.length,
+    },
+    statusBreakdown,
+    vendors,
+    portsOfLoading,
+    companies,
+    containerTypes,
+    incoterms,
+    recentRFQs,
+    recentQuotes,
+    recentAllocations,
+    laneStats,
+    monthlyStats,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function buildSuggestedQuestions(ctx) {
+  const topVendor = ctx?.vendors?.[0];
+  const topPort = ctx?.portsOfLoading?.[0];
+  const topLane = ctx?.laneStats?.[0];
+  const latestRfq = ctx?.recentRFQs?.[0];
+
+  const out = [
+    "What does this platform do, what data does it collect, and what can that data tell me?",
+    "Which vendor is winning the most volume and spend?",
+    "Which RFQs are still open, under-quoted, or under-allocated?",
+    "Which lanes have the widest freight spread between cheapest and costliest quote?",
+    "What trends do you see month over month in RFQs, quotes, and allocations?",
+  ];
+
+  if (topVendor?.vendorCode) {
+    out.push(
+      `How is ${topVendor.vendorCode} performing across quotes, allocations, and winnings?`
+    );
+  }
+  if (topPort?.value) {
+    out.push(
+      `What do our data points say about ${topPort.value} as a port of loading?`
+    );
+  }
+  if (topLane?.portOfLoading && topLane?.containerType) {
+    out.push(
+      `What are the cheapest and costliest quotes on ${topLane.portOfLoading} for ${topLane.containerType}?`
+    );
+  }
+  if (latestRfq?.rfqNumber) {
+    out.push(`Give me a full summary of RFQ ${latestRfq.rfqNumber}.`);
+  }
+
+  return out.slice(0, 8);
+}
+
+function resolveEntities(question, ctx) {
+  const qNorm = normalizeForSearch(question);
+  const rfqNumbers = extractRfqNumbers(question);
+
+  const vendor =
+    sortByAliasSpecificity(
+      (ctx.vendors || []).filter((v) => aliasMatches(qNorm, v.aliases))
+    )[0] || null;
+
+  const portOfLoading =
+    sortByAliasSpecificity(
+      (ctx.portsOfLoading || []).filter((p) => aliasMatches(qNorm, p.aliases))
+    )[0] || null;
+
+  const company =
+    sortByAliasSpecificity(
+      (ctx.companies || []).filter((c) => aliasMatches(qNorm, c.aliases))
+    )[0] || null;
+
+  const containerType =
+    sortByAliasSpecificity(
+      (ctx.containerTypes || []).filter((c) => aliasMatches(qNorm, c.aliases))
+    )[0] || null;
+
+  const month =
+    sortByAliasSpecificity(
+      (ctx.monthlyStats || []).filter((m) => aliasMatches(qNorm, m.aliases))
+    )[0] || null;
+
+  const status = /\bclosed\b/.test(qNorm)
+    ? "closed"
+    : /\bevaluation\b/.test(qNorm)
+    ? "evaluation"
+    : /\binitial\b/.test(qNorm) || /\bopen\b/.test(qNorm)
+    ? "initial"
+    : null;
+
+  return {
+    questionNorm: qNorm,
+    rfqNumbers,
+    vendor,
+    portOfLoading,
+    company,
+    containerType,
+    month,
+    status,
+  };
+}
+
+async function fetchRfqDeep(pool, rfqNumber) {
+  const rfqRes = await pool.request().input("rfqNumber", sql.Int, rfqNumber)
+    .query(`
+      SELECT TOP 1
+        CAST(r.id AS NVARCHAR(50)) AS id,
+        r.rfqNumber,
+        CAST(r.itemDescription AS NVARCHAR(500)) AS itemDescription,
+        CAST(r.companyName AS NVARCHAR(MAX)) AS companyName,
+        CAST(r.materialPONumber AS NVARCHAR(150)) AS materialPONumber,
+        CAST(r.supplierName AS NVARCHAR(255)) AS supplierName,
+        CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        CAST(r.containerType AS NVARCHAR(50)) AS containerType,
+        CAST(r.incoterms AS NVARCHAR(50)) AS incoterms,
+        r.numberOfContainers,
+        r.cargoWeight,
+        r.status,
+        r.createdAt,
+        r.finalizedAt,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Quotes q WHERE q.rfqId = r.id
+        ), 0) AS quoteCount,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Allocations a WHERE a.rfqId = r.id
+        ), 0) AS allocationCount,
+        ISNULL((
+          SELECT SUM(ISNULL(a.containersAllottedHome,0) + ISNULL(a.containersAllottedMOOWR,0))
+          FROM dbo.Allocations a WHERE a.rfqId = r.id
+        ), 0) AS allocatedContainers,
+        (
+          SELECT MIN(q.createdAt) FROM dbo.Quotes q WHERE q.rfqId = r.id
+        ) AS firstQuoteAt,
+        (
+          SELECT MAX(q.createdAt) FROM dbo.Quotes q WHERE q.rfqId = r.id
+        ) AS lastQuoteAt
+      FROM dbo.RFQs r
+      WHERE r.rfqNumber = @rfqNumber
+    `);
+
+  const rfq = rfqRes.recordset?.[0] || null;
+  if (!rfq) return null;
+
+  const quotesRes = await pool
+    .request()
+    .input("rfqId", sql.UniqueIdentifier, rfq.id).query(`
+      SELECT
+        CAST(q.id AS NVARCHAR(50)) AS id,
+        q.vendorName,
+        COALESCE(NULLIF(LTRIM(RTRIM(t.shortName)), ''), NULLIF(LTRIM(RTRIM(t.vendorName)), ''), q.vendorName) AS vendorLabel,
+        q.numberOfContainers,
+        q.shippingLineName,
+        q.transshipOrDirect,
+        CAST(q.seaFreightPerContainer AS FLOAT) AS seaFreightPerContainer,
+        CAST(q.homeTotal AS FLOAT) AS homeTotal,
+        CAST(q.mooWRTotal AS FLOAT) AS mooWRTotal,
+        q.createdAt,
+        ISNULL((
+          SELECT SUM(ISNULL(a.containersAllottedHome,0)) FROM dbo.Allocations a WHERE a.quoteId = q.id
+        ), 0) AS allocatedHome,
+        ISNULL((
+          SELECT SUM(ISNULL(a.containersAllottedMOOWR,0)) FROM dbo.Allocations a WHERE a.quoteId = q.id
+        ), 0) AS allocatedMoowr
+      FROM dbo.Quotes q
+      LEFT JOIN dbo.Master_Transporters t ON t.vendorCode = q.vendorName
+      WHERE q.rfqId = @rfqId
+      ORDER BY q.createdAt DESC
+    `);
+
+  const allocationsRes = await pool
+    .request()
+    .input("rfqId", sql.UniqueIdentifier, rfq.id).query(`
+      SELECT
+        CAST(a.id AS NVARCHAR(50)) AS id,
+        a.vendorName,
+        COALESCE(NULLIF(LTRIM(RTRIM(t.shortName)), ''), NULLIF(LTRIM(RTRIM(t.vendorName)), ''), a.vendorName) AS vendorLabel,
+        a.containersAllottedHome,
+        a.containersAllottedMOOWR,
+        a.reason,
+        a.createdAt
+      FROM dbo.Allocations a
+      LEFT JOIN dbo.Master_Transporters t ON t.vendorCode = a.vendorName
+      WHERE a.rfqId = @rfqId
+      ORDER BY a.createdAt DESC
+    `);
+
+  return {
+    rfq,
+    quotes: quotesRes.recordset || [],
+    allocations: allocationsRes.recordset || [],
+  };
+}
+
+async function fetchVendorDeep(pool, vendorCode) {
+  const aggRes = await pool
+    .request()
+    .input("vendorCode", sql.NVarChar(150), vendorCode).query(`
+      SELECT TOP 1
+        CAST(t.vendorCode AS NVARCHAR(150)) AS vendorCode,
+        CAST(t.vendorName AS NVARCHAR(255)) AS vendorName,
+        CAST(t.shortName AS NVARCHAR(100)) AS shortName,
+        COALESCE(NULLIF(CAST(t.vendorEmails AS NVARCHAR(MAX)), ''), NULLIF(LTRIM(RTRIM(t.vendorEmail)), '')) AS vendorEmails,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Quotes q WHERE q.vendorName = t.vendorCode
+        ), 0) AS quoteCount,
+        ISNULL((
+          SELECT COUNT(DISTINCT q.rfqId) FROM dbo.Quotes q WHERE q.vendorName = t.vendorCode
+        ), 0) AS quotedRFQCount,
+        ISNULL((
+          SELECT COUNT(*) FROM dbo.Allocations a WHERE a.vendorName = t.vendorCode
+        ), 0) AS allocationCount,
+        ISNULL((
+          SELECT SUM(ISNULL(a.containersAllottedHome,0) + ISNULL(a.containersAllottedMOOWR,0))
+          FROM dbo.Allocations a WHERE a.vendorName = t.vendorCode
+        ), 0) AS allocatedContainers,
+        ISNULL((
+          SELECT SUM(
+            ISNULL(a.containersAllottedHome,0) * ISNULL(q.homeTotal,0) +
+            ISNULL(a.containersAllottedMOOWR,0) * ISNULL(q.mooWRTotal,0)
+          )
+          FROM dbo.Allocations a
+          INNER JOIN dbo.Quotes q ON q.id = a.quoteId
+          WHERE a.vendorName = t.vendorCode
+        ), 0) AS amountWon,
+        (
+          SELECT AVG(CAST(q.seaFreightPerContainer AS FLOAT))
+          FROM dbo.Quotes q
+          WHERE q.vendorName = t.vendorCode
+            AND q.seaFreightPerContainer IS NOT NULL
+            AND q.seaFreightPerContainer > 0
+        ) AS avgSeaFreightUsd,
+        (
+          SELECT MAX(q.createdAt) FROM dbo.Quotes q WHERE q.vendorName = t.vendorCode
+        ) AS lastQuoteAt,
+        (
+          SELECT MAX(a.createdAt) FROM dbo.Allocations a WHERE a.vendorName = t.vendorCode
+        ) AS lastAllocationAt
+      FROM dbo.Master_Transporters t
+      WHERE t.vendorCode = @vendorCode
+    `);
+
+  const summary = aggRes.recordset?.[0] || null;
+  if (!summary) return null;
+
+  const laneRes = await pool
+    .request()
+    .input("vendorCode", sql.NVarChar(150), vendorCode).query(`
+      SELECT TOP 8
+        CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+        COUNT(*) AS quoteCount,
+        AVG(CAST(q.seaFreightPerContainer AS FLOAT)) AS avgSeaFreightUsd,
+        ISNULL(SUM(ISNULL(a.containersAllottedHome,0) + ISNULL(a.containersAllottedMOOWR,0)),0) AS allocatedContainers
+      FROM dbo.Quotes q
+      INNER JOIN dbo.RFQs r ON r.id = q.rfqId
+      LEFT JOIN dbo.Allocations a ON a.quoteId = q.id
+      WHERE q.vendorName = @vendorCode
+      GROUP BY
+        r.portOfLoading,
+        r.portOfDestination,
+        COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType)
+      ORDER BY allocatedContainers DESC, quoteCount DESC, portOfLoading ASC
+    `);
+
+  const recentQuotesRes = await pool
+    .request()
+    .input("vendorCode", sql.NVarChar(150), vendorCode).query(`
+      SELECT TOP 5
+        r.rfqNumber,
+        CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+        CAST(q.seaFreightPerContainer AS FLOAT) AS seaFreightPerContainer,
+        CAST(q.homeTotal AS FLOAT) AS homeTotal,
+        CAST(q.mooWRTotal AS FLOAT) AS mooWRTotal,
+        q.createdAt
+      FROM dbo.Quotes q
+      INNER JOIN dbo.RFQs r ON r.id = q.rfqId
+      WHERE q.vendorName = @vendorCode
+      ORDER BY q.createdAt DESC
+    `);
+
+  const recentAllocationsRes = await pool
+    .request()
+    .input("vendorCode", sql.NVarChar(150), vendorCode).query(`
+      SELECT TOP 5
+        r.rfqNumber,
+        CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        a.containersAllottedHome,
+        a.containersAllottedMOOWR,
+        a.reason,
+        a.createdAt
+      FROM dbo.Allocations a
+      INNER JOIN dbo.RFQs r ON r.id = a.rfqId
+      WHERE a.vendorName = @vendorCode
+      ORDER BY a.createdAt DESC
+    `);
+
+  return {
+    summary,
+    lanes: laneRes.recordset || [],
+    recentQuotes: recentQuotesRes.recordset || [],
+    recentAllocations: recentAllocationsRes.recordset || [],
+  };
+}
+
+async function fetchLaneDeep(pool, portOfLoading, containerType) {
+  const request = pool
+    .request()
+    .input("portOfLoading", sql.NVarChar(100), portOfLoading)
+    .input(
+      "containerType",
+      sql.NVarChar(50),
+      containerType ? String(containerType) : null
+    );
+
+  const summaryRes = await request.query(`
+    SELECT
+      CAST(r.portOfLoading AS NVARCHAR(100)) AS portOfLoading,
+      COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+      COUNT(DISTINCT r.id) AS rfqCount,
+      COUNT(DISTINCT q.id) AS quoteCount,
+      MIN(CAST(q.seaFreightPerContainer AS FLOAT)) AS minFreightUsd,
+      AVG(CAST(q.seaFreightPerContainer AS FLOAT)) AS avgFreightUsd,
+      MAX(CAST(q.seaFreightPerContainer AS FLOAT)) AS maxFreightUsd
+    FROM dbo.RFQs r
+    INNER JOIN dbo.Quotes q ON q.rfqId = r.id
+    WHERE r.portOfLoading = @portOfLoading
+      AND (@containerType IS NULL OR COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) = @containerType)
+      AND q.seaFreightPerContainer IS NOT NULL
+      AND q.seaFreightPerContainer > 0
+    GROUP BY
+      r.portOfLoading,
+      COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType)
+  `);
+
+  const summary = summaryRes.recordset?.[0] || null;
+  if (!summary) return null;
+
+  const quotesRes = await pool
+    .request()
+    .input("portOfLoading", sql.NVarChar(100), portOfLoading)
+    .input(
+      "containerType",
+      sql.NVarChar(50),
+      containerType ? String(containerType) : null
+    ).query(`
+      SELECT TOP 10
+        r.rfqNumber,
+        q.vendorName,
+        COALESCE(NULLIF(LTRIM(RTRIM(t.shortName)), ''), NULLIF(LTRIM(RTRIM(t.vendorName)), ''), q.vendorName) AS vendorLabel,
+        CAST(r.portOfDestination AS NVARCHAR(100)) AS portOfDestination,
+        COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) AS containerType,
+        CAST(q.seaFreightPerContainer AS FLOAT) AS seaFreightPerContainer,
+        CAST(q.homeTotal AS FLOAT) AS homeTotal,
+        CAST(q.mooWRTotal AS FLOAT) AS mooWRTotal,
+        q.createdAt
+      FROM dbo.Quotes q
+      INNER JOIN dbo.RFQs r ON r.id = q.rfqId
+      LEFT JOIN dbo.Master_Transporters t ON t.vendorCode = q.vendorName
+      WHERE r.portOfLoading = @portOfLoading
+        AND (@containerType IS NULL OR COALESCE(NULLIF(LTRIM(RTRIM(q.containerType)), ''), r.containerType) = @containerType)
+      ORDER BY q.seaFreightPerContainer ASC, q.createdAt DESC
+    `);
+
+  return {
+    summary,
+    quotes: quotesRes.recordset || [],
+  };
+}
+
+function buildPlatformAnswer(ctx) {
+  const s = ctx.summary || {};
+  const statusLines = (ctx.statusBreakdown || [])
+    .map((r) => `${r.status}: ${r.rfqCount}`)
+    .join(" · ");
+
+  return [
+    `**What the platform does**`,
+    `${
+      ctx.platform?.purpose ||
+      "This is an RFQ and allocation analytics platform."
+    }`,
+    ``,
+    `**What data is collected**`,
+    ...(ctx.platform?.whatDataIsCollected || []).map((x) => `• ${x}`),
+    ``,
+    `**What the current data tells you**`,
+    ...(ctx.platform?.whatTheDataCanTellYou || []).map((x) => `• ${x}`),
+    ``,
+    `**Current snapshot**`,
+    `• RFQs: ${s.totalRFQs || 0}`,
+    `• Quotes: ${s.totalQuotes || 0}`,
+    `• Allocations: ${s.totalAllocations || 0}`,
+    `• Requested containers: ${s.totalContainersRequested || 0}`,
+    `• Allocated containers: ${s.totalContainersAllocated || 0} (${fmtPct(
+      s.totalContainersAllocated,
+      s.totalContainersRequested
+    )})`,
+    `• Active vendors: ${s.activeVendors || 0}`,
+    `• RFQ status mix: ${statusLines || "—"}`,
+    ``,
+    `**How to improve further**`,
+    ...(ctx.platform?.recommendedImprovements || []).map((x) => `• ${x}`),
+  ].join("\n");
+}
+
+function buildSummaryAnswer(ctx) {
+  const s = ctx.summary || {};
+  const topVendor = ctx.vendors?.[0];
+  const topPort = ctx.portsOfLoading?.[0];
+  const latestMonth = ctx.monthlyStats?.[0];
+
+  return [
+    `**LEAFI snapshot**`,
+    `• RFQs: ${s.totalRFQs || 0}`,
+    `• Quotes: ${s.totalQuotes || 0}`,
+    `• Allocations: ${s.totalAllocations || 0}`,
+    `• Requested containers: ${s.totalContainersRequested || 0}`,
+    `• Allocated containers: ${s.totalContainersAllocated || 0} (${fmtPct(
+      s.totalContainersAllocated,
+      s.totalContainersRequested
+    )})`,
+    `• Top winning vendor: ${topVendor?.vendorCode || "—"} with ${
+      topVendor?.allocatedContainers || 0
+    } allocated containers and ${fmtInr(topVendor?.amountWon || 0)} won`,
+    `• Busiest port of loading: ${topPort?.value || "—"} with ${
+      topPort?.rfqCount || 0
+    } RFQs`,
+    latestMonth
+      ? `• Latest month in dataset: ${latestMonth.label} — ${latestMonth.rfqCount} RFQs, ${latestMonth.quoteCount} quotes, ${latestMonth.allocatedContainers} allocated containers`
+      : `• Latest month in dataset: —`,
+  ].join("\n");
+}
+
+function buildOpenClosedAnswer(ctx, status) {
+  const s = ctx.summary || {};
+  const recentOpen = (ctx.recentRFQs || [])
+    .filter((r) => r.status !== "closed")
+    .slice(0, 5);
+
+  if (status === "closed") {
+    return `Closed RFQs: ${
+      s.totalRFQs
+        ? ctx.statusBreakdown.find((x) => x.status === "closed")?.rfqCount || 0
+        : 0
+    }`;
+  }
+
+  return [
+    `**Open / not-finalized RFQs**`,
+    `• Initial: ${
+      ctx.statusBreakdown.find((x) => x.status === "initial")?.rfqCount || 0
+    }`,
+    `• Evaluation: ${
+      ctx.statusBreakdown.find((x) => x.status === "evaluation")?.rfqCount || 0
+    }`,
+    `• Closed: ${
+      ctx.statusBreakdown.find((x) => x.status === "closed")?.rfqCount || 0
+    }`,
+    ``,
+    `**Recent still-open RFQs**`,
+    ...(recentOpen.length
+      ? recentOpen.map(
+          (r) =>
+            `• RFQ ${r.rfqNumber} · ${r.portOfLoading} → ${r.portOfDestination} · ${r.containerType} · ${r.status} · ${r.quoteCount} quote(s)`
+        )
+      : ["• None found in recent RFQs"]),
+  ].join("\n");
+}
+
+function buildMonthlyAnswer(ctx) {
+  const rows = (ctx.monthlyStats || []).slice(0, 6).reverse();
+  if (!rows.length) return "No monthly trend data found.";
+  return [
+    `**Monthly trend**`,
+    ...rows.map(
+      (r) =>
+        `• ${r.label}: ${r.rfqCount} RFQs, ${r.quoteCount} quotes, ${r.allocationCount} allocations, ${r.requestedContainers} requested containers, ${r.allocatedContainers} allocated containers`
+    ),
+  ].join("\n");
+}
+
+function buildVendorAnswer(detail) {
+  const s = detail.summary || {};
+  const laneLines = (detail.lanes || [])
+    .slice(0, 5)
+    .map(
+      (l) =>
+        `• ${l.portOfLoading} → ${l.portOfDestination} · ${l.containerType} · ${
+          l.quoteCount
+        } quote(s) · ${
+          l.allocatedContainers
+        } allocated containers · avg freight ${fmtUsd(l.avgSeaFreightUsd)}`
+    );
+
+  const quoteLines = (detail.recentQuotes || [])
+    .slice(0, 4)
+    .map(
+      (q) =>
+        `• RFQ ${q.rfqNumber} · ${q.portOfLoading} → ${q.portOfDestination} · ${
+          q.containerType
+        } · freight ${fmtUsd(q.seaFreightPerContainer)} · HOME ${fmtInr(
+          q.homeTotal
+        )} · MOOWR ${fmtInr(q.mooWRTotal)}`
+    );
+
+  const allocLines = (detail.recentAllocations || [])
+    .slice(0, 4)
+    .map(
+      (a) =>
+        `• RFQ ${a.rfqNumber} · HOME ${a.containersAllottedHome || 0} · MOOWR ${
+          a.containersAllottedMOOWR || 0
+        }${a.reason ? ` · reason: ${compactText(a.reason, 80)}` : ""}`
+    );
+
+  return [
+    `**Vendor performance · ${s.vendorCode}**`,
+    `• Display name: ${s.vendorName || s.vendorCode}`,
+    s.shortName ? `• Short name: ${s.shortName}` : null,
+    `• Quotes submitted: ${s.quoteCount || 0}`,
+    `• RFQs quoted: ${s.quotedRFQCount || 0}`,
+    `• Allocation records: ${s.allocationCount || 0}`,
+    `• Allocated containers: ${s.allocatedContainers || 0}`,
+    `• Amount won: ${fmtInr(s.amountWon || 0)}`,
+    `• Average sea freight quoted: ${fmtUsd(s.avgSeaFreightUsd)}`,
+    s.lastQuoteAt
+      ? `• Last quote at: ${formatDateTimeIst(s.lastQuoteAt)}`
+      : null,
+    s.lastAllocationAt
+      ? `• Last allocation at: ${formatDateTimeIst(s.lastAllocationAt)}`
+      : null,
+    ``,
+    `**Top lanes**`,
+    ...(laneLines.length ? laneLines : ["• No lane data found"]),
+    ``,
+    `**Recent quotes**`,
+    ...(quoteLines.length ? quoteLines : ["• No quotes found"]),
+    ``,
+    `**Recent allocations**`,
+    ...(allocLines.length ? allocLines : ["• No allocations found"]),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildRfqAnswer(detail) {
+  const r = detail.rfq;
+  const quotes = detail.quotes || [];
+  const allocations = detail.allocations || [];
+
+  const cheapestByFreight = [...quotes]
+    .filter((q) => safeNum(q.seaFreightPerContainer) > 0)
+    .sort(
+      (a, b) =>
+        safeNum(a.seaFreightPerContainer) - safeNum(b.seaFreightPerContainer)
+    )[0];
+
+  const lowestHome = [...quotes]
+    .filter((q) => safeNum(q.homeTotal) > 0)
+    .sort((a, b) => safeNum(a.homeTotal) - safeNum(b.homeTotal))[0];
+
+  const lowestMoowr = [...quotes]
+    .filter((q) => safeNum(q.mooWRTotal) > 0)
+    .sort((a, b) => safeNum(a.mooWRTotal) - safeNum(b.mooWRTotal))[0];
+
+  const quoteLines = quotes
+    .slice(0, 6)
+    .map(
+      (q) =>
+        `• ${q.vendorLabel || q.vendorName} · freight ${fmtUsd(
+          q.seaFreightPerContainer
+        )} · HOME ${fmtInr(q.homeTotal)} · MOOWR ${fmtInr(
+          q.mooWRTotal
+        )} · allocated HOME ${q.allocatedHome || 0} · allocated MOOWR ${
+          q.allocatedMoowr || 0
+        }`
+    );
+
+  const allocationLines = allocations
+    .slice(0, 6)
+    .map(
+      (a) =>
+        `• ${a.vendorLabel || a.vendorName} · HOME ${
+          a.containersAllottedHome || 0
+        } · MOOWR ${a.containersAllottedMOOWR || 0}${
+          a.reason ? ` · reason: ${compactText(a.reason, 90)}` : ""
+        }`
+    );
+
+  return [
+    `**RFQ ${r.rfqNumber}**`,
+    `• Item: ${r.itemDescription || "—"}`,
+    `• Company: ${r.companyName || "—"}`,
+    `• Material PO: ${r.materialPONumber || "—"}`,
+    `• Supplier: ${r.supplierName || "—"}`,
+    `• Route: ${r.portOfLoading || "—"} → ${r.portOfDestination || "—"}`,
+    `• Container type: ${r.containerType || "—"}`,
+    r.incoterms ? `• Incoterms: ${r.incoterms}` : null,
+    `• Requested containers: ${r.numberOfContainers || 0}`,
+    `• Status: ${r.status || "—"}`,
+    `• Created at: ${formatDateTimeIst(r.createdAt)}`,
+    r.finalizedAt
+      ? `• Finalized at: ${formatDateTimeIst(r.finalizedAt)}`
+      : null,
+    `• Quotes received: ${r.quoteCount || 0}`,
+    `• Allocation records: ${r.allocationCount || 0}`,
+    `• Allocated containers: ${r.allocatedContainers || 0} / ${
+      r.numberOfContainers || 0
+    }`,
+    r.firstQuoteAt
+      ? `• First quote at: ${formatDateTimeIst(r.firstQuoteAt)}`
+      : null,
+    r.lastQuoteAt
+      ? `• Last quote at: ${formatDateTimeIst(r.lastQuoteAt)}`
+      : null,
+    cheapestByFreight
+      ? `• Cheapest sea freight: ${
+          cheapestByFreight.vendorLabel || cheapestByFreight.vendorName
+        } at ${fmtUsd(cheapestByFreight.seaFreightPerContainer)}`
+      : null,
+    lowestHome
+      ? `• Lowest HOME total: ${
+          lowestHome.vendorLabel || lowestHome.vendorName
+        } at ${fmtInr(lowestHome.homeTotal)}`
+      : null,
+    lowestMoowr
+      ? `• Lowest MOOWR total: ${
+          lowestMoowr.vendorLabel || lowestMoowr.vendorName
+        } at ${fmtInr(lowestMoowr.mooWRTotal)}`
+      : null,
+    ``,
+    `**Quotes**`,
+    ...(quoteLines.length ? quoteLines : ["• No quotes found"]),
+    ``,
+    `**Allocations**`,
+    ...(allocationLines.length ? allocationLines : ["• No allocations found"]),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildLaneAnswer(detail) {
+  const s = detail.summary || {};
+  const quotes = detail.quotes || [];
+  const cheapest = quotes[0] || null;
+  const costliest = quotes.length
+    ? [...quotes].sort(
+        (a, b) =>
+          safeNum(b.seaFreightPerContainer) - safeNum(a.seaFreightPerContainer)
+      )[0]
+    : null;
+
+  return [
+    `**Lane analysis · ${s.portOfLoading} · ${
+      s.containerType || "all container types"
+    }**`,
+    `• RFQs on this lane: ${s.rfqCount || 0}`,
+    `• Quotes on this lane: ${s.quoteCount || 0}`,
+    `• Min sea freight: ${fmtUsd(s.minFreightUsd)}`,
+    `• Avg sea freight: ${fmtUsd(s.avgFreightUsd)}`,
+    `• Max sea freight: ${fmtUsd(s.maxFreightUsd)}`,
+    cheapest
+      ? `• Cheapest quote: ${
+          cheapest.vendorLabel || cheapest.vendorName
+        } on RFQ ${cheapest.rfqNumber} at ${fmtUsd(
+          cheapest.seaFreightPerContainer
+        )}`
+      : null,
+    costliest
+      ? `• Costliest quote: ${
+          costliest.vendorLabel || costliest.vendorName
+        } on RFQ ${costliest.rfqNumber} at ${fmtUsd(
+          costliest.seaFreightPerContainer
+        )}`
+      : null,
+    ``,
+    `**Top quote examples**`,
+    ...quotes
+      .slice(0, 6)
+      .map(
+        (q) =>
+          `• ${q.vendorLabel || q.vendorName} · RFQ ${q.rfqNumber} · ${
+            q.portOfDestination
+          } · freight ${fmtUsd(q.seaFreightPerContainer)} · HOME ${fmtInr(
+            q.homeTotal
+          )} · MOOWR ${fmtInr(q.mooWRTotal)}`
+      ),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildTopVendorAnswer(ctx) {
+  const rows = (ctx.vendors || []).slice(0, 5);
+  const totalAllocated = rows.reduce(
+    (s, r) => s + safeNum(r.allocatedContainers),
+    0
+  );
+
+  return [
+    `**Top vendors by allocated volume**`,
+    ...rows.map(
+      (r, i) =>
+        `${i + 1}. ${r.vendorCode} (${r.vendorName || r.vendorCode}) — ${
+          r.allocatedContainers
+        } allocated containers · ${fmtInr(r.amountWon)} won · ${fmtPct(
+          r.allocatedContainers,
+          totalAllocated
+        )} of top-5 allocated volume`
+    ),
+  ].join("\n");
+}
+
+function buildTopPortsAnswer(ctx) {
+  const rows = (ctx.portsOfLoading || []).slice(0, 5);
+  return [
+    `**Top ports of loading**`,
+    ...rows.map(
+      (r, i) =>
+        `${i + 1}. ${r.value}${r.country ? `, ${r.country}` : ""} — ${
+          r.rfqCount
+        } RFQs${
+          Number.isFinite(r.avgSeaFreightUsd)
+            ? ` · avg freight ${fmtUsd(r.avgSeaFreightUsd)}`
+            : ""
+        }`
+    ),
+  ].join("\n");
+}
+
+function buildKeywordFallbackAnswer(question, ctx) {
+  const qTokens = tokenizeForSearch(question);
+  if (!qTokens.length) return null;
+
+  const rfqMatches = (ctx.recentRFQs || [])
+    .map((r) => ({
+      type: "RFQ",
+      score: bestKeywordScore(
+        qTokens,
+        [
+          r.rfqNumber,
+          r.itemDescription,
+          r.companyName,
+          r.materialPONumber,
+          r.supplierName,
+          r.portOfLoading,
+          r.portOfDestination,
+          r.containerType,
+          r.status,
+        ].join(" ")
+      ),
+      label: `RFQ ${r.rfqNumber} · ${r.itemDescription} · ${r.portOfLoading} → ${r.portOfDestination}`,
+    }))
+    .filter((x) => x.score > 0);
+
+  const quoteMatches = (ctx.recentQuotes || [])
+    .map((q) => ({
+      type: "Quote",
+      score: bestKeywordScore(
+        qTokens,
+        [
+          q.vendorName,
+          q.vendorLabel,
+          q.rfqNumber,
+          q.portOfLoading,
+          q.portOfDestination,
+          q.containerType,
+          q.shippingLineName,
+        ].join(" ")
+      ),
+      label: `Quote · RFQ ${q.rfqNumber} · ${q.vendorLabel || q.vendorName} · ${
+        q.portOfLoading
+      } → ${q.portOfDestination} · ${q.containerType}`,
+    }))
+    .filter((x) => x.score > 0);
+
+  const allocMatches = (ctx.recentAllocations || [])
+    .map((a) => ({
+      type: "Allocation",
+      score: bestKeywordScore(
+        qTokens,
+        [
+          a.vendorName,
+          a.vendorLabel,
+          a.rfqNumber,
+          a.portOfLoading,
+          a.portOfDestination,
+          a.containerType,
+          a.reason,
+        ].join(" ")
+      ),
+      label: `Allocation · RFQ ${a.rfqNumber} · ${
+        a.vendorLabel || a.vendorName
+      } · HOME ${a.containersAllottedHome || 0} · MOOWR ${
+        a.containersAllottedMOOWR || 0
+      }`,
+    }))
+    .filter((x) => x.score > 0);
+
+  const combined = [...rfqMatches, ...quoteMatches, ...allocMatches]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
+
+  if (!combined.length) return null;
+
+  return [
+    `I could not map that to one exact metric, but these look like the closest matching data points in the current dataset snapshot:`,
+    ...combined.map((x) => `• ${x.type}: ${x.label}`),
+    ``,
+    `Try asking more specifically with a vendor name, RFQ number, port, company, month, or container type.`,
+  ].join("\n");
+}
+
+async function answerAnalyticsQuestion(question, ctx, pool) {
+  const resolved = resolveEntities(question, ctx);
+  const qNorm = resolved.questionNorm;
+
+  if (
+    /what does.*platform|what does leafi do|what is leafi|what data.*collect|what.*data.*tell|how.*improv|improvement|blind spots|dataset knowledge|platform does/i.test(
+      qNorm
+    )
+  ) {
+    return {
+      answer: buildPlatformAnswer(ctx),
+      source: "deterministic:platform",
+      resolved,
+      llmContext: {
+        type: "platform",
+        platform: ctx.platform,
+        summary: ctx.summary,
+        statusBreakdown: ctx.statusBreakdown,
+      },
+    };
+  }
+
+  if (/summary|overview|dashboard|snapshot|portfolio/i.test(qNorm)) {
+    return {
+      answer: buildSummaryAnswer(ctx),
+      source: "deterministic:summary",
+      resolved,
+      llmContext: {
+        type: "summary",
+        summary: ctx.summary,
+        topVendors: ctx.vendors?.slice(0, 5),
+        topPortsOfLoading: ctx.portsOfLoading?.slice(0, 5),
+        monthlyStats: ctx.monthlyStats?.slice(0, 6),
+      },
+    };
+  }
+
+  if (
+    /open|closed|finalized|still open|under.?allocated|allocation coverage|closure rate/i.test(
+      qNorm
+    )
+  ) {
+    return {
+      answer: buildOpenClosedAnswer(ctx, resolved.status),
+      source: "deterministic:open-closed",
+      resolved,
+      llmContext: {
+        type: "open-closed",
+        summary: ctx.summary,
+        statusBreakdown: ctx.statusBreakdown,
+        recentRFQs: ctx.recentRFQs?.slice(0, 10),
+      },
+    };
+  }
+
+  if (
+    /month|monthly|trend|over time|last 6 months|month over month|mom/i.test(
+      qNorm
+    )
+  ) {
+    return {
+      answer: buildMonthlyAnswer(ctx),
+      source: "deterministic:monthly",
+      resolved,
+      llmContext: {
+        type: "monthly",
+        monthlyStats: ctx.monthlyStats?.slice(0, 12),
+      },
+    };
+  }
+
+  if (
+    /top vendor|most containers|winning the most|most volume|most spend|vendor performance/i.test(
+      qNorm
+    ) &&
+    !resolved.vendor
+  ) {
+    return {
+      answer: buildTopVendorAnswer(ctx),
+      source: "deterministic:top-vendors",
+      resolved,
+      llmContext: {
+        type: "top-vendors",
+        vendors: ctx.vendors?.slice(0, 10),
+      },
+    };
+  }
+
+  if (
+    /top port|busiest port|port of loading|ports of loading/i.test(qNorm) &&
+    !resolved.portOfLoading
+  ) {
+    return {
+      answer: buildTopPortsAnswer(ctx),
+      source: "deterministic:top-ports",
+      resolved,
+      llmContext: {
+        type: "top-ports",
+        portsOfLoading: ctx.portsOfLoading?.slice(0, 10),
+      },
+    };
+  }
+
+  if (resolved.rfqNumbers?.length) {
+    const detail = await fetchRfqDeep(pool, resolved.rfqNumbers[0]);
+    if (detail) {
+      return {
+        answer: buildRfqAnswer(detail),
+        source: "deterministic:rfq",
+        resolved,
+        llmContext: {
+          type: "rfq-detail",
+          rfqDetail: detail,
+        },
+      };
+    }
+  }
+
+  if (resolved.vendor) {
+    const detail = await fetchVendorDeep(pool, resolved.vendor.vendorCode);
+    if (detail) {
+      return {
+        answer: buildVendorAnswer(detail),
+        source: "deterministic:vendor",
+        resolved,
+        llmContext: {
+          type: "vendor-detail",
+          vendorDetail: detail,
+        },
+      };
+    }
+  }
+
+  if (
+    resolved.portOfLoading &&
+    /lane|route|freight|quotes|price|pricing|sea freight|cheapest|lowest|highest|spread|vendor/i.test(
+      qNorm
+    )
+  ) {
+    const detail = await fetchLaneDeep(
+      pool,
+      resolved.portOfLoading.value,
+      resolved.containerType?.value || null
+    );
+    if (detail) {
+      return {
+        answer: buildLaneAnswer(detail),
+        source: "deterministic:lane",
+        resolved,
+        llmContext: {
+          type: "lane-detail",
+          laneDetail: detail,
+        },
+      };
+    }
+  }
+
+  const keywordFallback = buildKeywordFallbackAnswer(question, ctx);
+  if (keywordFallback) {
+    return {
+      answer: keywordFallback,
+      source: "deterministic:keyword-fallback",
+      resolved,
+      llmContext: {
+        type: "keyword-fallback",
+        recentRFQs: ctx.recentRFQs?.slice(0, 12),
+        recentQuotes: ctx.recentQuotes?.slice(0, 12),
+        recentAllocations: ctx.recentAllocations?.slice(0, 12),
+      },
+    };
+  }
+
+  return {
+    answer: null,
+    source: "no-match",
+    resolved,
+    llmContext: {
+      type: "generic",
+      platform: ctx.platform,
+      summary: ctx.summary,
+      vendors: ctx.vendors?.slice(0, 10),
+      portsOfLoading: ctx.portsOfLoading?.slice(0, 10),
+      recentRFQs: ctx.recentRFQs?.slice(0, 10),
+      laneStats: ctx.laneStats?.slice(0, 10),
+    },
+  };
+}
+
+// GET /api/admin/chat/status — checks Ollama reachability + model availability
+app.get(
+  "/api/admin/chat/status",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const r = await axios.get(`${OLLAMA_URL}/api/tags`, { timeout: 2000 });
+      const models = Array.isArray(r.data?.models) ? r.data.models : [];
+      const names = models.map((m) => m?.name || "").filter(Boolean);
+      const hasModel = names.some(
+        (n) => n === OLLAMA_MODEL || n.startsWith(`${OLLAMA_MODEL}:`)
+      );
+      res.json({
+        ok: true,
+        reachable: true,
+        url: OLLAMA_URL,
+        model: OLLAMA_MODEL,
+        modelInstalled: hasModel,
+        installedModels: names,
+      });
+    } catch (err) {
+      res.json({
+        ok: true,
+        reachable: false,
+        url: OLLAMA_URL,
+        model: OLLAMA_MODEL,
+        modelInstalled: false,
+        installedModels: [],
+        error: err?.message || String(err),
+        hint:
+          "Install Ollama and run `ollama serve`, then `ollama pull " +
+          OLLAMA_MODEL +
+          "`.",
+      });
+    }
+  }
+);
+
+// POST /api/admin/chat/setup — pull the configured model into Ollama
+app.post(
+  "/api/admin/chat/setup",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const r = await axios.post(
+        `${OLLAMA_URL}/api/pull`,
+        { name: OLLAMA_MODEL, stream: false },
+        { timeout: 1000 * 60 * 15 }
+      );
+      res.json({ ok: true, model: OLLAMA_MODEL, result: r.data });
+    } catch (err) {
+      res.status(502).json({
+        ok: false,
+        error: err?.message || "Ollama pull failed",
+      });
+    }
+  }
+);
+
+// GET /api/admin/chat/context — return richer dataset + platform semantics
+app.get(
+  "/api/admin/chat/context",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const ctx = await buildAnalyticsContext();
+      res.json({
+        ok: true,
+        context: ctx,
+        suggestedQuestions: buildSuggestedQuestions(ctx),
+      });
+    } catch (err) {
+      console.error("[CHAT] context failed:", err?.message || err);
+      res
+        .status(500)
+        .json({ ok: false, error: err?.message || "context failed" });
+    }
+  }
+);
+
+// POST /api/admin/chat/ask — deterministic answer first, Ollama phrasing second
+app.post(
+  "/api/admin/chat/ask",
+  authenticate,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { question, history } = req.body || {};
+      if (!question || typeof question !== "string") {
+        return res.status(400).json({ ok: false, error: "question required" });
+      }
+
+      const pool = await getPool();
+      const ctx = await buildAnalyticsContext();
+      const deterministic = await answerAnalyticsQuestion(question, ctx, pool);
+
+      let llmAnswer = null;
+      let llmSource = null;
+
+      try {
+        const tags = await axios.get(`${OLLAMA_URL}/api/tags`, {
+          timeout: 1500,
+        });
+        const models = Array.isArray(tags.data?.models) ? tags.data.models : [];
+        const hasModel = models.some(
+          (m) =>
+            (m?.name || "") === OLLAMA_MODEL ||
+            (m?.name || "").startsWith(`${OLLAMA_MODEL}:`)
+        );
+
+        if (hasModel) {
+          const messages = [];
+          const systemPrompt = [
+            "You are a CXO-grade logistics analytics assistant for LEAFI.",
+            "You MUST answer only from the provided JSON facts.",
+            "Do not invent data. Do not add assumptions that are not in the facts.",
+            "If the facts are incomplete, say exactly what is missing.",
+            "Use plain business language, compact bullets, and direct numbers.",
+            "",
+            "=== PLATFORM + DATASET FACTS ===",
+            JSON.stringify(
+              {
+                platform: ctx.platform,
+                summary: ctx.summary,
+                entityCounts: ctx.entityCounts,
+                matchedFacts: deterministic.llmContext || null,
+                deterministicAnswer: deterministic.answer || null,
+              },
+              null,
+              2
+            ),
+            "=== END FACTS ===",
+          ].join("\n");
+
+          messages.push({ role: "system", content: systemPrompt });
+
+          if (Array.isArray(history)) {
+            for (const m of history.slice(-8)) {
+              if (
+                m &&
+                typeof m.content === "string" &&
+                (m.role === "user" || m.role === "assistant")
+              ) {
+                messages.push({ role: m.role, content: m.content });
+              }
+            }
+          }
+
+          messages.push({ role: "user", content: question });
+
+          const r = await axios.post(
+            `${OLLAMA_URL}/api/chat`,
+            {
+              model: OLLAMA_MODEL,
+              messages,
+              stream: false,
+              options: {
+                temperature: 0.1,
+              },
+            },
+            { timeout: 1000 * 60 * 2 }
+          );
+
+          const maybe = r.data?.message?.content || r.data?.response || "";
+          if (maybe && maybe.trim()) {
+            llmAnswer = maybe.trim();
+            llmSource = OLLAMA_MODEL;
+          }
+        }
+      } catch (err) {
+        // Best-effort only. Deterministic answer still returns.
+      }
+
+      if (llmAnswer) {
+        return res.json({
+          ok: true,
+          answer: llmAnswer,
+          source: `llm:${llmSource}`,
+          deterministicSource: deterministic.source,
+          matchedEntities: deterministic.resolved,
+          contextGeneratedAt: ctx.generatedAt,
+        });
+      }
+
+      if (deterministic.answer) {
+        return res.json({
+          ok: true,
+          answer: deterministic.answer,
+          source: deterministic.source,
+          matchedEntities: deterministic.resolved,
+          contextGeneratedAt: ctx.generatedAt,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        answer: [
+          `I could not confidently map that question to an exact metric or entity in the current dataset.`,
+          `I can answer well when you mention one or more of these:`,
+          `• RFQ number`,
+          `• vendor code or vendor name`,
+          `• port of loading`,
+          `• company`,
+          `• container type`,
+          `• month or trend`,
+          `• open / evaluation / closed status`,
+          ``,
+          `Examples:`,
+          `• "Give me a full summary of RFQ 1047"`,
+          `• "How is VENDORA performing?"`,
+          `• "What does the data say about Chennai 40HC?"`,
+          `• "Which vendor is winning the most volume and spend?"`,
+          `• "What does this platform do and what data does it collect?"`,
+        ].join("\n"),
+        source: "no-match",
+        contextGeneratedAt: ctx.generatedAt,
+      });
+    } catch (err) {
+      const message = err?.message || "ask failed";
+      console.error("[CHAT] ask failed:", message);
+      res.status(500).json({ ok: false, error: message });
     }
   }
 );
